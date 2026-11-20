@@ -22,6 +22,7 @@ Therefore:
 - An external provider must not be used as a redirect or alternate checkout for a digital product associated with the Telegram bot/Mini App.
 - Independent website sales are represented separately and require an explicit declaration that the product is not offered, promoted, or fulfilled by the Telegram TPA. This is not a loophole for channel access: the channel-access product type is always restricted to Stars.
 - Telegram Stars are not the route for physical goods/services. Eligible physical goods/services may use third-party providers in accordance with the Bot Payments API, provider terms and local law.
+- As a conservative SubPilot product rule, manual transfer/proof confirmation is limited to a separately reviewed independent-web checkout that is not offered, promoted or fulfilled through a Telegram bot or Mini App. It is not treated as a Telegram payment-provider integration and must never be used for paid Telegram channel/group access.
 
 The policy gate evaluates Telegram product/surface eligibility only. A positive result does not mean an adapter exists or that a merchant has been approved by a PSP.
 
