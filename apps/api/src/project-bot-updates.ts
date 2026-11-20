@@ -241,17 +241,35 @@ async function createPurchaseInvoice(
   }
 
   const dispatchStartedAt = new Date().toISOString();
-  const dispatchClaim = await prisma.payment.updateMany({
-    where: { id: pending.payment.id, status: "PENDING" },
-    data: {
-      metadata: {
-        ...invoiceMetadata,
-        invoiceDispatchStartedAt: dispatchStartedAt
-      }
+  const dispatchClaim = await prisma.$transaction(async (tx) => {
+    // Serialize the external invoice side effect as well as payment creation. Two
+    // concurrent /buy updates must not both pass a stale "not dispatched" read.
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`subscription:${projectId}:${customer.id}:${plan.id}`}, 0))`;
+    const currentPayment = await tx.payment.findUnique({ where: { id: pending.payment.id } });
+    if (!currentPayment || currentPayment.status !== "PENDING") {
+      return { claimed: false, reason: "STATUS_CHANGED" as const };
     }
+    const currentMetadata = currentPayment.metadata && typeof currentPayment.metadata === "object" && !Array.isArray(currentPayment.metadata)
+      ? currentPayment.metadata as Record<string, unknown>
+      : {};
+    const currentDispatchState = getInvoiceDispatchState(currentMetadata);
+    if (currentDispatchState !== "NOT_STARTED") {
+      return { claimed: false, reason: currentDispatchState };
+    }
+    const updated = await tx.payment.updateMany({
+      where: { id: pending.payment.id, status: "PENDING" },
+      data: { metadata: { ...currentMetadata, invoiceDispatchStartedAt: dispatchStartedAt } }
+    });
+    return { claimed: updated.count === 1, reason: updated.count === 1 ? "CLAIMED" as const : "STATUS_CHANGED" as const };
   });
-  if (dispatchClaim.count !== 1) {
-    await ctx.reply("Статус счёта уже изменился. Не создавайте новую покупку; проверьте поддержку по оплате через /paysupport.");
+  if (!dispatchClaim.claimed) {
+    if (dispatchClaim.reason === "SENT") {
+      await ctx.reply("У вас уже есть неоплаченный счёт по этому тарифу. Найдите предыдущее сообщение от бота. Повторный счёт не создан; срок действия — 24 часа.");
+    } else if (dispatchClaim.reason === "AMBIGUOUS") {
+      await ctx.reply("Запрос на выставление счёта уже выполнялся, но подтверждение не сохранено. Счёт мог быть отправлен. Проверьте сообщения от бота или обратитесь в /paysupport; второй счёт не создан.");
+    } else {
+      await ctx.reply("Статус счёта уже изменился. Не создавайте новую покупку; проверьте поддержку по оплате через /paysupport.");
+    }
     return;
   }
 
