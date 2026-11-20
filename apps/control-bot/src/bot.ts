@@ -1720,6 +1720,7 @@ export function createControlBot(token: string): Bot {
         where: {
           id: planId,
           project: {
+            status: { not: "ARCHIVED" },
             workspace: {
               members: {
                 some: { userId: user.id, role: { in: [...MANAGER_ROLES] } }
@@ -1785,6 +1786,7 @@ export function createControlBot(token: string): Bot {
         where: {
           id: planId,
           project: {
+            status: { not: "ARCHIVED" },
             workspace: {
               members: {
                 some: { userId: user.id, role: { in: [...MANAGER_ROLES] } }
@@ -2190,6 +2192,7 @@ export function createControlBot(token: string): Bot {
           id: planId,
           project: {
             workspaceId: workspace.id,
+            status: { not: "ARCHIVED" },
             workspace: {
               members: {
                 some: { userId: user.id, role: { in: [...MANAGER_ROLES] } }
@@ -2232,6 +2235,7 @@ export function createControlBot(token: string): Bot {
           id: planId,
           project: {
             workspaceId: workspace.id,
+            status: { not: "ARCHIVED" },
             workspace: {
               members: {
                 some: { userId: user.id, role: { in: [...MANAGER_ROLES] } }
@@ -2552,6 +2556,29 @@ export function createControlBot(token: string): Bot {
       }
 
       const publicApiUrl = (process.env.PUBLIC_API_URL ?? "").trim().replace(/\/+$/, "");
+
+      if (publicApiUrl) {
+        let parsedApiUrl: URL;
+        try {
+          parsedApiUrl = new URL(publicApiUrl);
+        } catch {
+          await ctx.reply("PUBLIC_API_URL задан некорректно. Укажите полный публичный HTTPS-адрес API.");
+          return;
+        }
+        if (parsedApiUrl.protocol !== "https:") {
+          await ctx.reply("Для webhook Telegram требуется публичный HTTPS-адрес. Текущая конфигурация бота не изменена.");
+          return;
+        }
+      }
+
+      if (existingBot?.status === "ACTIVE" && !publicApiUrl) {
+        await ctx.reply(
+          "Этот бот уже активен. PUBLIC_API_URL не настроен, поэтому текущая конфигурация webhook сохранена без изменений. " +
+          "Укажите публичный HTTPS-адрес API и повторите подключение, когда будете готовы обновлять webhook."
+        );
+        return;
+      }
+
       const webhookSecret = publicApiUrl ? randomBytes(32).toString("base64url") : null;
       const webhookSecretHash = webhookSecret
         ? createHash("sha256").update(webhookSecret).digest("hex")
