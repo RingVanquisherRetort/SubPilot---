@@ -533,7 +533,7 @@ async function processSuccessfulStarsPayment(
       let connectedChatIds: string[] = [];
       if (snapshotChatIds !== undefined) {
         const telegramChatIds = snapshotChatIds
-          .filter((value) => /^-?\\d+$/.test(value))
+          .filter((value) => /^-?\d+$/.test(value))
           .map((value) => BigInt(value));
         if (telegramChatIds.length > 0) {
           const chats = await tx.connectedChat.findMany({
