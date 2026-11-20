@@ -242,7 +242,7 @@ model TelegramWebhookUpdate {
   processedAt  DateTime?
   projectBot   ProjectBot @relation(fields: [projectBotId], references: [id], onDelete: Cascade)
 
-  @@unique([projectBotId, updateId])
+  @@unique([projectBotId, sequenceEpoch, updateId])
   @@index([projectBotId, processedAt, receivedAt])
 }
 
