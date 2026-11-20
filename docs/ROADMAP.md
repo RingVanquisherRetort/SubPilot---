@@ -27,7 +27,8 @@
 - [x] Create plans with price, currency and duration.
 - [x] Automatically link new plans to currently active project chats.
 - [x] List, archive and restore plans.
-- [ ] Edit plans and select target chats individually.
+- [x] List connected channels/groups and link/unlink individual chats on a plan.
+- [ ] Edit plans and build an interactive plan editor.
 - Map plans to one or more connected chats.
 - Create checkout attempts.
 - Issue invite links after verified payment.
