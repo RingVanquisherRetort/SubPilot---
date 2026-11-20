@@ -753,7 +753,7 @@ export function createControlBot(token: string): Bot {
     const normalizedPrice = priceInput?.replace(",", ".");
 
     if (!projectId || !title || title.length > 80 || !normalizedPrice ||
-        !/^\d{1,9}(?:\.\d{1,2})?$/.test(normalizedPrice)) {
+        !/^\d{1,5}$/.test(normalizedPrice)) {
       await ctx.reply("Проверьте ID проекта, название и цену. Цена должна быть положительным числом с максимум двумя знаками после точки.");
       return;
     }
@@ -761,7 +761,7 @@ export function createControlBot(token: string): Bot {
     const priceNumber = Number(normalizedPrice);
     const durationDays = Number(durationInput);
 
-    if (!Number.isFinite(priceNumber) || priceNumber <= 0 || priceNumber > 100000000 ||
+    if (!Number.isFinite(priceNumber) || priceNumber < 1 || priceNumber > 10000 ||
         !Number.isInteger(durationDays) || durationDays < 0 || durationDays > 3650) {
       await ctx.reply("Цена должна быть больше 0, срок — целым числом от 0 до 3650 дней.");
       return;
@@ -794,7 +794,7 @@ export function createControlBot(token: string): Bot {
           projectId: project.id,
           title,
           price: normalizedPrice,
-          currency: project.defaultCurrency,
+          currency: "XTR",
           durationDays: durationDays === 0 ? null : durationDays,
           isRecurring: false,
           chats: {
@@ -810,7 +810,7 @@ export function createControlBot(token: string): Bot {
         `Цена: ${plan.price.toString()} ${plan.currency}\n` +
         `Длительность: ${plan.durationDays ? `${plan.durationDays} дней` : "бессрочно"}\n` +
         `Каналов и групп: ${plan.chats.length}\n\n` +
-        "Тариф сохранён. Приём оплаты и автоматическая выдача доступа будут подключены следующим этапом."
+        "Тариф доступен для оплаты в Telegram Stars. Покупатель может отправить боту команду /buy ID_ТАРИФА."
       );
     } catch (error) {
       console.error("Control bot /createplan failed:", error);
