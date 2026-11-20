@@ -782,9 +782,9 @@ export function createControlBot(token: string): Bot {
     const user = await upsertTelegramUser(ctx);
     const projectId = ctx.match[1];
     if (!projectId) return;
-    const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
+    const project = await canAccessProject(projectId, user.id, MANAGER_ROLES);
     if (!project) {
-      await ctx.reply("Проект не найден или у вас нет доступа.");
+      await ctx.reply("Настройки способов оплаты доступны владельцу, администратору или менеджеру проекта.");
       return;
     }
 
