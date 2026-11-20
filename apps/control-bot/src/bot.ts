@@ -14,6 +14,19 @@ const ADMIN_ROLES = ["OWNER", "ADMIN"] as const;
 const BOT_TOKEN_PATTERN = /^\d{5,15}:[A-Za-z0-9_-]{20,}$/;
 const BOT_TOKEN_TTL_MS = 5 * 60 * 1000;
 const REFUND_RETRY_LOCK_MS = 2 * 60 * 1000;
+
+function paymentStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    CREATED: "создаётся",
+    PENDING: "ожидает оплаты",
+    SUCCEEDED: "оплачен",
+    REFUNDING: "возврат обрабатывается",
+    FAILED: "ошибка оплаты",
+    CANCELLED: "отменён",
+    REFUNDED: "возвращён"
+  };
+  return labels[status] ?? status.toLowerCase();
+}
 const MERCHANT_TYPE_CHOICES = [
   { key: "PERSON", value: "INDIVIDUAL", label: "Физическое лицо" },
   { key: "SELF", value: "SELF_EMPLOYED", label: "Самозанятый" },
@@ -894,7 +907,7 @@ export function createControlBot(token: string): Bot {
       take: 10
     });
     const lines = payments.map((payment, i) =>
-      `${i + 1}. ${payment.subscription?.plan.title ?? "Платёж"} — ${payment.amount.toString()} ${payment.currency}\nСтатус: ${payment.status} · ${payment.customer.username ? "@" + payment.customer.username : payment.customer.telegramUserId.toString()}\nID: ${payment.id}`
+      `${i + 1}. ${payment.subscription?.plan.title ?? "Платёж"} — ${payment.amount.toString()} ${payment.currency}\nСтатус: ${paymentStatusLabel(payment.status)} · ${payment.customer.username ? "@" + payment.customer.username : payment.customer.telegramUserId.toString()}\nID: ${payment.id}`
     );
     await ctx.editMessageText(
       lines.length ? `Последние платежи «${project.name}»:\n\n${lines.join("\n\n")}` : "Платежей пока нет.",
@@ -1816,7 +1829,7 @@ export function createControlBot(token: string): Bot {
           : payment.customer.telegramUserId.toString();
         const plan = payment.subscription?.plan.title ?? "без тарифа";
         return `${index + 1}. ${plan} — ${payment.amount.toString()} ${payment.currency}\n` +
-          `Статус: ${payment.status.toLowerCase()} · ${customer}\n` +
+          `Статус: ${paymentStatusLabel(payment.status)} · ${customer}\n` +
           `ID: ${payment.id}`;
       });
 
