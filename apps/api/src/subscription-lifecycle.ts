@@ -41,9 +41,8 @@ async function renewLifecycleWorkerLease(leaseId: string): Promise<boolean> {
 }
 
 async function releaseLifecycleWorkerLease(leaseId: string): Promise<void> {
-  await prisma.workerLease.updateMany({
-    where: { key: LIFECYCLE_WORKER_LEASE_KEY, leaseId },
-    data: { lockedUntil: new Date(0) }
+  await prisma.workerLease.deleteMany({
+    where: { key: LIFECYCLE_WORKER_LEASE_KEY, leaseId }
   });
 }
 
