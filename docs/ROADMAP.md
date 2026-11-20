@@ -16,10 +16,11 @@
 - [x] Invite teammates with role-scoped, one-use Telegram deep links that expire after seven days.
 - [x] Persist each user's active workspace.
 - [x] Enforce manager/admin permissions for project operations.
-- Project creation/editing/archive.
-- Add a project bot by token; verify with Telegram getMe.
-- Encrypt bot tokens and register unique webhook secrets.
-- Connect channels/groups and validate bot admin rights.
+- [x] Project creation, rename and archive/restore.
+- [x] Add a project bot by token; verify with Telegram getMe.
+- [x] Encrypt bot tokens and validate signed webhook secrets.
+- [x] Receive my_chat_member updates and register channels/groups.
+- [ ] Add interactive channel selection and feature-specific permission checks.
 
 ## Stage 3 — Subscription engine
 
