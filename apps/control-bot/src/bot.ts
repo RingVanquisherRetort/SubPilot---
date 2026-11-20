@@ -138,7 +138,7 @@ async function canAccessProject(
         }
       }
     },
-    select: { id: true, name: true, workspaceId: true }
+    select: { id: true, name: true, workspaceId: true, defaultCurrency: true }
   });
 }
 
@@ -737,6 +737,213 @@ export function createControlBot(token: string): Bot {
     }
   });
 
+  bot.command("createplan", async (ctx) => {
+    const fields = String(ctx.match ?? "").split("|").map((field) => field.trim());
+
+    if (fields.length !== 4) {
+      await ctx.reply(
+        "Формат: /createplan PROJECT_ID | Название | Цена | Дней\n\n" +
+        "Пример: /createplan abc123 | VIP на месяц | 499 | 30\n" +
+        "Укажите 0 дней для бессрочного доступа."
+      );
+      return;
+    }
+
+    const [projectId, title, priceInput, durationInput] = fields;
+    const normalizedPrice = priceInput?.replace(",", ".");
+
+    if (!projectId || !title || title.length > 80 || !normalizedPrice ||
+        !/^\d{1,9}(?:\.\d{1,2})?$/.test(normalizedPrice)) {
+      await ctx.reply("Проверьте ID проекта, название и цену. Цена должна быть положительным числом с максимум двумя знаками после точки.");
+      return;
+    }
+
+    const priceNumber = Number(normalizedPrice);
+    const durationDays = Number(durationInput);
+
+    if (!Number.isFinite(priceNumber) || priceNumber <= 0 || priceNumber > 100000000 ||
+        !Number.isInteger(durationDays) || durationDays < 0 || durationDays > 3650) {
+      await ctx.reply("Цена должна быть больше 0, срок — целым числом от 0 до 3650 дней.");
+      return;
+    }
+
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const project = await canAccessProject(projectId, user.id, MANAGER_ROLES);
+
+      if (!project) {
+        await ctx.reply("Проект не найден или у вас нет прав управлять им.");
+        return;
+      }
+
+      const activeChats = await prisma.connectedChat.findMany({
+        where: { projectId: project.id, isActive: true },
+        select: { id: true }
+      });
+
+      if (activeChats.length === 0) {
+        await ctx.reply(
+          "В проекте пока нет активных каналов или групп.\n\n" +
+          "Сначала подключите бота проекта и добавьте его администратором в нужный канал/группу."
+        );
+        return;
+      }
+
+      const plan = await prisma.creatorPlan.create({
+        data: {
+          projectId: project.id,
+          title,
+          price: normalizedPrice,
+          currency: project.defaultCurrency,
+          durationDays: durationDays === 0 ? null : durationDays,
+          isRecurring: false,
+          chats: {
+            create: activeChats.map((chat) => ({ connectedChatId: chat.id }))
+          }
+        },
+        include: { chats: true }
+      });
+
+      await ctx.reply(
+        `Тариф «${plan.title}» создан.\n\n` +
+        `ID: ${plan.id}\n` +
+        `Цена: ${plan.price.toString()} ${plan.currency}\n` +
+        `Длительность: ${plan.durationDays ? `${plan.durationDays} дней` : "бессрочно"}\n` +
+        `Каналов и групп: ${plan.chats.length}\n\n` +
+        "Тариф сохранён. Приём оплаты и автоматическая выдача доступа будут подключены следующим этапом."
+      );
+    } catch (error) {
+      console.error("Control bot /createplan failed:", error);
+      await ctx.reply("Не удалось создать тариф.");
+    }
+  });
+
+  bot.command("plans", async (ctx) => {
+    const projectId = String(ctx.match ?? "").trim();
+
+    if (!projectId) {
+      await ctx.reply("Формат: /plans PROJECT_ID");
+      return;
+    }
+
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
+
+      if (!project) {
+        await ctx.reply("Проект не найден или у вас нет доступа.");
+        return;
+      }
+
+      const plans = await prisma.creatorPlan.findMany({
+        where: { projectId: project.id },
+        include: { chats: { include: { connectedChat: true } } },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "desc" }]
+      });
+
+      if (plans.length === 0) {
+        await ctx.reply("У проекта пока нет тарифов. Создайте первый: /createplan");
+        return;
+      }
+
+      const lines = plans.map((plan, index) => {
+        const duration = plan.durationDays ? `${plan.durationDays} дн.` : "без срока";
+        const chats = plan.chats.filter((item) => item.connectedChat.isActive).length;
+        return `${index + 1}. ${plan.title} — ${plan.price.toString()} ${plan.currency}\n` +
+          `Статус: ${plan.status.toLowerCase()} · ${duration} · площадок: ${chats}\nID: ${plan.id}`;
+      });
+
+      await ctx.reply(`Тарифы проекта «${project.name}»:\n\n` + lines.join("\n\n"));
+    } catch (error) {
+      console.error("Control bot /plans failed:", error);
+      await ctx.reply("Не удалось загрузить тарифы.");
+    }
+  });
+
+  bot.command("archiveplan", async (ctx) => {
+    const planId = String(ctx.match ?? "").trim();
+
+    if (!planId) {
+      await ctx.reply("Формат: /archiveplan PLAN_ID");
+      return;
+    }
+
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace } = await getActiveWorkspace(user);
+      const plan = await prisma.creatorPlan.findFirst({
+        where: {
+          id: planId,
+          project: {
+            workspaceId: workspace.id,
+            workspace: {
+              members: {
+                some: { userId: user.id, role: { in: [...MANAGER_ROLES] } }
+              }
+            }
+          }
+        }
+      });
+
+      if (!plan) {
+        await ctx.reply("Тариф не найден в активном пространстве или у вас нет прав.");
+        return;
+      }
+
+      await prisma.creatorPlan.update({
+        where: { id: plan.id },
+        data: { status: "ARCHIVED" }
+      });
+
+      await ctx.reply(`Тариф «${plan.title}» перемещён в архив.`);
+    } catch (error) {
+      console.error("Control bot /archiveplan failed:", error);
+      await ctx.reply("Не удалось архивировать тариф.");
+    }
+  });
+
+  bot.command("restoreplan", async (ctx) => {
+    const planId = String(ctx.match ?? "").trim();
+
+    if (!planId) {
+      await ctx.reply("Формат: /restoreplan PLAN_ID");
+      return;
+    }
+
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace } = await getActiveWorkspace(user);
+      const plan = await prisma.creatorPlan.findFirst({
+        where: {
+          id: planId,
+          project: {
+            workspaceId: workspace.id,
+            workspace: {
+              members: {
+                some: { userId: user.id, role: { in: [...MANAGER_ROLES] } }
+              }
+            }
+          }
+        }
+      });
+
+      if (!plan) {
+        await ctx.reply("Тариф не найден в активном пространстве или у вас нет прав.");
+        return;
+      }
+
+      await prisma.creatorPlan.update({
+        where: { id: plan.id },
+        data: { status: "ACTIVE" }
+      });
+
+      await ctx.reply(`Тариф «${plan.title}» восстановлен.`);
+    } catch (error) {
+      console.error("Control bot /restoreplan failed:", error);
+      await ctx.reply("Не удалось восстановить тариф.");
+    }
+  });
+
   bot.command("connectbot", async (ctx) => {
     if (ctx.chat.type !== "private" || !ctx.from) {
       await ctx.reply("Подключение ботов доступно только в личном чате с SubPilot.");
@@ -921,6 +1128,10 @@ export function createControlBot(token: string): Bot {
       "/renameproject ID Название — переименовать проект\n" +
       "/archiveproject ID — архивировать проект\n" +
       "/restoreproject ID — восстановить проект\n" +
+      "/createplan ID | Название | Цена | Дней — создать тариф\n" +
+      "/plans ID — посмотреть тарифы\n" +
+      "/archiveplan ID — архивировать тариф\n" +
+      "/restoreplan ID — восстановить тариф\n" +
       "/connectbot ID — подключить отдельного бота\n" +
       "/cancel — отменить текущую операцию"
     );
