@@ -12,6 +12,7 @@ import { hasRequiredSubscriptionChatRights } from "./telegram-chat-access.js";
 import { isPaymentFromProjectBot } from "./telegram-payment-origin.js";
 import { getInvoiceDispatchState } from "./telegram-invoice-state.js";
 import { getSubscriptionGrantChatIds } from "./subscription-grant-persistence.js";
+import { wasInitialSubscriptionActivationEvent } from "./payment-event-notification.js";
 import { shouldProcessTelegramUpdate } from "./telegram-update-order.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
@@ -733,7 +734,8 @@ async function processSuccessfulStarsPayment(
           currency: receipt.currency,
           totalAmount: receipt.total_amount,
           telegramPaymentChargeId: receipt.telegram_payment_charge_id,
-          providerPaymentChargeId: receipt.provider_payment_charge_id
+          providerPaymentChargeId: receipt.provider_payment_charge_id,
+          isInitialActivation
         },
         processedAt: now
       }
@@ -786,7 +788,38 @@ async function processSuccessfulStarsPayment(
   });
   const { endsAt, isInitialActivation, paymentWasProcessed } = transactionResult;
 
+  const queueNewSubscriberNotification = async (accessEndsAt: Date | null): Promise<void> => {
+    const buyerName = [payment.customer.firstName, payment.customer.lastName]
+      .filter(Boolean)
+      .join(" ") || (payment.customer.username ? "@" + payment.customer.username : "Покупатель Telegram");
+    const amountLabel = payment.currency === "XTR"
+      ? payment.amount.toString() + " ⭐"
+      : payment.amount.toString() + " " + payment.currency;
+
+    await enqueueProjectOwnerNotification({
+      projectId,
+      dedupeKey: "payment:" + payment.id + ":new-subscriber",
+      eventType: "new_subscriber",
+      messageText:
+        "🎉 Новый подписчик\nПроект: «" + payment.project.name + "»\n" +
+        "Подписчик: " + buyerName + "\nТариф: «" + snapshotPlanTitle + "»\n" +
+        "Оплата: " + amountLabel + "\n" +
+        (accessEndsAt ? "Доступ до: " + accessEndsAt.toLocaleString("ru-RU") : "Срок действия: без ограничения")
+    });
+  };
+
   if (!paymentWasProcessed) {
+    // The payment/entitlement transaction commits before the notification queue is written.
+    // On a webhook retry, recover a missed first-activation alert from the transactionally
+    // persisted event payload. The notification dedupe key makes this safe after partial success.
+    const successfulEvent = await prisma.paymentWebhookEvent.findUnique({
+      where: { dedupeKey: "telegram-stars:" + receipt.telegram_payment_charge_id },
+      select: { payload: true }
+    });
+    if (wasInitialSubscriptionActivationEvent(successfulEvent?.payload)) {
+      await queueNewSubscriberNotification(endsAt);
+    }
+
     await ctx.reply("Этот платёж уже был обработан. Для получения актуальных ссылок используйте /access.");
     return;
   }
@@ -804,22 +837,7 @@ async function processSuccessfulStarsPayment(
 
 
   if (isInitialActivation) {
-    const buyerName = [payment.customer.firstName, payment.customer.lastName]
-      .filter(Boolean)
-      .join(" ") || (payment.customer.username ? `@${payment.customer.username}` : "Покупатель Telegram");
-    const amountLabel = payment.currency === "XTR"
-      ? `${payment.amount.toString()} ⭐`
-      : `${payment.amount.toString()} ${payment.currency}`;
-    await enqueueProjectOwnerNotification({
-      projectId,
-      dedupeKey: `payment:${payment.id}:new-subscriber`,
-      eventType: "new_subscriber",
-      messageText:
-        `🎉 Новый подписчик\nПроект: «${payment.project.name}»\n` +
-        `Подписчик: ${buyerName}\nТариф: «${snapshotPlanTitle}»\n` +
-        `Оплата: ${amountLabel}\n` +
-        (endsAt ? `Доступ до: ${endsAt.toLocaleString("ru-RU")}` : "Срок действия: без ограничения")
-    });
+    await queueNewSubscriberNotification(endsAt);
   }
 
   const access = await deliverSubscriptionAccess(bot, subscription.id, snapshotChatIds);
