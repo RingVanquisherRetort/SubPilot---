@@ -321,7 +321,8 @@ async function validatePreCheckout(
 export async function deliverSubscriptionAccess(
   bot: Bot,
   subscriptionId: string,
-  chatIds?: string[]
+  chatIds?: string[],
+  isLeaseOwned: () => boolean = () => true
 ): Promise<{ links: string[]; alreadyJoined: string[]; failed: string[] }> {
   const subscription = await prisma.subscription.findUnique({
     where: { id: subscriptionId },
@@ -358,6 +359,7 @@ export async function deliverSubscriptionAccess(
     : subscription.plan.chats.map((item) => item.connectedChat);
 
   for (const chat of targetChats) {
+    if (!isLeaseOwned()) return results;
     const label = chat.title ?? chat.username ?? chat.telegramChatId.toString();
     if (!chat.isActive) {
       results.failed.push(label);
@@ -388,12 +390,15 @@ export async function deliverSubscriptionAccess(
       // A buyer who is not in this chat may produce a Telegram API error here.
       // Invite creation below remains the authoritative check for the bot's invite permissions.
     }
+    if (!isLeaseOwned()) return results;
 
     if (isAlreadyMember) {
       const now = new Date();
       if (existing?.inviteLink && !existing.revokedAt && existing.expiresAt > now) {
+        if (!isLeaseOwned()) return results;
         try {
           await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), existing.inviteLink);
+          if (!isLeaseOwned()) return results;
         } catch (error) {
           console.error(
             "Could not revoke an unused invite link for an existing member:",
@@ -404,6 +409,7 @@ export async function deliverSubscriptionAccess(
         }
       }
 
+      if (!isLeaseOwned()) return results;
       await prisma.subscriptionAccessGrant.upsert({
         where: {
           subscriptionId_connectedChatId: {
@@ -434,12 +440,14 @@ export async function deliverSubscriptionAccess(
     if (!previousJoinWasCleared && existing && !existing.revokedAt && existing.inviteLink &&
         existing.expiresAt > now) {
       if (isBanned) {
+        if (!isLeaseOwned()) return results;
         try {
           await bot.api.unbanChatMember(
             chat.telegramChatId.toString(),
             telegramUserId,
             { only_if_banned: true }
           );
+          if (!isLeaseOwned()) return results;
         } catch (error) {
           console.error(
             "Could not unban an active subscriber before reusing an invite:",
@@ -458,10 +466,13 @@ export async function deliverSubscriptionAccess(
       // Revoke the previous link before clearing it from the database. If Telegram
       // rejects the revoke, retain the old link so the next worker pass can retry safely.
       if (existing?.inviteLink && !existing.revokedAt && existing.expiresAt > now) {
+        if (!isLeaseOwned()) return results;
         await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), existing.inviteLink);
+        if (!isLeaseOwned()) return results;
       }
 
       if (previousJoinWasCleared && existing) {
+        if (!isLeaseOwned()) return results;
         await prisma.subscriptionAccessGrant.updateMany({
           where: { id: existing.id, revokedAt: null },
           data: { joinedAt: null, inviteLink: "", expiresAt: new Date(0) }
@@ -469,6 +480,7 @@ export async function deliverSubscriptionAccess(
       }
 
       // Persist a pending delivery row before creating the replacement invite.
+      if (!isLeaseOwned()) return results;
       await prisma.subscriptionAccessGrant.upsert({
         where: {
           subscriptionId_connectedChatId: {
@@ -491,13 +503,16 @@ export async function deliverSubscriptionAccess(
       });
 
       if (needsUnban) {
+        if (!isLeaseOwned()) return results;
         await bot.api.unbanChatMember(
           chat.telegramChatId.toString(),
           telegramUserId,
           { only_if_banned: true }
         );
+        if (!isLeaseOwned()) return results;
       }
 
+      if (!isLeaseOwned()) return results;
       const expiresAt = new Date(Date.now() + INVITE_LIFETIME_SECONDS * 1000);
       const invite = await bot.api.createChatInviteLink(
         chat.telegramChatId.toString(),
@@ -508,6 +523,10 @@ export async function deliverSubscriptionAccess(
         }
       );
 
+      if (!isLeaseOwned()) {
+        await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), invite.invite_link).catch(() => undefined);
+        return results;
+      }
       await prisma.subscriptionAccessGrant.upsert({
         where: {
           subscriptionId_connectedChatId: {
