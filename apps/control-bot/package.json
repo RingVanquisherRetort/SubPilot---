@@ -11,6 +11,7 @@
     "@subpilot/database": "workspace:*",
     "dotenv": "^17.2.3",
     "grammy": "^1.46.0",
-    "@subpilot/security": "workspace:*"
+    "@subpilot/security": "workspace:*",
+    "@subpilot/payments": "workspace:*"
   }
 }
