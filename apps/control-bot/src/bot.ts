@@ -187,6 +187,7 @@ async function canAccessProject(
   return prisma.project.findFirst({
     where: {
       id: projectId,
+      status: { not: "ARCHIVED" },
       workspace: {
         members: {
           some: {
@@ -825,7 +826,7 @@ export function createControlBot(token: string): Bot {
       `${i + 1}. ${chat.title ?? chat.username ?? chat.telegramChatId.toString()} — ${chat.isActive ? "активна" : "неактивна"}`
     );
     await ctx.editMessageText(
-      lines.length ? `Каналы и группы «${project.name}»:\n\n${lines.join("\n")}` : "Пока нет подключённых каналов или групп. Добавьте бота проекта администратором в нужную площадку.",
+      lines.length ? `Каналы и группы «${project.name}»:\n\n${lines.join("\n")}\n\nДля активности боту нужны права приглашать пользователей и ограничивать участников.` : "Пока нет подключённых каналов или групп. Добавьте бота проекта администратором с правами приглашать пользователей и ограничивать участников.",
       { reply_markup: backHomeKeyboard() }
     );
   });
@@ -1582,7 +1583,7 @@ export function createControlBot(token: string): Bot {
       if (activeChats.length === 0) {
         await ctx.reply(
           "В проекте пока нет активных каналов или групп.\n\n" +
-          "Сначала подключите бота проекта и добавьте его администратором в нужный канал/группу."
+          "Сначала добавьте бота проекта администратором и выдайте права приглашать пользователей и ограничивать участников."
         );
         return;
       }
@@ -1693,7 +1694,8 @@ export function createControlBot(token: string): Bot {
       await ctx.reply(
         `Площадки проекта «${project.name}»:\n\n` +
         lines.join("\n\n") +
-        "\n\nНазначение тарифу: /linkchat PLAN_ID CHAT_ID"
+        "\n\nДля активности нужны права бота приглашать пользователей и ограничивать участников." +
+        "\nНазначение тарифу: /linkchat PLAN_ID CHAT_ID"
       );
     } catch (error) {
       console.error("Control bot /chats failed:", error);
@@ -2410,7 +2412,7 @@ export function createControlBot(token: string): Bot {
             select: { id: true }
           });
           if (activeChats.length === 0) {
-            await ctx.reply("Сначала добавьте бота проекта администратором хотя бы в один канал или группу.", {
+            await ctx.reply("Сначала добавьте бота проекта администратором хотя бы в один канал или группу и выдайте права приглашать пользователей и ограничивать участников.", {
               reply_markup: new InlineKeyboard().text("Подключить бота", `ui:connect:${project.id}`).row().text("К проекту", `ui:project:${project.id}`)
             });
             return;
@@ -2617,7 +2619,7 @@ export function createControlBot(token: string): Bot {
         `Проект: ${project.name}\n` +
         `Бот: @${botInfo.username ?? botInfo.first_name}\n` +
         (webhookReady
-          ? "Webhook настроен. Добавьте бота администратором в канал или группу. Покупатели смогут открыть @бот, посмотреть /plans и оплатить тариф командой /buy ID."
+          ? "Webhook настроен. Добавьте бота администратором в канал или группу с правами приглашать пользователей и ограничивать участников. Покупатели смогут открыть @бот, посмотреть /plans и оплатить тариф командой /buy ID."
           : "Токен зашифрован и сохранён. Для автоматической работы укажите публичный HTTPS-адрес API в PUBLIC_API_URL и подключите webhook.")
       );
 

@@ -47,6 +47,15 @@ async function createPurchaseInvoice(
     return;
   }
 
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { status: true }
+  });
+  if (!project || project.status !== "ACTIVE") {
+    await ctx.reply("Этот проект временно недоступен для новых покупок.");
+    return;
+  }
+
   const plan = await prisma.creatorPlan.findFirst({
     where: { id: planId, projectId, status: "ACTIVE" },
     include: {
@@ -200,12 +209,16 @@ async function validatePreCheckout(
 ): Promise<boolean> {
   const payment = await prisma.payment.findUnique({
     where: { id: query.invoice_payload },
-    include: { customer: true }
+    include: {
+      customer: true,
+      project: { select: { status: true } }
+    }
   });
 
   return Boolean(
     payment &&
     payment.projectId === projectId &&
+    payment.project.status === "ACTIVE" &&
     payment.provider === "TELEGRAM_STARS" &&
     payment.currency === "XTR" &&
     payment.status === "PENDING" &&
@@ -833,8 +846,11 @@ export async function handleProjectBotUpdate(
 
     if (!chatType) return;
 
-    const membershipStatus = ctx.myChatMember.new_chat_member.status;
-    const isActive = membershipStatus === "administrator" || membershipStatus === "creator";
+    const newMember = ctx.myChatMember.new_chat_member;
+    const isActive = newMember.status === "creator" ||
+      (newMember.status === "administrator" &&
+        newMember.can_invite_users === true &&
+        newMember.can_restrict_members === true);
 
     await prisma.connectedChat.upsert({
       where: {
@@ -862,8 +878,27 @@ export async function handleProjectBotUpdate(
 
   const showPlans = async (ctx: Context, edit = false): Promise<void> => {
     if (!(await requirePrivateBuyerChat(ctx))) return;
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { status: true }
+    });
+    if (!project || project.status !== "ACTIVE") {
+      const unavailableText = "Этот проект временно недоступен для новых покупок.";
+      if (edit && ctx.callbackQuery?.message) {
+        await ctx.editMessageText(unavailableText);
+      } else {
+        await ctx.reply(unavailableText);
+      }
+      return;
+    }
+
     const plans = await prisma.creatorPlan.findMany({
-      where: { projectId, status: "ACTIVE", currency: "XTR" },
+      where: {
+        projectId,
+        status: "ACTIVE",
+        currency: "XTR",
+        chats: { some: { connectedChat: { isActive: true } } }
+      },
       include: {
         chats: {
           where: { connectedChat: { isActive: true } },
@@ -911,6 +946,14 @@ export async function handleProjectBotUpdate(
 
   const showPurchaseTerms = async (ctx: Context, planId: string): Promise<void> => {
     if (!(await requirePrivateBuyerChat(ctx))) return;
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { status: true }
+    });
+    if (!project || project.status !== "ACTIVE") {
+      await ctx.reply("Этот проект временно недоступен для новых покупок.");
+      return;
+    }
     const plan = await prisma.creatorPlan.findFirst({
       where: { id: planId, projectId, status: "ACTIVE" },
       include: { chats: { include: { connectedChat: true } } }
