@@ -17,7 +17,7 @@
 - [x] Persist each user's active workspace.
 - [x] Enforce manager/admin permissions for project operations.
 - [x] Project creation, rename and archive/restore.
-- [x] Add a project bot by token; verify with Telegram getMe.
+- [x] Add one active project bot by token; verify with Telegram getMe and enforce one active bot per project.
 - [x] Encrypt bot tokens and validate signed webhook secrets.
 - [x] Receive my_chat_member updates and register channels/groups.
 - [ ] Add interactive channel selection and feature-specific permission checks.
@@ -35,7 +35,9 @@
 - [x] Activate subscriptions only after successful_payment.
 - [x] Persist idempotent payment receipts.
 - [x] Issue one-person, 24-hour invite links for plan chats after verified payment.
-- [x] Track joins against subscription grants.
+- [x] Track joins against subscription grants and verify the entrant against the buyer's Telegram ID.
+- [x] Detect existing chat membership and track leave/kick updates.
+- [x] Let buyers request current invite links again with /access.
 - [x] Add payment history and Telegram Stars refund commands.
 - [x] Add button-driven project navigation, plan creation, channel/payment views and workspace/team navigation.
 - [ ] Add button-driven plan editing and advanced access-management controls.
@@ -53,7 +55,8 @@
 - [x] Implement one-time Telegram Stars checkout for in-Telegram digital access.
 - [x] Verify pre-checkout data and require Telegram successful_payment before activation.
 - [x] Add idempotent Stars receipt storage, payment history and refund handling.
-- [ ] Add scheduled reconciliation and retry handling for failed access delivery.
+- [x] Persist pending access-delivery records and retry failed invite delivery through the lifecycle worker.
+- [ ] Add delivery dead-letter monitoring, reconciliation and operator recovery.
 - [ ] Implement external provider adapters only for compliant checkout scenarios and eligible merchants/products.
 - [ ] Add recurring Stars subscriptions (Telegram currently constrains recurring bot invoices to a 30-day period).
 - [ ] Keep creator payments isolated from SubPilot platform billing.

@@ -185,7 +185,7 @@ async function validatePreCheckout(
   );
 }
 
-async function deliverSubscriptionAccess(
+export async function deliverSubscriptionAccess(
   bot: Bot,
   subscriptionId: string,
   chatIds?: string[]
@@ -256,6 +256,19 @@ async function deliverSubscriptionAccess(
 
     if (isAlreadyMember) {
       const now = new Date();
+      if (existing?.inviteLink && !existing.revokedAt && existing.expiresAt > now) {
+        try {
+          await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), existing.inviteLink);
+        } catch (error) {
+          console.error(
+            "Could not revoke an unused invite link for an existing member:",
+            error instanceof Error ? error.name : "UnknownError"
+          );
+          results.failed.push(label);
+          continue;
+        }
+      }
+
       await prisma.subscriptionAccessGrant.upsert({
         where: {
           subscriptionId_connectedChatId: {
@@ -282,13 +295,6 @@ async function deliverSubscriptionAccess(
     }
 
     const previousJoinWasCleared = Boolean(existing?.joinedAt && !isAlreadyMember);
-    if (previousJoinWasCleared && existing) {
-      await prisma.subscriptionAccessGrant.updateMany({
-        where: { id: existing.id, revokedAt: null },
-        data: { joinedAt: null, inviteLink: "", expiresAt: new Date(0) }
-      });
-    }
-
     const now = new Date();
     if (!previousJoinWasCleared && existing && !existing.revokedAt && existing.inviteLink &&
         existing.expiresAt > now) {
@@ -296,12 +302,44 @@ async function deliverSubscriptionAccess(
       continue;
     }
 
+    const needsUnban = Boolean(existing?.revokedAt || isBanned);
     try {
+      // Revoke the previous link before clearing it from the database. If Telegram
+      // rejects the revoke, retain the old link so the next worker pass can retry safely.
       if (existing?.inviteLink && !existing.revokedAt && existing.expiresAt > now) {
         await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), existing.inviteLink);
       }
 
-      if (existing?.revokedAt || isBanned) {
+      if (previousJoinWasCleared && existing) {
+        await prisma.subscriptionAccessGrant.updateMany({
+          where: { id: existing.id, revokedAt: null },
+          data: { joinedAt: null, inviteLink: "", expiresAt: new Date(0) }
+        });
+      }
+
+      // Persist a pending delivery row before creating the replacement invite.
+      await prisma.subscriptionAccessGrant.upsert({
+        where: {
+          subscriptionId_connectedChatId: {
+            subscriptionId: subscription.id,
+            connectedChatId: chat.id
+          }
+        },
+        create: {
+          subscriptionId: subscription.id,
+          connectedChatId: chat.id,
+          inviteLink: "",
+          expiresAt: new Date(0)
+        },
+        update: {
+          inviteLink: "",
+          expiresAt: new Date(0),
+          joinedAt: null,
+          revokedAt: null
+        }
+      });
+
+      if (needsUnban) {
         await bot.api.unbanChatMember(
           chat.telegramChatId.toString(),
           telegramUserId,
@@ -390,15 +428,14 @@ async function processSuccessfulStarsPayment(
 
   const subscription = payment.subscription;
   const now = new Date();
-  const currentEnd = subscription.endsAt && subscription.endsAt > now
-    ? subscription.endsAt
-    : now;
   const metadata = payment.metadata && typeof payment.metadata === "object" && !Array.isArray(payment.metadata)
     ? payment.metadata as Record<string, unknown>
     : {};
-  const snapshotDurationDays = typeof metadata.durationDays === "number" &&
-    Number.isInteger(metadata.durationDays) && metadata.durationDays > 0
-    ? metadata.durationDays
+  const snapshotDurationDays = Object.prototype.hasOwnProperty.call(metadata, "durationDays")
+    ? (typeof metadata.durationDays === "number" &&
+       Number.isInteger(metadata.durationDays) && metadata.durationDays > 0
+        ? metadata.durationDays
+        : null)
     : subscription.plan.durationDays;
   const snapshotPlanTitle = typeof metadata.planTitle === "string"
     ? metadata.planTitle
@@ -409,12 +446,20 @@ async function processSuccessfulStarsPayment(
   const expirationFromTelegram = receipt.subscription_expiration_date
     ? new Date(receipt.subscription_expiration_date * 1000)
     : null;
-  const endsAt = expirationFromTelegram ??
-    (snapshotDurationDays
-      ? new Date(currentEnd.getTime() + snapshotDurationDays * 24 * 60 * 60 * 1000)
-      : null);
+  let endsAt: Date | null = null;
+  let isInitialActivation = false;
 
   await prisma.$transaction(async (tx) => {
+    // Serialize extensions for a shared entitlement so concurrent successful payments
+    // cannot calculate their end date from the same stale subscription snapshot.
+    await tx.$queryRawUnsafe('SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE', subscription.id);
+    const currentSubscription = await tx.subscription.findUnique({
+      where: { id: subscription.id }
+    });
+    if (!currentSubscription) {
+      throw new Error("Subscription disappeared while processing a successful payment.");
+    }
+
     const updated = await tx.payment.updateMany({
       where: {
         id: payment.id,
@@ -429,11 +474,20 @@ async function processSuccessfulStarsPayment(
     });
 
     if (updated.count === 1) {
+      const currentEnd = currentSubscription.endsAt && currentSubscription.endsAt > now
+        ? currentSubscription.endsAt
+        : now;
+      endsAt = expirationFromTelegram ??
+        (snapshotDurationDays
+          ? new Date(currentEnd.getTime() + snapshotDurationDays * 24 * 60 * 60 * 1000)
+          : null);
+      isInitialActivation = currentSubscription.status !== "ACTIVE";
+
       await tx.subscription.update({
         where: { id: subscription.id },
         data: {
           status: "ACTIVE",
-          startsAt: subscription.startsAt ?? now,
+          startsAt: currentSubscription.startsAt ?? now,
           endsAt,
           reminder3dAt: null,
           reminder1dAt: null
@@ -443,7 +497,7 @@ async function processSuccessfulStarsPayment(
       await tx.paymentWebhookEvent.create({
         data: {
           connectionId: null,
-          dedupeKey: `telegram-stars:${receipt.telegram_payment_charge_id}`,
+          dedupeKey: \`telegram-stars:\${receipt.telegram_payment_charge_id}\`,
           providerEventId: receipt.telegram_payment_charge_id,
           eventType: "telegram.stars.payment.succeeded",
           payload: {
@@ -456,8 +510,11 @@ async function processSuccessfulStarsPayment(
           processedAt: now
         }
       });
+    } else {
+      endsAt = currentSubscription.endsAt;
     }
   });
+
 
   const latestPayment = await prisma.payment.findUnique({
     where: { id: payment.id },
@@ -516,8 +573,17 @@ async function processSuccessfulStarsPayment(
 
   if (access.failed.length > 0) {
     messageParts.push(
-      `Не удалось автоматически создать ссылки для: ${access.failed.join(", ")}. Платёж подтверждён; обратитесь к владельцу проекта для восстановления доступа.`
+      `Не удалось сразу создать ссылки для: ${access.failed.join(", ")}. Платёж подтверждён; SubPilot повторит выдачу автоматически. Также можно запросить ссылки командой /access.`
     );
+    await enqueueProjectOwnerNotification({
+      projectId,
+      dedupeKey: "subscription:" + subscription.id + ":access-delivery-pending",
+      eventType: "access_delivery_pending",
+      messageText:
+        "⚠️ Не удалось автоматически выдать доступ по тарифу «" + snapshotPlanTitle +
+        "». SubPilot повторит попытку. Проверьте права бота и состояние подключённых площадок: " +
+        access.failed.join(", ")
+    });
   }
 
   await ctx.reply(messageParts.join("\n\n"));
@@ -684,6 +750,76 @@ export async function handleProjectBotUpdate(
       "Поддержка по оплате и возвратам. Напишите владельцу проекта: " + contactUrl +
       "\nУкажите дату и сумму платежа, а также сохраните квитанцию Telegram."
     );
+  });
+
+  projectBot.command("access", async (ctx) => {
+    if (!ctx.chat || ctx.chat.type !== "private" || !ctx.from) {
+      await ctx.reply("Запросить ссылки можно только в личном чате с ботом проекта.");
+      return;
+    }
+
+    const customer = await prisma.projectCustomer.findUnique({
+      where: {
+        projectId_telegramUserId: {
+          projectId,
+          telegramUserId: BigInt(ctx.from.id)
+        }
+      }
+    });
+    if (!customer) {
+      await ctx.reply("У вас пока нет оформленных подписок в этом проекте.");
+      return;
+    }
+
+    const subscriptions = await prisma.subscription.findMany({
+      where: {
+        projectId,
+        customerId: customer.id,
+        status: "ACTIVE",
+        OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }]
+      },
+      include: {
+        plan: { select: { title: true } },
+        payments: {
+          where: { status: "SUCCEEDED" },
+          orderBy: { paidAt: "desc" },
+          take: 1,
+          select: { metadata: true }
+        }
+      },
+      orderBy: { updatedAt: "desc" }
+    });
+
+    if (subscriptions.length === 0) {
+      await ctx.reply("Активных подписок не найдено. Посмотреть тарифы можно командой /plans.");
+      return;
+    }
+
+    const messages: string[] = [];
+    for (const subscription of subscriptions) {
+      const metadata = subscription.payments[0]?.metadata &&
+        typeof subscription.payments[0].metadata === "object" &&
+        !Array.isArray(subscription.payments[0].metadata)
+        ? subscription.payments[0].metadata as Record<string, unknown>
+        : {};
+      const chatIds = Array.isArray(metadata.chatIds)
+        ? metadata.chatIds.filter((value): value is string => typeof value === "string")
+        : undefined;
+      const access = await deliverSubscriptionAccess(projectBot, subscription.id, chatIds);
+      if (access.links.length > 0) {
+        messages.push("«" + subscription.plan.title + "»\n" + access.links.join("\n"));
+      }
+      if (access.alreadyJoined.length > 0) {
+        messages.push("«" + subscription.plan.title + "»: вы уже состоите в " + access.alreadyJoined.join(", "));
+      }
+      if (access.failed.length > 0) {
+        messages.push("«" + subscription.plan.title + "»: не удалось создать ссылки для " + access.failed.join(", ") + ". Повторите запрос позже.");
+      }
+    }
+
+    await ctx.reply(messages.length > 0
+      ? "Актуальное состояние ваших доступов:\n\n" + messages.join("\n\n")
+      : "Для активных подписок не удалось получить ссылки. Попробуйте позже или обратитесь в поддержку через /paysupport.");
   });
 
   projectBot.command("start", async (ctx) => {

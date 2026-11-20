@@ -299,6 +299,7 @@ model SubscriptionAccessGrant {
   subscription      Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
   connectedChat     ConnectedChat @relation(fields: [connectedChatId], references: [id], onDelete: Cascade)
   createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
   @@unique([subscriptionId, connectedChatId])
   @@index([connectedChatId, joinedAt, expiresAt])

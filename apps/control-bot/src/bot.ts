@@ -2211,6 +2211,23 @@ export function createControlBot(token: string): Bot {
         return;
       }
 
+      const activeProjectBot = await prisma.projectBot.findFirst({
+        where: {
+          projectId: project.id,
+          status: "ACTIVE",
+          ...(existingBot ? { id: { not: existingBot.id } } : {})
+        },
+        select: { username: true }
+      });
+      if (activeProjectBot) {
+        await ctx.reply(
+          "В одном проекте SubPilot используется один активный Telegram-бот. " +
+          "У этого проекта уже подключён @" + (activeProjectBot.username ?? "бот") +
+          ". Для обновления токена подключите того же бота из BotFather."
+        );
+        return;
+      }
+
       const publicApiUrl = (process.env.PUBLIC_API_URL ?? "").trim().replace(/\/+$/, "");
       const webhookSecret = publicApiUrl ? randomBytes(32).toString("base64url") : null;
       const webhookSecretHash = webhookSecret
@@ -2259,7 +2276,12 @@ export function createControlBot(token: string): Bot {
         }
 
         await candidateBot.api.setMyCommands([
-          { command: "start", description: "Открыть меню подписок" }
+          { command: "start", description: "Открыть меню подписок" },
+          { command: "plans", description: "Посмотреть тарифы" },
+          { command: "buy", description: "Оформить выбранный тариф" },
+          { command: "access", description: "Получить ссылки для вступления" },
+          { command: "terms", description: "Условия покупки" },
+          { command: "paysupport", description: "Поддержка по оплате и возвратам" }
         ]);
 
         await prisma.projectBot.update({

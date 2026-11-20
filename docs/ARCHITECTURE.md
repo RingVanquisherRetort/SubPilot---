@@ -8,7 +8,7 @@ There are two operating modes:
 - **Creator workspace:** one author manages their own projects.
 - **Agency workspace:** a team manages multiple creators and projects with role-based access.
 
-The central SubPilot bot is the default control panel. A workspace can contain multiple projects. A project can have one or more Telegram bots, connected channels/groups, monetization plans and payment-provider connections.
+The central SubPilot bot is the default control panel. A workspace can contain multiple projects. A project has one active Telegram bot, connected channels/groups, monetization plans and payment-provider connections. A workspace can manage multiple projects, each with its own bot and merchant connections.
 
 ## Main entities
 
@@ -40,12 +40,12 @@ The first implemented checkout is a one-time Telegram Stars flow:
 - SubPilot creates a pending subscription and payment record before sending the invoice.
 - A `pre_checkout_query` is accepted only when the payment is still pending and its project, buyer Telegram ID, currency and amount match the database record.
 - The subscription is activated only after a `successful_payment` update. The Telegram charge ID and an idempotent receipt event are persisted.
-- The project bot creates one-person, 24-hour invite links for the connected chats selected by the plan. `chat_member` updates record completed joins. Each Stars payment snapshot records the project bot that issued the invoice, tariff title/duration and target chat IDs so refunds and access delivery can be associated with the originating bot and purchased configuration.
+- The project bot creates one-person, 24-hour invite links for the connected chats selected by the plan. `chat_member` updates record completed joins. Each Stars payment snapshot records the project bot that issued the invoice, tariff title/duration and target chat IDs so refunds and access delivery can be associated with the originating bot and purchased configuration. Buyers can request current links again with /access.
 - A workspace owner/admin can review payments and refund a successful Stars payment from the central bot. Refund also cancels the subscription, revokes outstanding invite links and removes joined subscribers from the linked chats.
 
 The shared provider package defines normalized checkout/event contracts and a registry for future integrations. The external adapters are not yet implemented.
 
-The Stars checkout displays purchase terms before issuing an invoice and exposes /terms and /paysupport. Payment records snapshot the selected tariff title, duration and connected chat IDs so later tariff edits do not silently rewrite an existing order. The refund flow preserves an entitlement when other successful payments remain on the same subscription; a full per-payment period ledger and exact recalculation after partial refunds are still required before refunds can be considered complete.
+The Stars checkout displays basic purchase disclosures before issuing an invoice and exposes /terms, /paysupport and /access. These are a technical baseline, not a substitute for project-specific buyer terms that a creator may need to supply. Payment records snapshot the selected tariff title, duration and connected chat IDs so later tariff edits do not silently rewrite an existing order. The refund flow preserves an entitlement when other successful payments remain on the same subscription; a full per-payment period ledger and exact recalculation after partial refunds are still required before refunds can be considered complete.
 
 The platform must not mark a payment successful based only on a browser redirect or a client-side message. Provider status, project/customer scope, amount, currency and idempotency must be verified.
 
@@ -65,14 +65,14 @@ Provider eligibility is resolved per country, merchant type, currency and produc
 
 - The **control bot** authenticates owners through Telegram and manages workspaces/projects.
 - Each **project bot** belongs to one project and uses its own BotFather token.
-- A project bot is verified with Telegram's getMe before activation.
+- A project bot is verified with Telegram's getMe before activation. SubPilot allows one active bot per project, matching the Nemiling project model and keeping invite creation, renewal reminders, refunds and expiry operations on the same bot.
 - Project bots receive `my_chat_member`, `message`, `pre_checkout_query` and `chat_member` updates through POST /webhooks/telegram/:botId. Telegram's X-Telegram-Bot-Api-Secret-Token header is SHA-256 hashed and compared in constant time with the stored hash before any update is processed.
 - The project bot token is encrypted at rest with AES-256-GCM. The webhook secret itself is never stored in plaintext; only its hash is stored. Plaintext secrets must never appear in logs or API responses.
 - On connection, the control bot validates the token with getMe and installs a webhook at PUBLIC_API_URL. This must be a publicly reachable HTTPS origin.
 - The project bot subscribes to `my_chat_member` updates. When it is added or removed, the API upserts the connected chat and marks it active only when the bot has administrator/creator status.
 - `pre_checkout_query` validates a Stars invoice against the pending payment record; `successful_payment` is the only event that activates a paid entitlement.
 - Invite links are generated per subscription/chat, expire after 24 hours and have a one-member limit. Their joins are tracked by `chat_member` updates.
-- The API lifecycle worker checks active subscriptions once per minute, sends one reminder around three days and one around one day before expiry, and expires due subscriptions.
+- The API lifecycle worker checks active subscriptions once per minute, retries pending/expired invite delivery (with a five-minute retry delay), sends one reminder around three days and one around one day before expiry, and expires due subscriptions.
 - When a buyer renews before expiry, the existing entitlement is extended from its current end date instead of creating overlapping subscriptions.
 - On expiry, unused invite links are revoked and joined subscribers are removed from the connected chats. Failed removals remain pending for a later worker retry.
 - Successful first activation queues a new-subscriber alert for the workspace creator and project creator. In a personal workspace these are normally the same user, so only one message is queued.

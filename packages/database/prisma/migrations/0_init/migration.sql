@@ -208,6 +208,7 @@ CREATE TABLE "SubscriptionAccessGrant" (
     "joinedAt" TIMESTAMP(3),
     "revokedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "SubscriptionAccessGrant_pkey" PRIMARY KEY ("id")
 );

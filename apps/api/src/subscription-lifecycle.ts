@@ -1,6 +1,7 @@
 import { Bot, InlineKeyboard } from "grammy";
 import { prisma } from "@subpilot/database";
 import { decryptSecret } from "@subpilot/security";
+import { deliverSubscriptionAccess } from "./project-bot-updates.js";
 import {
   deliverPendingOwnerNotifications,
   enqueueProjectOwnerNotification
@@ -13,9 +14,13 @@ function createRenewalKeyboard(): InlineKeyboard {
   return new InlineKeyboard().text("Продлить подписку", "buyer:plans");
 }
 
-async function getProjectBot(projectId: string): Promise<Bot | null> {
+async function getProjectBot(projectId: string, projectBotId?: string): Promise<Bot | null> {
   const record = await prisma.projectBot.findFirst({
-    where: { projectId, status: "ACTIVE" },
+    where: {
+      projectId,
+      status: "ACTIVE",
+      ...(projectBotId ? { id: projectBotId } : {})
+    },
     orderBy: [{ isPrimary: "desc" }, { createdAt: "desc" }]
   });
 
@@ -29,6 +34,86 @@ async function getProjectBot(projectId: string): Promise<Bot | null> {
       error instanceof Error ? error.name : "UnknownError"
     );
     return null;
+  }
+}
+
+async function retryPendingAccessDeliveries(now: Date): Promise<void> {
+  const due = await prisma.subscription.findMany({
+    where: {
+      status: "ACTIVE",
+      AND: [
+        { OR: [{ endsAt: null }, { endsAt: { gt: now } }] },
+        {
+          accessGrants: {
+            some: {
+              joinedAt: null,
+              revokedAt: null,
+              updatedAt: { lte: new Date(now.getTime() - 5 * 60_000) },
+              OR: [
+                { inviteLink: "" },
+                { expiresAt: { lte: now } }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    include: {
+      customer: true,
+      project: { select: { id: true, name: true } },
+      plan: { select: { title: true } },
+      payments: {
+        where: { status: "SUCCEEDED" },
+        orderBy: { paidAt: "desc" },
+        take: 1,
+        select: { metadata: true }
+      }
+    },
+    orderBy: { updatedAt: "asc" },
+    take: BATCH_SIZE
+  });
+
+  for (const subscription of due) {
+    const metadata = subscription.payments[0]?.metadata &&
+      typeof subscription.payments[0].metadata === "object" &&
+      !Array.isArray(subscription.payments[0].metadata)
+      ? subscription.payments[0].metadata as Record<string, unknown>
+      : {};
+    const projectBotId = typeof metadata.projectBotId === "string"
+      ? metadata.projectBotId
+      : undefined;
+    const chatIds = Array.isArray(metadata.chatIds)
+      ? metadata.chatIds.filter((value): value is string => typeof value === "string")
+      : undefined;
+    const bot = await getProjectBot(subscription.projectId, projectBotId);
+    if (!bot) continue;
+
+    try {
+      const access = await deliverSubscriptionAccess(bot, subscription.id, chatIds);
+      if (access.links.length > 0 && access.failed.length === 0) {
+        await bot.api.sendMessage(
+          Number(subscription.customer.telegramUserId),
+          "Платёж подтверждён. Не все ссылки удалось выдать сразу, поэтому SubPilot повторил попытку. Актуальные ссылки для вступления:\n\n" +
+          access.links.join("\n")
+        );
+      }
+      if (access.failed.length > 0) {
+        await enqueueProjectOwnerNotification({
+          projectId: subscription.projectId,
+          dedupeKey: "subscription:" + subscription.id + ":access-delivery-pending",
+          eventType: "access_delivery_pending",
+          messageText:
+            "⚠️ Не удалось автоматически выдать доступ по тарифу «" + subscription.plan.title +
+            "» в проекте «" + subscription.project.name + "». Необходимо проверить права бота и подключённые площадки: " +
+            access.failed.join(", ")
+        });
+      }
+    } catch (error) {
+      console.error(
+        "Could not retry subscription access delivery:",
+        error instanceof Error ? error.name : "UnknownError"
+      );
+    }
   }
 }
 
@@ -54,7 +139,13 @@ async function sendRenewalReminders(now: Date): Promise<void> {
     include: {
       customer: true,
       plan: true,
-      project: { select: { id: true, name: true } }
+      project: { select: { id: true, name: true } },
+      payments: {
+        where: { status: "SUCCEEDED" },
+        orderBy: { paidAt: "desc" },
+        take: 1,
+        select: { metadata: true }
+      }
     },
     orderBy: { endsAt: "asc" },
     take: BATCH_SIZE
@@ -82,10 +173,19 @@ async function sendRenewalReminders(now: Date): Promise<void> {
         `Осталось примерно ${daysLeft} дн.`
     });
 
-    let bot = bots.get(subscription.projectId);
+    const latestMetadata = subscription.payments[0]?.metadata &&
+      typeof subscription.payments[0].metadata === "object" &&
+      !Array.isArray(subscription.payments[0].metadata)
+      ? subscription.payments[0].metadata as Record<string, unknown>
+      : {};
+    const originProjectBotId = typeof latestMetadata.projectBotId === "string"
+      ? latestMetadata.projectBotId
+      : undefined;
+    const botKey = subscription.projectId + ":" + (originProjectBotId ?? "primary");
+    let bot = bots.get(botKey);
     if (bot === undefined) {
-      bot = await getProjectBot(subscription.projectId);
-      bots.set(subscription.projectId, bot);
+      bot = await getProjectBot(subscription.projectId, originProjectBotId);
+      bots.set(botKey, bot);
     }
     if (!bot) continue;
 
@@ -133,7 +233,12 @@ async function expireSubscriptions(now: Date): Promise<void> {
         include: { connectedChat: true }
       },
       project: { select: { id: true, name: true } },
-      plan: { select: { title: true } }
+      plan: { select: { title: true } },
+      payments: {
+        orderBy: { paidAt: "desc" },
+        take: 1,
+        select: { metadata: true }
+      }
     },
     orderBy: { endsAt: "asc" },
     take: BATCH_SIZE
@@ -163,10 +268,19 @@ async function expireSubscriptions(now: Date): Promise<void> {
       });
     }
 
-    let bot = bots.get(subscription.projectId);
+    const latestMetadata = subscription.payments[0]?.metadata &&
+      typeof subscription.payments[0].metadata === "object" &&
+      !Array.isArray(subscription.payments[0].metadata)
+      ? subscription.payments[0].metadata as Record<string, unknown>
+      : {};
+    const originProjectBotId = typeof latestMetadata.projectBotId === "string"
+      ? latestMetadata.projectBotId
+      : undefined;
+    const botKey = subscription.projectId + ":" + (originProjectBotId ?? "primary");
+    let bot = bots.get(botKey);
     if (bot === undefined) {
-      bot = await getProjectBot(subscription.projectId);
-      bots.set(subscription.projectId, bot);
+      bot = await getProjectBot(subscription.projectId, originProjectBotId);
+      bots.set(botKey, bot);
     }
     if (!bot) continue;
 
@@ -211,6 +325,7 @@ async function expireSubscriptions(now: Date): Promise<void> {
 }
 
 export async function runSubscriptionLifecycle(now = new Date()): Promise<void> {
+  await retryPendingAccessDeliveries(now);
   await sendRenewalReminders(now);
   await expireSubscriptions(now);
   await deliverPendingOwnerNotifications(now);
