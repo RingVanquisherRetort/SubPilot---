@@ -9,7 +9,7 @@ import {
 import { enqueueProjectOwnerNotification } from "./owner-notifications.js";
 import { hasRequiredSubscriptionChatRights } from "./telegram-chat-access.js";
 import { isPaymentFromProjectBot } from "./telegram-payment-origin.js";
-import { hasInvoiceDispatchStarted } from "./telegram-invoice-state.js";
+import { getInvoiceDispatchState } from "./telegram-invoice-state.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
@@ -180,7 +180,7 @@ async function createPurchaseInvoice(
       return {
         payment: reusablePayment,
         subscription,
-        invoiceAlreadySent: hasInvoiceDispatchStarted(metadata)
+        invoiceDispatchState: getInvoiceDispatchState(metadata)
       };
     }
 
@@ -210,14 +210,16 @@ async function createPurchaseInvoice(
       }
     });
 
-    return { payment, subscription, invoiceAlreadySent: false };
+    return { payment, subscription, invoiceDispatchState: "NOT_STARTED" as const };
   });
 
-  if (pending.invoiceAlreadySent) {
-    await ctx.reply(
-      "У вас уже есть неоплаченный счёт по этому тарифу. Найдите предыдущее сообщение от бота с кнопкой оплаты. " +
-      "Повторный счёт не создан, чтобы не допустить двойного списания. Неоплаченный счёт действует 24 часа."
-    );
+  if (pending.invoiceDispatchState !== "NOT_STARTED") {
+    const message = pending.invoiceDispatchState === "SENT"
+      ? "У вас уже есть неоплаченный счёт по этому тарифу. Найдите предыдущее сообщение от бота с кнопкой оплаты. " +
+        "Повторный счёт не создан, чтобы не допустить двойного списания. Неоплаченный счёт действует 24 часа."
+      : "Запрос на выставление счёта уже выполнялся, но SubPilot не получил подтверждение о сохранении сообщения. Счёт мог быть отправлен. " +
+        "Повторный счёт не создан во избежание двойного списания. Проверьте сообщения от бота или обратитесь в /paysupport.";
+    await ctx.reply(message);
     return;
   }
 
