@@ -13,6 +13,20 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: subpilot
+          POSTGRES_USER: subpilot
+          POSTGRES_PASSWORD: subpilot_dev_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U subpilot -d subpilot"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,6 +43,11 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
+
+      - name: Apply baseline migrations to clean PostgreSQL
+        env:
+          DATABASE_URL: postgresql://subpilot:subpilot_dev_password@localhost:5432/subpilot?schema=public
+        run: pnpm db:migrate:deploy
 
       - name: Generate Prisma Client
         env:
