@@ -1501,6 +1501,7 @@ export async function handleProjectBotUpdate(
       where: { id: grant.id, joinedAt: null, revokedAt: null },
       data: { joinedAt: new Date() }
     });
+    await saveCursor();
   });
 
   await projectBot.handleUpdate(update);
