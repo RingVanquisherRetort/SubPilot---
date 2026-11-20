@@ -122,3 +122,20 @@ export type {
   IntroductoryCommission,
   IntroductoryCommissionInput
 } from "./commission.js";
+
+
+export {
+  CREATOR_MERCHANT_TYPES,
+  PAYMENT_PROVIDER_CATALOG,
+  getPaymentProviderAvailability,
+  listPaymentProviderAvailability
+} from "./provider-catalog.js";
+export type {
+  CreatorMerchantType,
+  ProviderRolloutStatus,
+  ProviderSetupMode,
+  PaymentProviderDescriptor,
+  ProviderAvailabilityInput,
+  ProviderAvailabilityReason,
+  ProviderAvailability
+} from "./provider-catalog.js";
