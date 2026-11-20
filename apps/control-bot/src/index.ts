@@ -23,6 +23,7 @@ if (!token) {
     { command: "start", description: "Start using SubPilot" },
     { command: "newproject", description: "Create a project" },
     { command: "projects", description: "List your projects" },
+    { command: "connectbot", description: "Connect a bot to a project" },
     { command: "help", description: "Show available commands" }
   ]);
 
