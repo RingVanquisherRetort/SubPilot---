@@ -8,6 +8,7 @@ import {
 } from "@subpilot/payments";
 import { enqueueProjectOwnerNotification } from "./owner-notifications.js";
 import { hasRequiredSubscriptionChatRights } from "./telegram-chat-access.js";
+import { isPaymentFromProjectBot } from "./telegram-payment-origin.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
@@ -295,7 +296,8 @@ async function validatePreCheckout(
     currency: string;
     total_amount: number;
   },
-  projectId: string
+  projectId: string,
+  projectBotId: string
 ): Promise<boolean> {
   const payment = await prisma.payment.findUnique({
     where: { id: query.invoice_payload },
@@ -307,6 +309,7 @@ async function validatePreCheckout(
 
   return Boolean(
     payment &&
+    isPaymentFromProjectBot(payment.metadata, projectBotId) &&
     payment.projectId === projectId &&
     payment.project.status === "ACTIVE" &&
     payment.provider === "TELEGRAM_STARS" &&
@@ -564,6 +567,7 @@ export async function deliverSubscriptionAccess(
 async function processSuccessfulStarsPayment(
   bot: Bot,
   projectId: string,
+  projectBotId: string,
   ctx: Context
 ): Promise<void> {
   const message = ctx.message;
@@ -583,6 +587,7 @@ async function processSuccessfulStarsPayment(
 
   if (
     !payment ||
+    !isPaymentFromProjectBot(payment.metadata, projectBotId) ||
     !payment.subscription ||
     payment.projectId !== projectId ||
     payment.provider !== "TELEGRAM_STARS" ||
@@ -1261,7 +1266,7 @@ export async function handleProjectBotUpdate(
         setTimeout(() => resolve(false), 7_000);
       });
       isValid = await Promise.race([
-        validatePreCheckout(ctx.preCheckoutQuery, projectId),
+        validatePreCheckout(ctx.preCheckoutQuery, projectId, projectBotId),
         timeout
       ]);
     } catch (error) {
@@ -1278,7 +1283,7 @@ export async function handleProjectBotUpdate(
   });
 
   projectBot.on("message:successful_payment", async (ctx) => {
-    await processSuccessfulStarsPayment(projectBot, projectId, ctx);
+    await processSuccessfulStarsPayment(projectBot, projectId, projectBotId, ctx);
   });
 
   projectBot.on("message:refunded_payment", async (ctx) => {
