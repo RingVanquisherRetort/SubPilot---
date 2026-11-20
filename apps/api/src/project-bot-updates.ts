@@ -462,6 +462,7 @@ async function processSuccessfulStarsPayment(
     : null;
   let endsAt: Date | null = null;
   let isInitialActivation = false;
+  let paymentWasProcessed = false;
 
   await prisma.$transaction(async (tx) => {
     // Serialize extensions for a shared entitlement so concurrent successful payments
@@ -488,6 +489,7 @@ async function processSuccessfulStarsPayment(
     });
 
     if (updated.count === 1) {
+      paymentWasProcessed = true;
       const currentEnd = currentSubscription.endsAt && currentSubscription.endsAt > now
         ? currentSubscription.endsAt
         : now;
@@ -524,11 +526,57 @@ async function processSuccessfulStarsPayment(
           processedAt: now
         }
       });
+
+      // Persist pending access-delivery rows in the same transaction as payment
+      // confirmation. The lifecycle worker can recover if the process stops before
+      // the immediate Telegram invite-link delivery completes.
+      let connectedChatIds: string[] = [];
+      if (snapshotChatIds !== undefined) {
+        const telegramChatIds = snapshotChatIds
+          .filter((value) => /^-?\\d+$/.test(value))
+          .map((value) => BigInt(value));
+        if (telegramChatIds.length > 0) {
+          const chats = await tx.connectedChat.findMany({
+            where: {
+              projectId,
+              isActive: true,
+              telegramChatId: { in: telegramChatIds }
+            },
+            select: { id: true }
+          });
+          connectedChatIds = chats.map((chat) => chat.id);
+        }
+      } else {
+        const planChats = await tx.creatorPlanChat.findMany({
+          where: {
+            creatorPlanId: currentSubscription.planId,
+            connectedChat: { isActive: true }
+          },
+          select: { connectedChatId: true }
+        });
+        connectedChatIds = planChats.map((chat) => chat.connectedChatId);
+      }
+
+      if (connectedChatIds.length > 0) {
+        await tx.subscriptionAccessGrant.createMany({
+          data: connectedChatIds.map((connectedChatId) => ({
+            subscriptionId: subscription.id,
+            connectedChatId,
+            inviteLink: "",
+            expiresAt: new Date(0)
+          })),
+          skipDuplicates: true
+        });
+      }
     } else {
       endsAt = currentSubscription.endsAt;
     }
   });
 
+  if (!paymentWasProcessed) {
+    await ctx.reply("Этот платёж уже был обработан. Для получения актуальных ссылок используйте /access.");
+    return;
+  }
 
   const latestPayment = await prisma.payment.findUnique({
     where: { id: payment.id },
