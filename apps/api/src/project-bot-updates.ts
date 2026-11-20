@@ -120,19 +120,28 @@ async function createPurchaseInvoice(
     }
   });
 
-  const activeSubscription = await prisma.subscription.findFirst({
-    where: {
-      projectId,
-      customerId: customer.id,
-      planId: plan.id,
-      status: "ACTIVE",
-      OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }]
-    },
-    orderBy: { endsAt: "desc" }
-  });
-
   const pending = await prisma.$transaction(async (tx) => {
-    const subscription = activeSubscription ?? await tx.subscription.create({
+    // Serialize checkout creation for this project/customer/plan. Without a
+    // transaction-scoped lock, two fast /buy updates could both observe no active
+    // subscription and create separate pending entitlements.
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`subscription:${projectId}:${customer.id}:${plan.id}`}, 0))`;
+
+    const now = new Date();
+    const activeSubscription = await tx.subscription.findFirst({
+      where: {
+        projectId,
+        customerId: customer.id,
+        planId: plan.id,
+        status: "ACTIVE",
+        OR: [{ endsAt: null }, { endsAt: { gt: now } }]
+      },
+      orderBy: { endsAt: "desc" }
+    });
+    const pendingSubscription = activeSubscription ? null : await tx.subscription.findFirst({
+      where: { projectId, customerId: customer.id, planId: plan.id, status: "PENDING" },
+      orderBy: { createdAt: "desc" }
+    });
+    const subscription = activeSubscription ?? pendingSubscription ?? await tx.subscription.create({
       data: {
         projectId,
         customerId: customer.id,
@@ -140,6 +149,28 @@ async function createPurchaseInvoice(
         status: "PENDING"
       }
     });
+
+    const existingPayments = await tx.payment.findMany({
+      where: {
+        projectId,
+        customerId: customer.id,
+        subscriptionId: subscription.id,
+        provider: "TELEGRAM_STARS",
+        status: "PENDING"
+      },
+      orderBy: { createdAt: "desc" },
+      take: 10
+    });
+    const reusablePayment = existingPayments.find((candidate) => {
+      const metadata = candidate.metadata && typeof candidate.metadata === "object" && !Array.isArray(candidate.metadata)
+        ? candidate.metadata as Record<string, unknown>
+        : {};
+      return metadata.projectBotId === projectBotId;
+    });
+
+    if (reusablePayment) {
+      return { payment: reusablePayment, subscription };
+    }
 
     const payment = await tx.payment.create({
       data: {
@@ -162,7 +193,7 @@ async function createPurchaseInvoice(
           durationDays: plan.durationDays,
           chatIds: activeChats.map((item) => item.connectedChat.telegramChatId.toString()),
           termsVersion: "2026-11-20",
-          termsAcceptedAt: new Date().toISOString()
+          termsAcceptedAt: now.toISOString()
         }
       }
     });
@@ -170,14 +201,31 @@ async function createPurchaseInvoice(
     return { payment, subscription };
   });
 
+  const invoiceMetadata = pending.payment.metadata &&
+    typeof pending.payment.metadata === "object" &&
+    !Array.isArray(pending.payment.metadata)
+    ? pending.payment.metadata as Record<string, unknown>
+    : {};
+  const invoiceTitle = typeof invoiceMetadata.planTitle === "string"
+    ? invoiceMetadata.planTitle
+    : plan.title;
+  const invoiceDescription = typeof invoiceMetadata.planDescription === "string"
+    ? invoiceMetadata.planDescription
+    : `Доступ к подписке «${invoiceTitle}»`;
+  const invoiceAmountStars = getStarAmount(pending.payment.amount);
+  if (invoiceAmountStars === null) {
+    await ctx.reply("Не удалось проверить сумму ранее созданного счёта. Обратитесь к владельцу проекта.");
+    return;
+  }
+
   try {
     await ctx.api.sendInvoice(
       ctx.chat.id,
-      plan.title.slice(0, 32),
-      (plan.description ?? `Доступ к подписке «${plan.title}»`).slice(0, 255),
+      invoiceTitle.slice(0, 32),
+      invoiceDescription.slice(0, 255),
       pending.payment.id,
       "XTR",
-      [{ label: plan.title.slice(0, 32), amount: amountStars }]
+      [{ label: invoiceTitle.slice(0, 32), amount: invoiceAmountStars }]
     );
   } catch (error) {
     await prisma.$transaction([
