@@ -204,6 +204,7 @@ model ConnectedChat {
   isActive       Boolean           @default(true)
   project        Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
   planLinks      CreatorPlanChat[]
+  accessGrants   SubscriptionAccessGrant[]
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
 
@@ -271,11 +272,28 @@ model Subscription {
   customer    ProjectCustomer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
   plan        CreatorPlan        @relation(fields: [planId], references: [id], onDelete: Restrict)
   payments    Payment[]
+  accessGrants SubscriptionAccessGrant[]
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
 
   @@index([projectId, status, endsAt])
   @@index([customerId, status])
+}
+
+model SubscriptionAccessGrant {
+  id                String        @id @default(cuid())
+  subscriptionId    String
+  connectedChatId   String
+  inviteLink        String
+  expiresAt         DateTime
+  joinedAt          DateTime?
+  revokedAt         DateTime?
+  subscription      Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  connectedChat     ConnectedChat @relation(fields: [connectedChatId], references: [id], onDelete: Cascade)
+  createdAt         DateTime      @default(now())
+
+  @@unique([subscriptionId, connectedChatId])
+  @@index([connectedChatId, joinedAt, expiresAt])
 }
 
 model PaymentProviderConnection {
