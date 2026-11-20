@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   PaymentProviderRegistry,
+  calculateIntroductoryCommission,
   evaluatePaymentEligibility,
   normalizeDecimalAmount,
   type PaymentProviderAdapter
@@ -117,4 +118,74 @@ test("Stars are not accepted for physical goods or services", () => {
 
   assert.equal(decision.allowed, false);
   assert.equal(decision.code, "STARS_NOT_VALID_FOR_PHYSICAL_GOODS");
+});
+
+
+test("introductory commission is 14% only during the selected seven-day period", () => {
+  const trialStartedAt = new Date("2026-11-21T00:00:00.000Z");
+  const trialEndsAt = new Date("2026-11-28T00:00:00.000Z");
+  const result = calculateIntroductoryCommission({
+    grossAmount: "20000.00",
+    currency: "RUB",
+    paidAt: new Date("2026-11-24T12:00:00.000Z"),
+    trialStartedAt,
+    trialEndsAt
+  });
+
+  assert.equal(result.eligible, true);
+  assert.equal(result.commissionRate, "14");
+  assert.equal(result.commissionAmount, "2800");
+  assert.equal(result.netAmount, "20000");
+});
+
+test("introductory commission excludes sales at or after the trial end", () => {
+  const result = calculateIntroductoryCommission({
+    grossAmount: "1000",
+    currency: "RUB",
+    paidAt: new Date("2026-11-28T00:00:00.000Z"),
+    trialStartedAt: new Date("2026-11-21T00:00:00.000Z"),
+    trialEndsAt: new Date("2026-11-28T00:00:00.000Z")
+  });
+
+  assert.equal(result.eligible, false);
+  assert.equal(result.commissionAmount, "140");
+  assert.equal(result.reason, "OUTSIDE_INTRODUCTORY_PERIOD");
+});
+
+test("refunds reduce the commission base and preserve the sale currency", () => {
+  const result = calculateIntroductoryCommission({
+    grossAmount: "1000",
+    refundedAmount: "250",
+    currency: "xtr",
+    paidAt: new Date("2026-11-22T00:00:00.000Z"),
+    trialStartedAt: new Date("2026-11-21T00:00:00.000Z"),
+    trialEndsAt: new Date("2026-11-28T00:00:00.000Z")
+  });
+
+  assert.equal(result.currency, "XTR");
+  assert.equal(result.netAmount, "750");
+  assert.equal(result.commissionAmount, "105");
+});
+
+test("commission calculator uses decimal-safe rounding and validates refunds", () => {
+  const base = {
+    currency: "XTR",
+    paidAt: new Date("2026-11-22T00:00:00.000Z"),
+    trialStartedAt: new Date("2026-11-21T00:00:00.000Z"),
+    trialEndsAt: new Date("2026-11-28T00:00:00.000Z")
+  };
+  const fractional = calculateIntroductoryCommission({
+    ...base,
+    grossAmount: "1"
+  });
+
+  assert.equal(fractional.commissionAmount, "0.14");
+  assert.throws(
+    () => calculateIntroductoryCommission({
+      ...base,
+      grossAmount: "10",
+      refundedAmount: "11"
+    }),
+    /cannot exceed/
+  );
 });
