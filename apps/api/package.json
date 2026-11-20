@@ -10,6 +10,8 @@
   "dependencies": {
     "@subpilot/database": "workspace:*",
     "dotenv": "^17.2.3",
-    "fastify": "^5.12.8"
+    "fastify": "^5.12.8",
+    "@subpilot/security": "workspace:*",
+    "grammy": "^1.46.0"
   }
 }
