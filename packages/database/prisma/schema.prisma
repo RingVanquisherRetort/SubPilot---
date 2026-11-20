@@ -91,6 +91,20 @@ enum WorkspaceBillingStatus {
   EXPIRED
 }
 
+enum PlatformCommissionEntryType {
+  SALE_FEE
+  REFUND_ADJUSTMENT
+  MANUAL_ADJUSTMENT
+  PAYMENT
+}
+
+enum PlatformCommissionStatus {
+  ACCRUED
+  INVOICED
+  PAID
+  VOID
+}
+
 model User {
   id                String            @id @default(cuid())
   telegramId        BigInt            @unique
@@ -173,6 +187,7 @@ model Project {
   subscriptions      Subscription[]
   paymentConnections PaymentProviderConnection[]
   payments           Payment[]
+  commissionEntries  PlatformCommissionEntry[]
   auditLogs          AuditLog[]
   createdAt          DateTime                    @default(now())
   updatedAt          DateTime                    @updatedAt
@@ -343,6 +358,7 @@ model Payment {
   customer          ProjectCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
   subscription      Subscription?   @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
   connection        PaymentProviderConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  commissionEntries PlatformCommissionEntry[]
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt
 
@@ -391,6 +407,13 @@ model WorkspaceBilling {
   workspace          Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   platformPlan       PlatformPlan           @relation(fields: [platformPlanId], references: [id], onDelete: Restrict)
   payments           PlatformPayment[]
+  commissionEntries  PlatformCommissionEntry[]
+  introductoryOfferCode String?
+  introductoryOfferAcceptedAt DateTime?
+  introductoryTrialStartedAt DateTime?
+  introductoryTrialEndsAt DateTime?
+  introductoryCommissionBasisPoints Int?
+  introductoryTermsVersion String?
   createdAt          DateTime               @default(now())
   updatedAt          DateTime               @updatedAt
 }
@@ -411,6 +434,33 @@ model PlatformPayment {
   updatedAt          DateTime         @updatedAt
 
   @@index([workspaceBillingId, status, createdAt])
+}
+
+model PlatformCommissionEntry {
+  id                 String                     @id @default(cuid())
+  workspaceBillingId String
+  projectId          String
+  creatorPaymentId   String?
+  idempotencyKey     String                     @unique
+  entryType          PlatformCommissionEntryType
+  status             PlatformCommissionStatus  @default(ACCRUED)
+  baseAmount         Decimal                    @db.Decimal(12, 2)
+  baseCurrency       String
+  rateBasisPoints    Int?
+  feeAmount          Decimal                    @db.Decimal(12, 2)
+  feeCurrency        String
+  invoiceReference   String?
+  paidAt             DateTime?
+  metadata           Json?
+  workspaceBilling   WorkspaceBilling           @relation(fields: [workspaceBillingId], references: [id], onDelete: Cascade)
+  project            Project                    @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  creatorPayment     Payment?                   @relation(fields: [creatorPaymentId], references: [id], onDelete: SetNull)
+  createdAt          DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
+
+  @@index([workspaceBillingId, status, createdAt])
+  @@index([projectId, createdAt])
+  @@index([creatorPaymentId, entryType])
 }
 
 model OwnerNotification {
