@@ -12,7 +12,7 @@ import { hasRequiredSubscriptionChatRights } from "./telegram-chat-access.js";
 import { isPaymentFromProjectBot } from "./telegram-payment-origin.js";
 import { getInvoiceDispatchState } from "./telegram-invoice-state.js";
 import { getSubscriptionGrantChatIds } from "./subscription-grant-persistence.js";
-import { wasInitialSubscriptionActivationEvent } from "./payment-event-notification.js";
+import { shouldQueueNewSubscriberNotification } from "./payment-event-notification.js";
 import { shouldProcessTelegramUpdate } from "./telegram-update-order.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
@@ -816,7 +816,11 @@ async function processSuccessfulStarsPayment(
       where: { dedupeKey: "telegram-stars:" + receipt.telegram_payment_charge_id },
       select: { payload: true }
     });
-    if (wasInitialSubscriptionActivationEvent(successfulEvent?.payload)) {
+    const currentPayment = await prisma.payment.findUnique({
+      where: { id: payment.id },
+      select: { status: true }
+    });
+    if (shouldQueueNewSubscriberNotification(successfulEvent?.payload, currentPayment?.status ?? "UNKNOWN")) {
       await queueNewSubscriberNotification(endsAt);
     }
 
