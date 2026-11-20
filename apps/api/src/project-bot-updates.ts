@@ -240,11 +240,13 @@ async function deliverSubscriptionAccess(
           .catch(() => undefined);
       }
 
-      await bot.api.unbanChatMember(
-        chat.telegramChatId.toString(),
-        Number(subscription.customer.telegramUserId),
-        { only_if_banned: true }
-      ).catch(() => undefined);
+      if (existing?.revokedAt) {
+        await bot.api.unbanChatMember(
+          chat.telegramChatId.toString(),
+          Number(subscription.customer.telegramUserId),
+          { only_if_banned: true }
+        );
+      }
 
       const expiresAt = new Date(Date.now() + INVITE_LIFETIME_SECONDS * 1000);
       const invite = await bot.api.createChatInviteLink(
