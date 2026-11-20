@@ -6,6 +6,7 @@ import { prisma } from "@subpilot/database";
 import { decryptSecret } from "@subpilot/security";
 import { handleProjectBotUpdate } from "./project-bot-updates.js";
 import { startSubscriptionLifecycleWorker } from "./subscription-lifecycle.js";
+import { shouldProcessTelegramUpdate } from "./telegram-update-order.js";
 
 const app = Fastify({
   logger: {
@@ -79,9 +80,49 @@ app.post<{ Params: { botId: string } }>("/webhooks/telegram/:botId", async (requ
 
     const botToken = decryptSecret(projectBot.tokenEncrypted);
     const update = request.body as TelegramUpdate;
-    await handleProjectBotUpdate(botToken, projectBot.projectId, projectBot.id, update);
+    if (!Number.isSafeInteger(update.update_id) || update.update_id < 0) {
+      return reply.code(400).send({ error: "Invalid Telegram update identifier" });
+    }
 
-    return reply.code(200).send({ ok: true });
+    const updateId = BigInt(update.update_id);
+    const processed = await prisma.$transaction(async (tx) => {
+      // Hold a row lock for the whole update so webhook requests processed by
+      // different API replicas share one durable order per project bot.
+      const locked = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id" FROM "ProjectBot" WHERE "id" = ${projectBot.id} FOR UPDATE
+      `;
+      if (locked.length !== 1) {
+        throw new Error("Project bot disappeared while processing a Telegram update.");
+      }
+
+      const cursor = await tx.projectBot.findUnique({
+        where: { id: projectBot.id },
+        select: { lastUpdateId: true }
+      });
+      if (!cursor) {
+        throw new Error("Project bot update cursor could not be loaded.");
+      }
+
+      if (!shouldProcessTelegramUpdate(update.update_id, cursor.lastUpdateId)) {
+        return false;
+      }
+
+      await handleProjectBotUpdate(botToken, projectBot.projectId, projectBot.id, update);
+
+      const cursorSaved = await tx.projectBot.updateMany({
+        where: {
+          id: projectBot.id,
+          OR: [{ lastUpdateId: null }, { lastUpdateId: { lt: updateId } }]
+        },
+        data: { lastUpdateId: updateId }
+      });
+      if (cursorSaved.count !== 1) {
+        throw new Error("Telegram update cursor could not be advanced.");
+      }
+      return true;
+    }, { maxWait: 15_000, timeout: 60_000 });
+
+    return reply.code(200).send({ ok: true, duplicateOrStale: !processed });
   } catch (error) {
     // Never log the request body, bot token or Telegram webhook secret.
     request.log.error(
