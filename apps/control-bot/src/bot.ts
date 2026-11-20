@@ -1259,6 +1259,12 @@ export function createControlBot(token: string): Bot {
           throw new Error("Telegram did not confirm webhook configuration.");
         }
 
+        await candidateBot.api.setMyCommands([
+          { command: "start", description: "Открыть меню проекта" },
+          { command: "plans", description: "Посмотреть доступные тарифы" },
+          { command: "buy", description: "Купить тариф за Telegram Stars" }
+        ]);
+
         await prisma.projectBot.update({
           where: { id: savedProjectBotId },
           data: { status: "ACTIVE" }
@@ -1271,7 +1277,7 @@ export function createControlBot(token: string): Bot {
         `Проект: ${project.name}\n` +
         `Бот: @${botInfo.username ?? botInfo.first_name}\n` +
         (webhookReady
-          ? "Webhook настроен. Теперь добавьте бота администратором в канал или группу — SubPilot обнаружит её автоматически."
+          ? "Webhook настроен. Добавьте бота администратором в канал или группу. Покупатели смогут открыть @бот, посмотреть /plans и оплатить тариф командой /buy ID."
           : "Токен зашифрован и сохранён. Для автоматической работы укажите публичный HTTPS-адрес API в PUBLIC_API_URL и подключите webhook.")
       );
 
