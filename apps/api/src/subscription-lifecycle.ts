@@ -4,6 +4,7 @@ import { prisma } from "@subpilot/database";
 import { decryptSecret } from "@subpilot/security";
 import { isTelegramInviteAlreadyRevoked } from "@subpilot/payments";
 import { deliverSubscriptionAccess } from "./project-bot-updates.js";
+import { buildExpiredSubscriptionNotice } from "./subscription-messages.js";
 import {
   deliverPendingOwnerNotifications,
   enqueueProjectOwnerNotification
@@ -434,7 +435,7 @@ async function expireSubscriptions(now: Date): Promise<void> {
     if (subscription.status === "ACTIVE") {
       await bot.api.sendMessage(
         Number(subscription.customer.telegramUserId),
-        `Срок подписки в проекте «${subscription.project.name}» закончился. Доступ к закрытым площадкам прекращён.\n\nВы можете оформить её снова:`,
+        buildExpiredSubscriptionNotice(subscription.project.name, removalFailures),
         { reply_markup: createRenewalKeyboard() }
       ).catch(() => undefined);
     }
