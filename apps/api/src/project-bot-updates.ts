@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Bot, InlineKeyboard, type Context } from "grammy";
 import { prisma } from "@subpilot/database";
+import { evaluatePaymentEligibility } from "@subpilot/payments";
 import { enqueueProjectOwnerNotification } from "./owner-notifications.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
@@ -41,6 +42,17 @@ async function createPurchaseInvoice(
 
   if (!plan) {
     await ctx.reply("Тариф не найден или сейчас недоступен.");
+    return;
+  }
+
+  const paymentEligibility = evaluatePaymentEligibility({
+    provider: "TELEGRAM_STARS",
+    productType: "TELEGRAM_CHANNEL_ACCESS",
+    surface: "TELEGRAM_BOT",
+    telegramTpaRelated: true
+  });
+  if (!paymentEligibility.allowed) {
+    await ctx.reply("Оплата этого тарифа сейчас недоступна: " + paymentEligibility.message);
     return;
   }
 
@@ -115,6 +127,8 @@ async function createPurchaseInvoice(
         idempotencyKey: randomUUID(),
         metadata: {
           source: "project_bot",
+          productType: "TELEGRAM_CHANNEL_ACCESS",
+          checkoutSurface: "TELEGRAM_BOT",
           projectBotId,
           planId: plan.id,
           planTitle: plan.title,
