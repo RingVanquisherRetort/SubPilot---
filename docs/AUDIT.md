@@ -2,7 +2,7 @@
 
 **Audit branch:** `feat/subscription-lifecycle-ui`  
 **Repository:** `RingVanquisherRetort/SubPilot---`  
-**Audit snapshot:** `a3224e971786d10b69ca3332acdc05c694c23ca9`  
+**Audit snapshot:** `a1f07a16e725a5be07d86fe8b44b5d1f98325fae`  
 **Base branch:** `main` is intentionally untouched.  
 **Purpose:** close the previously requested implementation audit and repair existing behavior; this register is not a new feature roadmap.
 
@@ -47,7 +47,7 @@ These items have been inspected in source; the table does not claim that every s
 
 | ID | Priority | Finding | Required closure |
 |---|---|---|---|
-| AUD-001 | High | If lifecycle lease heartbeat renewal fails or reports that the lease was lost, the worker logs the condition but the active lifecycle pass continues. A second API replica could acquire the expired lease while the first pass is still working. | Stop the old pass safely when lease ownership is lost; add regression coverage for lease loss and multi-worker coordination. |
+| AUD-001 | Partially resolved | The worker now treats a false heartbeat or heartbeat error as loss of ownership, stops subsequent lifecycle phases and checks lease ownership between batch items and Telegram access-delivery actions. If ownership is lost after a new invite is created, the invite is revoked instead of being persisted. | Add a PostgreSQL-backed integration test that proves a second worker cannot overlap after lease expiry/loss. Current unit tests cover the monotonic lease guard, not a full multi-replica DB race. |
 | AUD-002 | Resolved | The expiry message now distinguishes complete revocation from partial/failed revocation and does not claim access was stopped when it may remain. | Implemented in `apps/api/src/subscription-messages.ts`; regression tests cover both outcomes. CI passed with 35 tests. |
 | AUD-003 | Medium | Owner-notification delivery stops after the configured attempt limit; failed records remain in the database, but there is no operator-facing exhausted-retry monitor/recovery path. | Provide a durable, observable failure state and an operator recovery path, or explicitly scope this out of the current release. |
 | AUD-004 | Medium | The code-review surface is broader than the automated test suite: there are no dedicated tests for central-bot handlers, project-bot checkout/webhook flows, or the lifecycle worker. | Add focused regression tests around critical transitions, idempotency and permissions. |
@@ -69,7 +69,7 @@ These items have been inspected in source; the table does not claim that every s
 ## 5. Test evidence and limitations
 
 - The current audit snapshot completed migrations against clean PostgreSQL, generated Prisma Client, passed TypeScript checks and passed 35 unit tests (35 pass, 0 fail).
-- The documentation corrections and the expiry-notice correction have their own successful CI runs. The current audit snapshot passed clean PostgreSQL migrations, Prisma generation, TypeScript checks and 35 unit tests (35 passed, 0 failed).
+- The documentation corrections and the expiry-notice correction have their own successful CI runs. The current audit snapshot passed clean PostgreSQL migrations, Prisma generation, TypeScript checks and 37 unit tests (37 passed, 0 failed).
 - A green CI run validates the checks configured in `.github/workflows/ci.yml`; it does not prove live BotFather setup, actual Stars payment, Telegram chat permissions or end-to-end subscriber access behavior.
 - No production merge or deployment is authorized by this audit.
 
