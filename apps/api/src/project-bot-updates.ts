@@ -23,7 +23,7 @@ async function createPurchaseInvoice(
   ctx: Context,
   planId: string
 ): Promise<void> {
-  if (ctx.chat.type !== "private" || !ctx.from) {
+  if (!ctx.chat || ctx.chat.type !== "private" || !ctx.from) {
     await ctx.reply("Покупка доступна только в личном чате с ботом проекта.");
     return;
   }
