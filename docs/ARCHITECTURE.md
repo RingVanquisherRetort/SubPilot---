@@ -51,8 +51,10 @@ Provider eligibility is resolved per country, merchant type, currency and produc
 - The **control bot** authenticates owners through Telegram and manages workspaces/projects.
 - Each **project bot** belongs to one project and uses its own BotFather token.
 - A project bot is verified with Telegram's getMe before activation.
-- Project bots receive updates through the API webhook router.
-- Bot tokens and provider credentials are encrypted at rest with an application-managed key. Plaintext secrets must never appear in logs or API responses.
+- Project bots receive updates through POST /webhooks/telegram/:botId. Telegram's X-Telegram-Bot-Api-Secret-Token header is SHA-256 hashed and compared in constant time with the stored hash before any update is processed.
+- The project bot token is encrypted at rest with AES-256-GCM. The webhook secret itself is never stored in plaintext; only its hash is stored. Plaintext secrets must never appear in logs or API responses.
+- On connection, the control bot validates the token with getMe and installs a webhook at PUBLIC_API_URL. This must be a publicly reachable HTTPS origin.
+- The project bot subscribes to my_chat_member updates. When it is added or removed, the API upserts the connected chat and marks it active only when the bot has administrator/creator status.
 - Channel/group connection requires the project bot to be added with the permissions needed for the selected feature.
 
 ## Reliability and security requirements
