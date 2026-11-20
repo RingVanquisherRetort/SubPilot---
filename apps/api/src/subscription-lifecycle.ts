@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Bot, InlineKeyboard } from "grammy";
 import { prisma } from "@subpilot/database";
 import { decryptSecret } from "@subpilot/security";
@@ -11,6 +12,40 @@ import {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PENDING_PAYMENT_TTL_MS = 24 * 60 * 60 * 1000;
 const BATCH_SIZE = 100;
+const LIFECYCLE_WORKER_LEASE_KEY = "subscription-lifecycle";
+const WORKER_LEASE_TTL_MS = 5 * 60_000;
+const WORKER_LEASE_HEARTBEAT_MS = 60_000;
+
+async function acquireLifecycleWorkerLease(leaseId: string): Promise<boolean> {
+  const now = new Date();
+  const lockedUntil = new Date(now.getTime() + WORKER_LEASE_TTL_MS);
+  const acquired = await prisma.$queryRaw<Array<{ key: string }>>`
+    INSERT INTO "WorkerLease" ("key", "leaseId", "lockedUntil", "createdAt", "updatedAt")
+    VALUES (${LIFECYCLE_WORKER_LEASE_KEY}, ${leaseId}, ${lockedUntil}, ${now}, ${now})
+    ON CONFLICT ("key") DO UPDATE
+      SET "leaseId" = EXCLUDED."leaseId",
+          "lockedUntil" = EXCLUDED."lockedUntil",
+          "updatedAt" = EXCLUDED."updatedAt"
+      WHERE "WorkerLease"."lockedUntil" <= ${now}
+    RETURNING "key"
+  `;
+  return acquired.length === 1;
+}
+
+async function renewLifecycleWorkerLease(leaseId: string): Promise<boolean> {
+  const result = await prisma.workerLease.updateMany({
+    where: { key: LIFECYCLE_WORKER_LEASE_KEY, leaseId },
+    data: { lockedUntil: new Date(Date.now() + WORKER_LEASE_TTL_MS) }
+  });
+  return result.count === 1;
+}
+
+async function releaseLifecycleWorkerLease(leaseId: string): Promise<void> {
+  await prisma.workerLease.updateMany({
+    where: { key: LIFECYCLE_WORKER_LEASE_KEY, leaseId },
+    data: { lockedUntil: new Date(0) }
+  });
+}
 
 async function cancelStalePendingPayments(now: Date): Promise<void> {
   const cutoff = new Date(now.getTime() - PENDING_PAYMENT_TTL_MS);
@@ -408,11 +443,40 @@ async function expireSubscriptions(now: Date): Promise<void> {
 }
 
 export async function runSubscriptionLifecycle(now = new Date()): Promise<void> {
-  await cancelStalePendingPayments(now);
-  await retryPendingAccessDeliveries(now);
-  await sendRenewalReminders(now);
-  await expireSubscriptions(now);
-  await deliverPendingOwnerNotifications(now);
+  const leaseId = randomUUID();
+  if (!await acquireLifecycleWorkerLease(leaseId)) return;
+
+  const heartbeat = setInterval(() => {
+    void renewLifecycleWorkerLease(leaseId)
+      .then((renewed) => {
+        if (!renewed) {
+          console.error("Subscription lifecycle worker lost its PostgreSQL lease.");
+        }
+      })
+      .catch((error: unknown) => {
+        console.error(
+          "Could not renew subscription lifecycle worker lease:",
+          error instanceof Error ? error.name : "UnknownError"
+        );
+      });
+  }, WORKER_LEASE_HEARTBEAT_MS);
+  heartbeat.unref?.();
+
+  try {
+    await cancelStalePendingPayments(now);
+    await retryPendingAccessDeliveries(now);
+    await sendRenewalReminders(now);
+    await expireSubscriptions(now);
+    await deliverPendingOwnerNotifications(now);
+  } finally {
+    clearInterval(heartbeat);
+    await releaseLifecycleWorkerLease(leaseId).catch((error: unknown) => {
+      console.error(
+        "Could not release subscription lifecycle worker lease:",
+        error instanceof Error ? error.name : "UnknownError"
+      );
+    });
+  }
 }
 
 export function startSubscriptionLifecycleWorker(
