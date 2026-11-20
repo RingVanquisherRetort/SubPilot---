@@ -127,7 +127,7 @@ async function createPurchaseInvoice(
     // Serialize checkout creation for this project/customer/plan. Without a
     // transaction-scoped lock, two fast /buy updates could both observe no active
     // subscription and create separate pending entitlements.
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`subscription:${projectId}:${customer.id}:${plan.id}`}, 0))`;
+    await tx.$queryRaw`SELECT 1::int AS locked FROM (SELECT pg_advisory_xact_lock(hashtextextended(${`subscription:${projectId}:${customer.id}:${plan.id}`}, 0))) AS acquired`;
 
     const now = new Date();
     const activeSubscription = await tx.subscription.findFirst({
@@ -244,7 +244,7 @@ async function createPurchaseInvoice(
   const dispatchClaim = await prisma.$transaction(async (tx) => {
     // Serialize the external invoice side effect as well as payment creation. Two
     // concurrent /buy updates must not both pass a stale "not dispatched" read.
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`subscription:${projectId}:${customer.id}:${plan.id}`}, 0))`;
+    await tx.$queryRaw`SELECT 1::int AS locked FROM (SELECT pg_advisory_xact_lock(hashtextextended(${`subscription:${projectId}:${customer.id}:${plan.id}`}, 0))) AS acquired`;
     const currentPayment = await tx.payment.findUnique({ where: { id: pending.payment.id } });
     if (!currentPayment || currentPayment.status !== "PENDING") {
       return { claimed: false, reason: "STATUS_CHANGED" as const };
