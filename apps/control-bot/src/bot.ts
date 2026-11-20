@@ -3,7 +3,9 @@ import { Bot, InlineKeyboard, type Context } from "grammy";
 import { prisma } from "@subpilot/database";
 import { decryptSecret, encryptSecret } from "@subpilot/security";
 import {
+  classifyTelegramRefundError,
   listPaymentProviderAvailability,
+  recalculateSubscriptionPeriod,
   type CreatorMerchantType
 } from "@subpilot/payments";
 
@@ -11,6 +13,7 @@ const MANAGER_ROLES = ["OWNER", "ADMIN", "MANAGER"] as const;
 const ADMIN_ROLES = ["OWNER", "ADMIN"] as const;
 const BOT_TOKEN_PATTERN = /^\d{5,15}:[A-Za-z0-9_-]{20,}$/;
 const BOT_TOKEN_TTL_MS = 5 * 60 * 1000;
+const REFUND_RETRY_LOCK_MS = 2 * 60 * 1000;
 const MERCHANT_TYPE_CHOICES = [
   { key: "PERSON", value: "INDIVIDUAL", label: "Физическое лицо" },
   { key: "SELF", value: "SELF_EMPLOYED", label: "Самозанятый" },
@@ -1840,23 +1843,20 @@ export function createControlBot(token: string): Bot {
     try {
       const user = await upsertTelegramUser(ctx);
       const { workspace, role } = await getActiveWorkspace(user);
-
       if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
         await ctx.reply("Возвратами могут управлять только владелец или администратор пространства.");
         return;
       }
 
       const payment = await prisma.payment.findFirst({
-        where: {
-          id: paymentId,
-          project: { workspaceId: workspace.id }
-        },
+        where: { id: paymentId, project: { workspaceId: workspace.id } },
         include: {
           customer: true,
           subscription: true,
           project: {
             include: {
               bots: {
+                where: { status: "ACTIVE" },
                 orderBy: [{ isPrimary: "desc" }, { createdAt: "desc" }]
               }
             }
@@ -1868,116 +1868,256 @@ export function createControlBot(token: string): Bot {
         await ctx.reply("Платёж не найден в активном пространстве.");
         return;
       }
-
-      if (payment.provider !== "TELEGRAM_STARS" || payment.status !== "SUCCEEDED" || !payment.providerPaymentId) {
+      if (payment.status === "REFUNDED") {
+        await ctx.reply("Этот платёж уже отмечен как возвращённый.");
+        return;
+      }
+      if (payment.provider !== "TELEGRAM_STARS" || payment.currency !== "XTR" || !payment.providerPaymentId ||
+          (payment.status !== "SUCCEEDED" && payment.status !== "REFUNDING")) {
         await ctx.reply("Можно вернуть только подтверждённый платёж Telegram Stars.");
         return;
       }
 
+      const telegramChargeId = payment.providerPaymentId;
+      const linkedSubscriptionId = payment.subscriptionId;
       const metadata = payment.metadata && typeof payment.metadata === "object" && !Array.isArray(payment.metadata)
         ? payment.metadata as Record<string, unknown>
         : {};
-      const originProjectBotId = typeof metadata.projectBotId === "string"
-        ? metadata.projectBotId
-        : null;
-      const projectBot = (originProjectBotId
+      const originProjectBotId = typeof metadata.projectBotId === "string" ? metadata.projectBotId : null;
+      const projectBot = originProjectBotId
         ? payment.project.bots.find((candidate) => candidate.id === originProjectBotId)
-        : undefined) ?? payment.project.bots[0];
+        : payment.project.bots[0];
       if (!projectBot) {
-        await ctx.reply("Не найден активный бот проекта. Возврат не отправлен.");
+        await ctx.reply(originProjectBotId
+          ? "Бот, который принял этот платёж, сейчас не активен. Возврат не отправлен; восстановите исходного бота и повторите команду."
+          : "Не найден активный бот проекта. Возврат не отправлен.");
         return;
       }
 
+      const buyerId = Number(payment.customer.telegramUserId);
+      if (!Number.isSafeInteger(buyerId) || buyerId <= 0) {
+        await ctx.reply("Некорректный Telegram ID покупателя. Возврат не отправлен.");
+        return;
+      }
       const refundBot = new Bot(decryptSecret(projectBot.tokenEncrypted));
-      const refunded = await refundBot.api.refundStarPayment(
-        Number(payment.customer.telegramUserId),
-        payment.providerPaymentId
-      );
-
-      if (!refunded) {
-        await ctx.reply("Telegram не подтвердил возврат. Статус платежа не изменён.");
-        return;
-      }
-
-      const revokedAt = new Date();
-      const hasOtherSuccessfulPayments = await prisma.$transaction(async (tx) => {
-        await tx.payment.update({
-          where: { id: payment.id },
-          data: { status: "REFUNDED", refundedAt: revokedAt }
-        });
-        if (!payment.subscriptionId) return false;
-        const remaining = await tx.payment.count({
-          where: { subscriptionId: payment.subscriptionId, status: "SUCCEEDED" }
-        });
-        if (remaining === 0) {
-          await tx.subscription.update({
-            where: { id: payment.subscriptionId },
-            data: { status: "EXPIRED", endsAt: revokedAt, cancelledAt: null }
-          });
+      const attemptedAt = new Date();
+      const retryBefore = new Date(attemptedAt.getTime() - REFUND_RETRY_LOCK_MS);
+      const claim = await prisma.payment.updateMany({
+        where: {
+          id: payment.id,
+          provider: "TELEGRAM_STARS",
+          currency: "XTR",
+          OR: [
+            { status: "SUCCEEDED" },
+            {
+              status: "REFUNDING",
+              OR: [
+                { refundAttemptedAt: null },
+                { refundAttemptedAt: { lte: retryBefore } }
+              ]
+            }
+          ]
+        },
+        data: {
+          status: "REFUNDING",
+          refundAttemptedAt: attemptedAt,
+          refundAttempts: { increment: 1 },
+          refundLastError: null
         }
-        return remaining > 0;
       });
 
-      const grants = payment.subscriptionId && !hasOtherSuccessfulPayments
-        ? await prisma.subscriptionAccessGrant.findMany({
-            where: { subscriptionId: payment.subscriptionId, revokedAt: null },
-            include: { connectedChat: true }
-          })
-        : [];
-      const removalFailures: string[] = [];
-
-      for (const grant of grants) {
-        let completed = true;
-        const chatId = grant.connectedChat.telegramChatId.toString();
-
-        try {
-          if (grant.inviteLink && grant.expiresAt > revokedAt) {
-            await refundBot.api.revokeChatInviteLink(chatId, grant.inviteLink);
-          }
-          if (grant.joinedAt) {
-            const buyerId = Number(payment.customer.telegramUserId);
-            await refundBot.api.banChatMember(chatId, buyerId);
-            await refundBot.api.unbanChatMember(chatId, buyerId, { only_if_banned: true });
-          }
-        } catch (error) {
-          completed = false;
-          removalFailures.push(
-            grant.connectedChat.title ?? grant.connectedChat.username ?? chatId
-          );
-          console.error(
-            "Could not fully revoke refunded subscriber access:",
-            error instanceof Error ? error.name : "UnknownError"
-          );
+      if (claim.count !== 1) {
+        const current = await prisma.payment.findUnique({
+          where: { id: payment.id },
+          select: { status: true, refundAttemptedAt: true }
+        });
+        if (current?.status === "REFUNDED") {
+          await ctx.reply("Этот платёж уже возвращён.");
+        } else if (current?.status === "REFUNDING") {
+          await ctx.reply("Возврат уже обрабатывается или ожидает сверки с Telegram. Повторите эту же команду примерно через две минуты.");
+        } else {
+          await ctx.reply("Статус платежа изменился. Обновите список платежей и проверьте его перед повторной операцией.");
         }
+        return;
+      }
 
-        if (completed) {
-          await prisma.subscriptionAccessGrant.updateMany({
-            where: { id: grant.id, revokedAt: null },
-            data: { revokedAt }
+      let refundConfirmed = false;
+      try {
+        refundConfirmed = await refundBot.api.refundStarPayment(buyerId, telegramChargeId);
+      } catch (error) {
+        const classification = classifyTelegramRefundError(error);
+        if (classification.kind === "ALREADY_REFUNDED") {
+          // A previous attempt may have succeeded at Telegram but failed before local persistence.
+          refundConfirmed = true;
+        } else if (classification.kind === "REJECTED") {
+          await prisma.payment.updateMany({
+            where: { id: payment.id, status: "REFUNDING", refundAttemptedAt: attemptedAt },
+            data: {
+              status: "SUCCEEDED",
+              refundLastError: "TELEGRAM_API_REJECTED_" + classification.errorCode
+            }
           });
+          await ctx.reply("Telegram отклонил запрос на возврат (код " + classification.errorCode + "). Платёж оставлен в статусе «успешен»; проверьте причину и повторите при необходимости.");
+          return;
+        } else {
+          await prisma.payment.updateMany({
+            where: { id: payment.id, status: "REFUNDING", refundAttemptedAt: attemptedAt },
+            data: { refundLastError: "TELEGRAM_RESULT_UNKNOWN" }
+          });
+          await ctx.reply("Telegram не дал однозначного ответа. Платёж оставлен в состоянии сверки. Не создавайте новый платёж; повторите эту же команду примерно через две минуты — SubPilot проверит результат повторным запросом.");
+          return;
         }
       }
 
-      await ctx.reply(
-        "Возврат Telegram Stars подтверждён.\n" +
-        (hasOtherSuccessfulPayments
-          ? "Другие успешные оплаты сохранены, действующая подписка не отменена."
-          : "Оплаченных периодов больше нет; доступ помечен для отключения.") +
-        (removalFailures.length > 0
-          ? "\n\nНе удалось полностью отозвать доступ в следующих площадках: " +
-            removalFailures.join(", ") +
-            ". Операции останутся неотмеченными и будут доступны для повторной обработки."
-          : (!hasOtherSuccessfulPayments
-            ? "\nДоступ удалён или передан в очередь повторной обработки."
-            : ""))
-      );
+      if (!refundConfirmed) {
+        await prisma.payment.updateMany({
+          where: { id: payment.id, status: "REFUNDING", refundAttemptedAt: attemptedAt },
+          data: { status: "SUCCEEDED", refundLastError: "TELEGRAM_RETURNED_FALSE" }
+        });
+        await ctx.reply("Telegram не подтвердил возврат. Платёж оставлен успешным; попробуйте повторить операцию после проверки.");
+        return;
+      }
 
+      const refundedAt = new Date();
+      let finalization: {
+        alreadyFinalized: boolean;
+        hasOtherPaidPeriods: boolean;
+        shouldRevokeAccess: boolean;
+        periodsRecalculated: boolean;
+        subscriptionEndsAt: Date | null;
+      };
+      try {
+        finalization = await prisma.$transaction(async (tx) => {
+          if (linkedSubscriptionId) {
+            await tx.$queryRawUnsafe('SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE', linkedSubscriptionId);
+          }
+
+          const changed = await tx.payment.updateMany({
+            where: { id: payment.id, status: "REFUNDING" },
+            data: { status: "REFUNDED", refundedAt, refundLastError: null }
+          });
+          if (changed.count !== 1) {
+            const current = await tx.payment.findUnique({ where: { id: payment.id }, select: { status: true } });
+            if (current?.status === "REFUNDED") {
+              return { alreadyFinalized: true, hasOtherPaidPeriods: false, shouldRevokeAccess: false, periodsRecalculated: true, subscriptionEndsAt: null };
+            }
+            throw new Error("Refund state changed before local finalization.");
+          }
+
+          const refundEventKey = "telegram-stars-refund:" + telegramChargeId;
+          await tx.paymentWebhookEvent.upsert({
+            where: { dedupeKey: refundEventKey },
+            create: {
+              connectionId: null,
+              dedupeKey: refundEventKey,
+              providerEventId: telegramChargeId,
+              eventType: "telegram.stars.payment.refunded",
+              payload: {
+                paymentId: payment.id,
+                telegramUserId: payment.customer.telegramUserId.toString(),
+                telegramPaymentChargeId: telegramChargeId,
+                amount: payment.amount.toString(),
+                currency: payment.currency
+              },
+              processedAt: refundedAt
+            },
+            update: { processedAt: refundedAt }
+          });
+
+          if (!linkedSubscriptionId) {
+            return { alreadyFinalized: false, hasOtherPaidPeriods: false, shouldRevokeAccess: false, periodsRecalculated: true, subscriptionEndsAt: null };
+          }
+
+          const subscription = await tx.subscription.findUnique({
+            where: { id: linkedSubscriptionId },
+            select: { status: true, startsAt: true, endsAt: true }
+          });
+          if (!subscription) {
+            return { alreadyFinalized: false, hasOtherPaidPeriods: false, shouldRevokeAccess: false, periodsRecalculated: true, subscriptionEndsAt: null };
+          }
+
+          const remainingPayments = await tx.payment.findMany({
+            where: { subscriptionId: linkedSubscriptionId, status: { in: ["SUCCEEDED", "REFUNDING"] } },
+            orderBy: [{ paidAt: "asc" }, { createdAt: "asc" }],
+            select: { paidAt: true, metadata: true }
+          });
+
+          if (remainingPayments.length === 0) {
+            await tx.subscription.update({
+              where: { id: linkedSubscriptionId },
+              data: { status: "EXPIRED", endsAt: refundedAt, cancelledAt: null }
+            });
+            return { alreadyFinalized: false, hasOtherPaidPeriods: false, shouldRevokeAccess: true, periodsRecalculated: true, subscriptionEndsAt: refundedAt };
+          }
+
+          const recalculated = recalculateSubscriptionPeriod(remainingPayments, {
+            startsAt: subscription.startsAt,
+            endsAt: subscription.endsAt
+          });
+          if (!recalculated.exact) {
+            const isAlreadyExpired = subscription.status === "EXPIRED" ||
+              (subscription.endsAt !== null && subscription.endsAt <= refundedAt);
+            if (isAlreadyExpired && subscription.status !== "EXPIRED") {
+              await tx.subscription.update({ where: { id: linkedSubscriptionId }, data: { status: "EXPIRED" } });
+            }
+            return {
+              alreadyFinalized: false,
+              hasOtherPaidPeriods: true,
+              shouldRevokeAccess: isAlreadyExpired,
+              periodsRecalculated: false,
+              subscriptionEndsAt: subscription.endsAt
+            };
+          }
+
+          const isExpired = recalculated.endsAt !== null && recalculated.endsAt <= refundedAt;
+          await tx.subscription.update({
+            where: { id: linkedSubscriptionId },
+            data: {
+              status: isExpired ? "EXPIRED" : "ACTIVE",
+              startsAt: recalculated.startsAt,
+              endsAt: recalculated.endsAt,
+              cancelledAt: null
+            }
+          });
+          return {
+            alreadyFinalized: false,
+            hasOtherPaidPeriods: true,
+            shouldRevokeAccess: isExpired,
+            periodsRecalculated: true,
+            subscriptionEndsAt: recalculated.endsAt
+          };
+        });
+      } catch (error) {
+        // Keep REFUNDING: retrying is safe because Telegram reports CHARGE_ALREADY_REFUNDED for a completed refund.
+        await prisma.payment.updateMany({
+          where: { id: payment.id, status: "REFUNDING", refundAttemptedAt: attemptedAt },
+          data: { refundLastError: "LOCAL_FINALIZATION_FAILED" }
+        }).catch(() => undefined);
+        console.error("Telegram refund succeeded but local finalization needs retry:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Telegram подтвердил возврат, но SubPilot не смог завершить запись операции в базе. Платёж оставлен в состоянии сверки. Повторите эту же команду примерно через две минуты; повторный запрос будет безопасно обработан.");
+        return;
+      }
+
+      const response = ["Возврат Telegram Stars подтверждён и записан в журнал операций."];
+      if (finalization.alreadyFinalized) {
+        response.push("Локальная запись уже была завершена ранее.");
+      } else if (!linkedSubscriptionId) {
+        response.push("Платёж не связан с подпиской.");
+      } else if (!finalization.hasOtherPaidPeriods) {
+        response.push("Других оплаченных периодов не осталось. Отключение доступа передано фоновому обработчику.");
+      } else if (!finalization.periodsRecalculated) {
+        response.push("Другие оплаты сохранены, но у старых записей нет снимка длительности. Даты и доступ не изменены автоматически; требуется ручная сверка.");
+      } else if (finalization.shouldRevokeAccess) {
+        response.push("После пересчёта других оплат срок доступа уже истёк. Отключение передано фоновому обработчику.");
+      } else if (finalization.subscriptionEndsAt) {
+        response.push("Остальные оплаченные периоды сохранены. Новый срок доступа: " + finalization.subscriptionEndsAt.toLocaleString("ru-RU") + ".");
+      } else {
+        response.push("Остальные оплаченные периоды сохранены; доступ остаётся бессрочным.");
+      }
+      await ctx.reply(response.join("\n\n"));
     } catch (error) {
-      console.error(
-        "Control bot /refundpayment failed:",
-        error instanceof Error ? error.name : "UnknownError"
-      );
-      await ctx.reply("Не удалось завершить возврат или синхронизировать его с SubPilot. Проверьте статус операции в Telegram.");
+      console.error("Control bot /refundpayment failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось завершить возврат. Проверьте состояние операции в списке платежей и повторите ту же команду, если статус остался «возврат выполняется».");
     }
   });
 
