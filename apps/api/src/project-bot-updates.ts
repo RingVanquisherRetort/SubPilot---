@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Bot, type CommandContext, type Context } from "grammy";
+import { Bot, InlineKeyboard, type Context } from "grammy";
 import { prisma } from "@subpilot/database";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
@@ -20,7 +20,7 @@ function getStarAmount(amount: { toString(): string }): number | null {
 async function createPurchaseInvoice(
   bot: Bot,
   projectId: string,
-  ctx: CommandContext<Context>,
+  ctx: Context,
   planId: string
 ): Promise<void> {
   if (ctx.chat.type !== "private" || !ctx.from) {
@@ -467,15 +467,7 @@ export async function handleProjectBotUpdate(
     });
   });
 
-  projectBot.command("start", async (ctx) => {
-    await ctx.reply(
-      "Добро пожаловать! Здесь можно посмотреть доступные подписки и оплатить их через Telegram Stars.\n\n" +
-      "/plans — доступные тарифы\n" +
-      "/buy PLAN_ID — купить выбранный тариф"
-    );
-  });
-
-  projectBot.command("plans", async (ctx) => {
+  const showPlans = async (ctx: Context, edit = false): Promise<void> => {
     const plans = await prisma.creatorPlan.findMany({
       where: { projectId, status: "ACTIVE", currency: "XTR" },
       include: {
@@ -488,25 +480,75 @@ export async function handleProjectBotUpdate(
     });
 
     if (plans.length === 0) {
-      await ctx.reply("Пока нет доступных тарифов.");
+      if (edit && ctx.callbackQuery?.message) {
+        await ctx.editMessageText("Пока нет доступных тарифов.", {
+          reply_markup: new InlineKeyboard().text("↻ Обновить", "buyer:plans")
+        });
+      } else {
+        await ctx.reply("Пока нет доступных тарифов.");
+      }
       return;
     }
 
-    const lines = plans.map((plan, index) => {
-      const duration = plan.durationDays ? `${plan.durationDays} дн.` : "без ограничения срока";
-      return `${index + 1}. ${plan.title}\nЦена: ${plan.price.toString()} ⭐\nСрок: ${duration}\nПлощадки: ${plan.chats.length}\nID: ${plan.id}\nКупить: /buy ${plan.id}`;
-    });
+    const keyboard = new InlineKeyboard();
+    for (const plan of plans) {
+      const duration = plan.durationDays ? `${plan.durationDays} дн.` : "без срока";
+      keyboard.text(
+        `${plan.title.slice(0, 24)} · ${plan.price.toString()} ⭐ · ${duration}`,
+        `buyer:buy:${plan.id}`
+      ).row();
+    }
+    keyboard.text("ℹ️ Помощь", "buyer:help");
 
-    await ctx.reply("Доступные тарифы:\n\n" + lines.join("\n\n"));
+    const text = "Выберите подписку. После выбора Telegram откроет защищённый счёт в Stars.";
+    if (edit && ctx.callbackQuery?.message) {
+      await ctx.editMessageText(text, { reply_markup: keyboard });
+    } else {
+      await ctx.reply(text, { reply_markup: keyboard });
+    }
+  };
+
+  projectBot.command("start", async (ctx) => {
+    await ctx.reply(
+      "Добро пожаловать! Здесь можно выбрать подписку и безопасно оплатить её через Telegram Stars.",
+      {
+        reply_markup: new InlineKeyboard()
+          .text("💎 Посмотреть подписки", "buyer:plans")
+          .row()
+          .text("ℹ️ Как это работает", "buyer:help")
+      }
+    );
   });
+
+  projectBot.command("plans", async (ctx) => showPlans(ctx));
 
   projectBot.command("buy", async (ctx) => {
     const planId = String(ctx.match ?? "").trim();
     if (!planId) {
-      await ctx.reply("Формат: /buy PLAN_ID");
+      await showPlans(ctx);
       return;
     }
 
+    await createPurchaseInvoice(projectBot, projectId, ctx, planId);
+  });
+
+  projectBot.callbackQuery("buyer:plans", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showPlans(ctx, true);
+  });
+
+  projectBot.callbackQuery("buyer:help", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.reply(
+      "Выберите тариф кнопкой в меню. Оплата проходит внутри Telegram в Stars. После подтверждения оплаты бот пришлёт персональные ссылки для вступления. Каждая ссылка действует 24 часа и рассчитана на одного участника.",
+      { reply_markup: new InlineKeyboard().text("💎 Выбрать подписку", "buyer:plans") }
+    );
+  });
+
+  projectBot.callbackQuery(/^buyer:buy:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const planId = ctx.match[1];
+    if (!planId) return;
     await createPurchaseInvoice(projectBot, projectId, ctx, planId);
   });
 
