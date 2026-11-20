@@ -1900,9 +1900,7 @@ export function createControlBot(token: string): Bot {
         }
 
         await candidateBot.api.setMyCommands([
-          { command: "start", description: "Открыть меню проекта" },
-          { command: "plans", description: "Посмотреть доступные тарифы" },
-          { command: "buy", description: "Купить тариф за Telegram Stars" }
+          { command: "start", description: "Открыть меню подписок" }
         ]);
 
         await prisma.projectBot.update({
