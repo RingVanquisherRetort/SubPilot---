@@ -31,6 +31,7 @@
 - [x] Add buyer-facing button menu, tariff list and one-tap Stars checkout.
 - [x] Create pending Telegram Stars invoice and subscription records.
 - [x] Validate pre-checkout buyer, amount, currency and payment status.
+- [x] Display purchase terms before a Stars invoice; expose /terms and /paysupport.
 - [x] Activate subscriptions only after successful_payment.
 - [x] Persist idempotent payment receipts.
 - [x] Issue one-person, 24-hour invite links for plan chats after verified payment.

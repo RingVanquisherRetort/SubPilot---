@@ -40,10 +40,12 @@ The first implemented checkout is a one-time Telegram Stars flow:
 - SubPilot creates a pending subscription and payment record before sending the invoice.
 - A `pre_checkout_query` is accepted only when the payment is still pending and its project, buyer Telegram ID, currency and amount match the database record.
 - The subscription is activated only after a `successful_payment` update. The Telegram charge ID and an idempotent receipt event are persisted.
-- The project bot creates one-person, 24-hour invite links for the connected chats selected by the plan. `chat_member` updates record completed joins.
+- The project bot creates one-person, 24-hour invite links for the connected chats selected by the plan. `chat_member` updates record completed joins. Each Stars payment snapshot records the project bot that issued the invoice, tariff title/duration and target chat IDs so refunds and access delivery can be associated with the originating bot and purchased configuration.
 - A workspace owner/admin can review payments and refund a successful Stars payment from the central bot. Refund also cancels the subscription, revokes outstanding invite links and removes joined subscribers from the linked chats.
 
 The shared provider package defines normalized checkout/event contracts and a registry for future integrations. The external adapters are not yet implemented.
+
+The Stars checkout displays purchase terms before issuing an invoice and exposes /terms and /paysupport. Payment records snapshot the selected tariff title, duration and connected chat IDs so later tariff edits do not silently rewrite an existing order. The refund flow preserves an entitlement when other successful payments remain on the same subscription; a full per-payment period ledger and exact recalculation after partial refunds are still required before refunds can be considered complete.
 
 The platform must not mark a payment successful based only on a browser redirect or a client-side message. Provider status, project/customer scope, amount, currency and idempotency must be verified.
 
@@ -83,8 +85,8 @@ Provider eligibility is resolved per country, merchant type, currency and produc
 - All webhook handlers are idempotent. Telegram Stars receipts are deduplicated by the Telegram charge ID.
 - Payment status changes are monotonic and recorded in the payment ledger and webhook-event ledger.
 - Access is derived from subscription entitlements; payment events alone do not grant permanent access.
-- Fixed-term subscription expiry and automatic access revocation require the scheduled-job stage and are not yet enabled.
-- Important actions are written to the audit log.
+- Fixed-term subscription expiry, buyer reminders, invite revocation and removal of joined members are implemented in the in-process lifecycle worker. Failed Telegram operations remain retryable while the access grant is unrevoked; multiple API replicas still require distributed locking.
+- AuditLog schema is present, but application write calls are not implemented yet; audit history remains a known product gap.
 - Secrets are encrypted at rest and rotated through a controlled process.
 - Workspace/project ownership is checked in every API operation.
 - Subscription expiry and renewal reminders currently run in a single in-process API worker. Migration to Redis-backed queues and distributed locking is required before horizontal scaling.

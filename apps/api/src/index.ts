@@ -79,7 +79,7 @@ app.post<{ Params: { botId: string } }>("/webhooks/telegram/:botId", async (requ
 
     const botToken = decryptSecret(projectBot.tokenEncrypted);
     const update = request.body as TelegramUpdate;
-    await handleProjectBotUpdate(botToken, projectBot.projectId, update);
+    await handleProjectBotUpdate(botToken, projectBot.projectId, projectBot.id, update);
 
     return reply.code(200).send({ ok: true });
   } catch (error) {

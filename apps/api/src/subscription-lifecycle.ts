@@ -175,7 +175,9 @@ async function expireSubscriptions(now: Date): Promise<void> {
       let completed = true;
 
       try {
-        await bot.api.revokeChatInviteLink(chatId, grant.inviteLink).catch(() => undefined);
+        if (grant.inviteLink && grant.expiresAt > now) {
+          await bot.api.revokeChatInviteLink(chatId, grant.inviteLink);
+        }
 
         if (grant.joinedAt) {
           const telegramUserId = Number(subscription.customer.telegramUserId);

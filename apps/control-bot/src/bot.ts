@@ -1731,9 +1731,7 @@ export function createControlBot(token: string): Bot {
           project: {
             include: {
               bots: {
-                where: { status: "ACTIVE" },
-                orderBy: { createdAt: "desc" },
-                take: 1
+                orderBy: [{ isPrimary: "desc" }, { createdAt: "desc" }]
               }
             }
           }
@@ -1750,7 +1748,15 @@ export function createControlBot(token: string): Bot {
         return;
       }
 
-      const projectBot = payment.project.bots[0];
+      const metadata = payment.metadata && typeof payment.metadata === "object" && !Array.isArray(payment.metadata)
+        ? payment.metadata as Record<string, unknown>
+        : {};
+      const originProjectBotId = typeof metadata.projectBotId === "string"
+        ? metadata.projectBotId
+        : null;
+      const projectBot = (originProjectBotId
+        ? payment.project.bots.find((candidate) => candidate.id === originProjectBotId)
+        : undefined) ?? payment.project.bots[0];
       if (!projectBot) {
         await ctx.reply("Не найден активный бот проекта. Возврат не отправлен.");
         return;
@@ -1767,65 +1773,79 @@ export function createControlBot(token: string): Bot {
         return;
       }
 
-      const grants = payment.subscriptionId
+      const revokedAt = new Date();
+      const hasOtherSuccessfulPayments = await prisma.$transaction(async (tx) => {
+        await tx.payment.update({
+          where: { id: payment.id },
+          data: { status: "REFUNDED", refundedAt: revokedAt }
+        });
+        if (!payment.subscriptionId) return false;
+        const remaining = await tx.payment.count({
+          where: { subscriptionId: payment.subscriptionId, status: "SUCCEEDED" }
+        });
+        if (remaining === 0) {
+          await tx.subscription.update({
+            where: { id: payment.subscriptionId },
+            data: { status: "EXPIRED", endsAt: revokedAt, cancelledAt: null }
+          });
+        }
+        return remaining > 0;
+      });
+
+      const grants = payment.subscriptionId && !hasOtherSuccessfulPayments
         ? await prisma.subscriptionAccessGrant.findMany({
-            where: { subscriptionId: payment.subscriptionId },
+            where: { subscriptionId: payment.subscriptionId, revokedAt: null },
             include: { connectedChat: true }
           })
         : [];
-
       const removalFailures: string[] = [];
 
       for (const grant of grants) {
-        await refundBot.api.revokeChatInviteLink(
-          grant.connectedChat.telegramChatId.toString(),
-          grant.inviteLink
-        ).catch(() => undefined);
+        let completed = true;
+        const chatId = grant.connectedChat.telegramChatId.toString();
 
-        if (grant.joinedAt) {
-          try {
-            await refundBot.api.banChatMember(
-              grant.connectedChat.telegramChatId.toString(),
-              Number(payment.customer.telegramUserId)
-            );
-          } catch (error) {
-            removalFailures.push(
-              grant.connectedChat.title ?? grant.connectedChat.username ?? grant.connectedChat.telegramChatId.toString()
-            );
-            console.error(
-              "Could not remove refunded subscriber from Telegram chat:",
-              error instanceof Error ? error.name : "UnknownError"
-            );
+        try {
+          if (grant.inviteLink && grant.expiresAt > revokedAt) {
+            await refundBot.api.revokeChatInviteLink(chatId, grant.inviteLink);
           }
+          if (grant.joinedAt) {
+            const buyerId = Number(payment.customer.telegramUserId);
+            await refundBot.api.banChatMember(chatId, buyerId);
+            await refundBot.api.unbanChatMember(chatId, buyerId, { only_if_banned: true });
+          }
+        } catch (error) {
+          completed = false;
+          removalFailures.push(
+            grant.connectedChat.title ?? grant.connectedChat.username ?? chatId
+          );
+          console.error(
+            "Could not fully revoke refunded subscriber access:",
+            error instanceof Error ? error.name : "UnknownError"
+          );
+        }
+
+        if (completed) {
+          await prisma.subscriptionAccessGrant.updateMany({
+            where: { id: grant.id, revokedAt: null },
+            data: { revokedAt }
+          });
         }
       }
 
-      await prisma.$transaction(async (tx) => {
-        await tx.payment.update({
-          where: { id: payment.id },
-          data: { status: "REFUNDED", refundedAt: new Date() }
-        });
-
-        if (payment.subscriptionId) {
-          await tx.subscription.update({
-            where: { id: payment.subscriptionId },
-            data: { status: "CANCELLED", cancelledAt: new Date() }
-          });
-
-          await tx.subscriptionAccessGrant.updateMany({
-            where: { subscriptionId: payment.subscriptionId, revokedAt: null },
-            data: { revokedAt: new Date() }
-          });
-        }
-      });
-
       await ctx.reply(
         "Возврат Telegram Stars подтверждён.\n" +
-        "Подписка отменена, ссылки приглашения отозваны." +
+        (hasOtherSuccessfulPayments
+          ? "Другие успешные оплаты сохранены, действующая подписка не отменена."
+          : "Оплаченных периодов больше нет; доступ помечен для отключения.") +
         (removalFailures.length > 0
-          ? `\n\nБот не смог удалить участника из следующих площадок: ${removalFailures.join(", ")}. Удалите его вручную или выдайте боту право блокировать участников.`
-          : "\nУчастник удалён из площадок, в которых он успел вступить.")
+          ? "\n\nНе удалось полностью отозвать доступ в следующих площадках: " +
+            removalFailures.join(", ") +
+            ". Операции останутся неотмеченными и будут доступны для повторной обработки."
+          : (!hasOtherSuccessfulPayments
+            ? "\nДоступ удалён или передан в очередь повторной обработки."
+            : ""))
       );
+
     } catch (error) {
       console.error(
         "Control bot /refundpayment failed:",
