@@ -94,11 +94,11 @@ app.post<{ Params: { botId: string } }>("/webhooks/telegram/:botId", async (requ
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
-const stopSubscriptionLifecycle = startSubscriptionLifecycleWorker();
+let stopSubscriptionLifecycle: (() => void) | undefined;
 
 const shutdown = async (signal: string): Promise<void> => {
   app.log.info({ signal }, "Shutting down SubPilot API");
-  stopSubscriptionLifecycle();
+  stopSubscriptionLifecycle?.();
   await app.close();
   await prisma.$disconnect();
   process.exit(0);
@@ -117,6 +117,7 @@ const start = async (): Promise<void> => {
 
   await prisma.$connect();
   await app.listen({ port, host });
+  stopSubscriptionLifecycle = startSubscriptionLifecycleWorker();
 };
 
 start().catch(async (error: unknown) => {
