@@ -7,7 +7,7 @@
 - [x] Model workspaces, agency membership, projects, customer bots, chats, creator plans, subscriptions and separate billing ledgers.
 - [x] Add local PostgreSQL/Redis infrastructure.
 - [x] Add a minimal control-bot flow: register Telegram user, create personal workspace, create/list projects.
-- [ ] Install dependencies and run typecheck/migrations in a configured environment.
+- [x] Generate Prisma Client and apply the initial baseline against clean PostgreSQL in CI; run TypeScript checks and unit tests.
 
 ## Stage 2 — Workspace and project management
 
