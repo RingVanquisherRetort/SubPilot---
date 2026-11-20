@@ -34,7 +34,7 @@ SubPilot gives each creator a branded Telegram bot and a project workspace. Agen
 8. Apply the development schema: pnpm db:migrate.
 9. Start the API and central bot: pnpm dev.
 
-The API health endpoint is GET /health; database readiness is GET /ready.\n\nIn the control bot, use /start, /newproject Project name and /projects. To connect a project bot, use /connectbot PROJECT_ID BOT_TOKEN in a private chat. The command message is deleted on a best-effort basis; use a fresh token and revoke it in BotFather if it was exposed.
+The API health endpoint is GET /health; database readiness is GET /ready.\n\nIn the control bot, use /start, /newproject Project name and /projects. Create an agency with /createagency Name, list and switch spaces with /workspaces and /switchworkspace ID. Owners/admins can create one-use, seven-day team invitations with /invite [ADMIN|MANAGER|VIEWER].\n\nTo connect a project bot, use /connectbot PROJECT_ID in a private chat and then send its BotFather token as the next message. The token message is deleted on a best-effort basis; if it remains visible, revoke the token in BotFather and issue a new one.
 
 ## Repository layout
 
