@@ -496,6 +496,8 @@ export function createControlBot(token: string): Bot {
       keyboard.text("↩️ Восстановить", `p:r:${projectId}:${planId}`);
     }
     keyboard.row()
+      .text("📣 Настроить площадки", `p:ch:${planId}`)
+      .row()
       .text(plan.status === "ACTIVE" ? "⬅️ К активным" : "⬅️ К архиву",
         plan.status === "ACTIVE" ? `ui:plans:${projectId}` : `ui:archivedplans:${projectId}`)
       .text("К проекту", `ui:project:${projectId}`);
@@ -509,6 +511,122 @@ export function createControlBot(token: string): Bot {
       `Подписок всего: ${plan._count.subscriptions}\\n\\n` +
       `Каналы и группы:\\n${chatNames.join("\\n") || "Не привязаны"}\\n\\n` +
       `ID: ${plan.id}`,
+      { reply_markup: keyboard }
+    );
+  });
+
+  bot.callbackQuery(/^p:ch:([^:]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const planId = ctx.match[1];
+    if (!planId) return;
+    const user = await upsertTelegramUser(ctx);
+    const plan = await prisma.creatorPlan.findFirst({
+      where: { id: planId },
+      select: { id: true, projectId: true }
+    });
+    if (!plan || !(await canAccessProject(plan.projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]))) {
+      await ctx.reply("Тариф не найден или у вас нет доступа.");
+      return;
+    }
+
+    const [linked, chats] = await Promise.all([
+      prisma.creatorPlanChat.findMany({
+        where: { creatorPlanId: planId },
+        select: { connectedChatId: true }
+      }),
+      prisma.connectedChat.findMany({
+        where: { projectId: plan.projectId, isActive: true },
+        orderBy: { title: "asc" },
+        take: 30
+      })
+    ]);
+    const linkedIds = new Set(linked.map((item) => item.connectedChatId));
+    const keyboard = new InlineKeyboard();
+    for (const chat of chats) {
+      const name = chat.title ?? chat.username ?? chat.telegramChatId.toString();
+      keyboard.text(
+        `${linkedIds.has(chat.id) ? "✅" : "➕"} ${name.slice(0, 45)}`,
+        `p:ct:${planId}:${chat.id}`
+      ).row();
+    }
+    keyboard.text("⬅️ К тарифу", `p:v:${plan.projectId}:${planId}`);
+    await ctx.editMessageText(
+      chats.length
+        ? "Каналы и группы тарифа. Нажмите на площадку, чтобы привязать или отвязать её:\\n\\n✅ — доступ включён в тариф\\n➕ — нажмите, чтобы добавить"
+        : "В проекте нет активных каналов или групп. Сначала добавьте бота проекта администратором в нужную площадку.",
+      { reply_markup: keyboard }
+    );
+  });
+
+  bot.callbackQuery(/^p:ct:([^:]+):([^:]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const planId = ctx.match[1];
+    const chatId = ctx.match[2];
+    if (!planId || !chatId) return;
+    const user = await upsertTelegramUser(ctx);
+    const plan = await prisma.creatorPlan.findFirst({
+      where: { id: planId },
+      select: { id: true, projectId: true }
+    });
+    if (!plan || !(await canAccessProject(plan.projectId, user.id, MANAGER_ROLES))) {
+      await ctx.reply("Нет прав изменять площадки этого тарифа.");
+      return;
+    }
+    const chat = await prisma.connectedChat.findFirst({
+      where: { id: chatId, projectId: plan.projectId, isActive: true },
+      select: { id: true }
+    });
+    if (!chat) {
+      await ctx.answerCallbackQuery({ text: "Площадка недоступна или отключена.", show_alert: true });
+      return;
+    }
+
+    const existing = await prisma.creatorPlanChat.findUnique({
+      where: {
+        creatorPlanId_connectedChatId: {
+          creatorPlanId: planId,
+          connectedChatId: chatId
+        }
+      }
+    });
+    if (existing) {
+      await prisma.creatorPlanChat.delete({
+        where: {
+          creatorPlanId_connectedChatId: {
+            creatorPlanId: planId,
+            connectedChatId: chatId
+          }
+        }
+      });
+    } else {
+      await prisma.creatorPlanChat.create({
+        data: { creatorPlanId: planId, connectedChatId: chatId }
+      });
+    }
+
+    const [linked, chats] = await Promise.all([
+      prisma.creatorPlanChat.findMany({
+        where: { creatorPlanId: planId },
+        select: { connectedChatId: true }
+      }),
+      prisma.connectedChat.findMany({
+        where: { projectId: plan.projectId, isActive: true },
+        orderBy: { title: "asc" },
+        take: 30
+      })
+    ]);
+    const linkedIds = new Set(linked.map((item) => item.connectedChatId));
+    const keyboard = new InlineKeyboard();
+    for (const item of chats) {
+      const name = item.title ?? item.username ?? item.telegramChatId.toString();
+      keyboard.text(
+        `${linkedIds.has(item.id) ? "✅" : "➕"} ${name.slice(0, 45)}`,
+        `p:ct:${planId}:${item.id}`
+      ).row();
+    }
+    keyboard.text("⬅️ К тарифу", `p:v:${plan.projectId}:${planId}`);
+    await ctx.editMessageText(
+      "Площадки тарифа обновлены. Нажмите на площадку, чтобы изменить выбор:\\n\\n✅ — доступ включён в тариф\\n➕ — нажмите, чтобы добавить",
       { reply_markup: keyboard }
     );
   });
