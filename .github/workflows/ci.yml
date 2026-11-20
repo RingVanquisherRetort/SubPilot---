@@ -58,4 +58,6 @@ jobs:
         run: pnpm typecheck
 
       - name: Unit tests
+        env:
+          DATABASE_URL: postgresql://subpilot:subpilot_dev_password@localhost:5432/subpilot?schema=public
         run: pnpm test
