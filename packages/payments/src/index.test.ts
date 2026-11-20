@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   PaymentProviderRegistry,
+  classifyTelegramRefundError,
+  isTelegramInviteAlreadyRevoked,
+  recalculateSubscriptionPeriod,
   calculateIntroductoryCommission,
   getPaymentProviderAvailability,
   listPaymentProviderAvailability,
@@ -342,4 +345,42 @@ test("introductory commission rejects malformed decimal amounts", () => {
       /Invalid commission amount/
     );
   }
+});
+
+test("Telegram refund errors distinguish already-refunded, rejected and unknown outcomes", () => {
+  assert.deepEqual(classifyTelegramRefundError({ error_code: 400, description: "Bad Request: CHARGE_ALREADY_REFUNDED" }), { kind: "ALREADY_REFUNDED" });
+  assert.deepEqual(classifyTelegramRefundError({ error_code: 400, description: "Bad Request: USER_ID_INVALID" }), { kind: "REJECTED", errorCode: 400 });
+  assert.deepEqual(classifyTelegramRefundError({ error_code: 500, description: "Internal Server Error" }), { kind: "UNKNOWN" });
+  assert.deepEqual(classifyTelegramRefundError(new Error("network timeout")), { kind: "UNKNOWN" });
+});
+
+test("Telegram invite cleanup recognizes only the already-expired invite hash response", () => {
+  assert.equal(isTelegramInviteAlreadyRevoked({ error_code: 400, description: "Bad Request: INVITE_HASH_EXPIRED" }), true);
+  assert.equal(isTelegramInviteAlreadyRevoked({ error_code: 400, description: "Bad Request: INVITE_HASH_INVALID" }), false);
+});
+
+test("subscription refund recalculation rebuilds remaining paid periods in paid order", () => {
+  const firstPaidAt = new Date("2026-11-01T00:00:00.000Z");
+  const secondPaidAt = new Date("2026-11-10T00:00:00.000Z");
+  const result = recalculateSubscriptionPeriod([
+    { paidAt: secondPaidAt, metadata: { durationDays: 30 } },
+    { paidAt: firstPaidAt, metadata: { durationDays: 30 } }
+  ], { startsAt: firstPaidAt, endsAt: new Date("2026-12-31T00:00:00.000Z") });
+  assert.equal(result.exact, true);
+  assert.equal(result.startsAt?.toISOString(), "2026-11-01T00:00:00.000Z");
+  assert.equal(result.endsAt?.toISOString(), "2026-12-31T00:00:00.000Z");
+});
+
+test("subscription refund recalculation preserves legacy dates without duration snapshots", () => {
+  const fallback = { startsAt: new Date("2026-11-01T00:00:00.000Z"), endsAt: new Date("2026-12-01T00:00:00.000Z") };
+  const result = recalculateSubscriptionPeriod([{ paidAt: fallback.startsAt, metadata: { legacy: true } }], fallback);
+  assert.equal(result.exact, false);
+  assert.equal(result.startsAt, fallback.startsAt);
+  assert.equal(result.endsAt, fallback.endsAt);
+});
+
+test("an indefinite remaining payment keeps the recalculated subscription open-ended", () => {
+  const result = recalculateSubscriptionPeriod([{ paidAt: new Date("2026-11-01T00:00:00.000Z"), metadata: { durationDays: null } }], { startsAt: null, endsAt: new Date("2026-12-01T00:00:00.000Z") });
+  assert.equal(result.exact, true);
+  assert.equal(result.endsAt, null);
 });

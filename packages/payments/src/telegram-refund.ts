@@ -1,0 +1,80 @@
+export type TelegramRefundErrorClassification =
+  | { kind: "ALREADY_REFUNDED" }
+  | { kind: "REJECTED"; errorCode: number }
+  | { kind: "UNKNOWN" };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** Classify Telegram API failures without treating transport errors as definitive rejections. */
+export function classifyTelegramRefundError(error: unknown): TelegramRefundErrorClassification {
+  if (!isRecord(error)) return { kind: "UNKNOWN" };
+  const description = typeof error.description === "string" ? error.description : "";
+  if (description.includes("CHARGE_ALREADY_REFUNDED")) return { kind: "ALREADY_REFUNDED" };
+  const errorCode = error.error_code;
+  if (typeof errorCode === "number" && Number.isInteger(errorCode) && errorCode >= 400 && errorCode < 500) {
+    return { kind: "REJECTED", errorCode };
+  }
+  return { kind: "UNKNOWN" };
+}
+
+/** Telegram reports an expired invite hash when a bot retries revoking an already-revoked link. */
+export function isTelegramInviteAlreadyRevoked(error: unknown): boolean {
+  return isRecord(error) && typeof error.description === "string" &&
+    error.description.includes("INVITE_HASH_EXPIRED");
+}
+
+export interface PaidSubscriptionPeriod {
+  paidAt: Date | null;
+  metadata: unknown;
+}
+
+export interface SubscriptionPeriodFallback {
+  startsAt: Date | null;
+  endsAt: Date | null;
+}
+
+export interface RecalculatedSubscriptionPeriod {
+  exact: boolean;
+  startsAt: Date | null;
+  endsAt: Date | null;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Rebuild paid entitlement from immutable duration snapshots; legacy rows remain unchanged. */
+export function recalculateSubscriptionPeriod(
+  payments: readonly PaidSubscriptionPeriod[],
+  fallback: SubscriptionPeriodFallback
+): RecalculatedSubscriptionPeriod {
+  if (payments.length === 0) return { exact: true, startsAt: null, endsAt: null };
+  const ordered = [...payments].sort((left, right) => {
+    if (!left.paidAt || !right.paidAt) return 0;
+    return left.paidAt.getTime() - right.paidAt.getTime();
+  });
+  const periods = ordered.map((payment) => {
+    if (!payment.paidAt || !Number.isFinite(payment.paidAt.getTime()) || !isRecord(payment.metadata) ||
+        !Object.prototype.hasOwnProperty.call(payment.metadata, "durationDays")) return null;
+    const durationDays = payment.metadata.durationDays;
+    if (durationDays !== null &&
+        (typeof durationDays !== "number" || !Number.isSafeInteger(durationDays) || durationDays <= 0)) return null;
+    return { paidAt: payment.paidAt, durationDays };
+  });
+  if (periods.some((period) => period === null)) {
+    return { exact: false, startsAt: fallback.startsAt, endsAt: fallback.endsAt };
+  }
+  const validPeriods = periods as Array<{ paidAt: Date; durationDays: number | null }>;
+  const startsAt = validPeriods[0]?.paidAt ?? null;
+  let periodEnd = startsAt;
+  for (const period of validPeriods) {
+    if (period.durationDays === null) return { exact: true, startsAt, endsAt: null };
+    const anchor = periodEnd && periodEnd > period.paidAt ? periodEnd : period.paidAt;
+    const nextEnd = new Date(anchor.getTime() + period.durationDays * DAY_MS);
+    if (!Number.isFinite(nextEnd.getTime())) {
+      return { exact: false, startsAt: fallback.startsAt, endsAt: fallback.endsAt };
+    }
+    periodEnd = nextEnd;
+  }
+  return { exact: true, startsAt, endsAt: periodEnd };
+}

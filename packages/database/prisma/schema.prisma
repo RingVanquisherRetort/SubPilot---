@@ -78,6 +78,7 @@ enum PaymentStatus {
   CREATED
   PENDING
   SUCCEEDED
+  REFUNDING
   FAILED
   CANCELLED
   REFUNDED
@@ -362,6 +363,9 @@ model Payment {
   metadata          Json?
   paidAt            DateTime?
   refundedAt        DateTime?
+  refundAttemptedAt DateTime?
+  refundAttempts    Int             @default(0)
+  refundLastError   String?
   project           Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
   customer          ProjectCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
   subscription      Subscription?   @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)

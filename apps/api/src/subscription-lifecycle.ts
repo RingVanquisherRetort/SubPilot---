@@ -1,6 +1,7 @@
 import { Bot, InlineKeyboard } from "grammy";
 import { prisma } from "@subpilot/database";
 import { decryptSecret } from "@subpilot/security";
+import { isTelegramInviteAlreadyRevoked } from "@subpilot/payments";
 import { deliverSubscriptionAccess } from "./project-bot-updates.js";
 import {
   deliverPendingOwnerNotifications,
@@ -290,7 +291,11 @@ async function expireSubscriptions(now: Date): Promise<void> {
 
       try {
         if (grant.inviteLink && grant.expiresAt > now) {
-          await bot.api.revokeChatInviteLink(chatId, grant.inviteLink);
+          try {
+            await bot.api.revokeChatInviteLink(chatId, grant.inviteLink);
+          } catch (error) {
+            if (!isTelegramInviteAlreadyRevoked(error)) throw error;
+          }
         }
 
         if (grant.joinedAt) {

@@ -139,3 +139,15 @@ export type {
   ProviderAvailabilityReason,
   ProviderAvailability
 } from "./provider-catalog.js";
+
+export {
+  classifyTelegramRefundError,
+  isTelegramInviteAlreadyRevoked,
+  recalculateSubscriptionPeriod
+} from "./telegram-refund.js";
+export type {
+  TelegramRefundErrorClassification,
+  PaidSubscriptionPeriod,
+  SubscriptionPeriodFallback,
+  RecalculatedSubscriptionPeriod
+} from "./telegram-refund.js";
