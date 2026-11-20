@@ -34,7 +34,7 @@ The central SubPilot bot is the default control panel. A workspace can contain m
 
 A project owner creates a creator plan and connects eligible payment-provider credentials to their project. The provider adapter creates a payment attempt and normalizes provider notifications before an entitlement is activated. Each provider connection is scoped to one project.
 
-The first implemented checkout is a one-time Telegram Stars flow:
+The first implemented checkout is a one-time Telegram Stars flow. The shared payment-policy gate classifies this as TELEGRAM_CHANNEL_ACCESS and rejects non-Stars providers before checkout:
 - New in-Telegram digital-access plans are priced in whole Telegram Stars and use currency `XTR`.
 - The buyer opens the project bot, lists plans with `/plans`, and starts checkout with `/buy PLAN_ID`.
 - SubPilot creates a pending subscription and payment record before sending the invoice.
@@ -57,9 +57,9 @@ SubPilot sells its own plans through a separate billing domain and ledger. Platf
 
 ### Telegram and regional rules
 
-The payment adapter interface is deliberately separate from the product entitlement engine. Telegram Stars are the native route for digital goods and services sold inside Telegram. External providers may only be enabled for a flow that is permitted by Telegram's current rules, provider contracts and the applicable jurisdiction. An external checkout must not be used as a mechanism to bypass Telegram requirements.
+The payment adapter interface is deliberately separate from the product entitlement engine. The policy gate evaluates product type, checkout surface, Telegram association and provider. Paid access to Telegram channels/groups is always classified as TELEGRAM_CHANNEL_ACCESS and requires an in-Telegram Stars checkout. Other digital goods/services offered, promoted or fulfilled by the Telegram bot/Mini App also require Stars. An independent website product may be evaluated separately only when it is genuinely not offered, promoted or fulfilled by the Telegram TPA; this is not an external-checkout route for Telegram channel access. Telegram Stars are not the route for physical goods/services. Eligible physical goods/services may use third-party payment providers under Telegram's Bot Payments rules.
 
-Provider eligibility is resolved per country, merchant type, currency and product category. A provider being technically integrated does not mean every workspace can use it.
+The gate is a Telegram product-policy check, not merchant approval. Provider eligibility is also resolved per country, merchant type, currency, product category, provider contract, tax/receipt obligations and adapter capabilities. A provider being technically integrated does not mean every workspace can use it. See docs/decisions/telegram-payment-eligibility.md for the research and decision record.
 
 ## Telegram bot topology
 
