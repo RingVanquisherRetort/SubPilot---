@@ -7,6 +7,7 @@ import {
   recalculateSubscriptionPeriod
 } from "@subpilot/payments";
 import { enqueueProjectOwnerNotification } from "./owner-notifications.js";
+import { hasRequiredSubscriptionChatRights } from "./telegram-chat-access.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
@@ -268,9 +269,11 @@ export async function deliverSubscriptionAccess(
     : subscription.plan.chats.map((item) => item.connectedChat);
 
   for (const chat of targetChats) {
-    if (!chat.isActive) continue;
-
     const label = chat.title ?? chat.username ?? chat.telegramChatId.toString();
+    if (!chat.isActive) {
+      results.failed.push(label);
+      continue;
+    }
     const existing = await prisma.subscriptionAccessGrant.findUnique({
       where: {
         subscriptionId_connectedChatId: {
@@ -846,11 +849,7 @@ export async function handleProjectBotUpdate(
 
     if (!chatType) return;
 
-    const newMember = ctx.myChatMember.new_chat_member;
-    const isActive = newMember.status === "creator" ||
-      (newMember.status === "administrator" &&
-        newMember.can_invite_users === true &&
-        newMember.can_restrict_members === true);
+    const isActive = hasRequiredSubscriptionChatRights(ctx.myChatMember.new_chat_member);
 
     await prisma.connectedChat.upsert({
       where: {
