@@ -24,7 +24,10 @@
 
 ## Stage 3 — Subscription engine
 
-- Create/edit/archive plans.
+- [x] Create plans with price, currency and duration.
+- [x] Automatically link new plans to currently active project chats.
+- [x] List, archive and restore plans.
+- [ ] Edit plans and select target chats individually.
 - Map plans to one or more connected chats.
 - Create checkout attempts.
 - Issue invite links after verified payment.
