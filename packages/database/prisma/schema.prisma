@@ -219,7 +219,6 @@ model ProjectBot {
   lastVerifiedAt    DateTime?
   lastUpdateId      BigInt?
   updateSequenceEpoch Int      @default(0)
-  lastUpdateId      Int?
   lastUpdateAt      DateTime?
   project           Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   webhookUpdates    TelegramWebhookUpdate[]
