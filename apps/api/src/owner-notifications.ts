@@ -1,5 +1,9 @@
 import { Bot } from "grammy";
 import { prisma } from "@subpilot/database";
+import {
+  isCurrentOwnerNotificationRecipient,
+  selectOwnerNotificationRecipientIds
+} from "./owner-notifications-policy.js";
 
 const MAX_ATTEMPTS = 10;
 const BATCH_SIZE = 100;
@@ -26,17 +30,33 @@ export async function enqueueProjectOwnerNotification(event: OwnerNotificationEv
     where: { id: event.projectId },
     select: {
       id: true,
+      workspaceId: true,
       creatorUser: { select: { id: true } },
       workspace: { select: { createdBy: { select: { id: true } } } }
     }
   });
   if (!project) return;
 
-  const recipientIds = new Set<string>([project.workspace.createdBy.id]);
-  if (project.creatorUser) recipientIds.add(project.creatorUser.id);
+  const workspaceOwnerId = project.workspace.createdBy.id;
+  const creatorIsWorkspaceMember = project.creatorUser
+    ? Boolean(await prisma.workspaceMember.findUnique({
+        where: {
+          workspaceId_userId: {
+            workspaceId: project.workspaceId,
+            userId: project.creatorUser.id
+          }
+        },
+        select: { id: true }
+      }))
+    : false;
+  const recipientIds = selectOwnerNotificationRecipientIds(
+    workspaceOwnerId,
+    project.creatorUser?.id ?? null,
+    creatorIsWorkspaceMember
+  );
 
   await prisma.ownerNotification.createMany({
-    data: [...recipientIds].map((recipientUserId) => ({
+    data: recipientIds.map((recipientUserId) => ({
       projectId: project.id,
       recipientUserId,
       eventType: event.eventType,
@@ -57,13 +77,38 @@ export async function deliverPendingOwnerNotifications(
 
   const pending = await prisma.ownerNotification.findMany({
     where: { sentAt: null, attempts: { lt: MAX_ATTEMPTS }, nextAttemptAt: { lte: now } },
-    include: { recipient: { select: { telegramId: true } } },
+    include: {
+      recipient: { select: { id: true, telegramId: true } },
+      project: { select: { workspaceId: true, workspace: { select: { createdById: true } } } }
+    },
     orderBy: { createdAt: "asc" },
     take: BATCH_SIZE
   });
 
   for (const notification of pending) {
     if (!isLeaseOwned()) return;
+    const isWorkspaceMember = notification.recipient.id === notification.project.workspace.createdById
+      ? true
+      : Boolean(await prisma.workspaceMember.findUnique({
+          where: {
+            workspaceId_userId: {
+              workspaceId: notification.project.workspaceId,
+              userId: notification.recipient.id
+            }
+          },
+          select: { id: true }
+        }));
+    if (!isCurrentOwnerNotificationRecipient(
+      notification.recipient.id,
+      notification.project.workspace.createdById,
+      isWorkspaceMember
+    )) {
+      await prisma.ownerNotification.update({
+        where: { id: notification.id },
+        data: { attempts: MAX_ATTEMPTS, lastError: "RECIPIENT_NO_LONGER_WORKSPACE_MEMBER" }
+      });
+      continue;
+    }
     try {
       await bot.api.sendMessage(Number(notification.recipient.telegramId), notification.messageText);
       await prisma.ownerNotification.update({
