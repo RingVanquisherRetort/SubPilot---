@@ -1,0 +1,23 @@
+{
+  "name": "subpilot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.12.0", "pnpm": ">=10.0.0" },
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail --names API,BOT --prefix-colors blue,green \"pnpm --filter @subpilot/api dev\" \"pnpm --filter @subpilot/control-bot dev\"",
+    "dev:api": "pnpm --filter @subpilot/api dev",
+    "dev:bot": "pnpm --filter @subpilot/control-bot dev",
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "db:generate": "pnpm --filter @subpilot/database db:generate",
+    "db:migrate": "pnpm --filter @subpilot/database db:migrate",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

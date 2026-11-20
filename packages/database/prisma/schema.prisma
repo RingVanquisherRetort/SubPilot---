@@ -1,0 +1,385 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum WorkspaceType {
+  PERSONAL
+  AGENCY
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MANAGER
+  VIEWER
+}
+
+enum ProjectStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum BotStatus {
+  PENDING
+  ACTIVE
+  ERROR
+  DISABLED
+}
+
+enum TelegramChatType {
+  CHANNEL
+  GROUP
+  SUPERGROUP
+}
+
+enum CreatorPlanStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum SubscriptionStatus {
+  PENDING
+  ACTIVE
+  EXPIRED
+  CANCELLED
+  PAST_DUE
+}
+
+enum PaymentProvider {
+  TELEGRAM_STARS
+  YOOKASSA
+  YOOMONEY
+  PRODAMUS
+  ROBOKASSA
+  CLOUDPAYMENTS
+  CRYPTO_PAY
+  MANUAL
+}
+
+enum ProviderConnectionStatus {
+  PENDING
+  ACTIVE
+  ERROR
+  DISABLED
+}
+
+enum ProviderEnvironment {
+  TEST
+  LIVE
+}
+
+enum PaymentStatus {
+  CREATED
+  PENDING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum WorkspaceBillingStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+}
+
+model User {
+  id                String            @id @default(cuid())
+  telegramId        BigInt            @unique
+  username          String?
+  firstName         String?
+  lastName          String?
+  languageCode      String?
+  memberships       WorkspaceMember[]
+  createdWorkspaces Workspace[]       @relation("WorkspaceCreator")
+  auditEvents       AuditLog[]
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+}
+
+model Workspace {
+  id          String            @id @default(cuid())
+  name        String
+  slug        String            @unique
+  type        WorkspaceType     @default(PERSONAL)
+  createdById String
+  createdBy   User              @relation("WorkspaceCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  members     WorkspaceMember[]
+  projects    Project[]
+  billing     WorkspaceBilling?
+  auditLogs   AuditLog[]
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+}
+
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole @default(MANAGER)
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime      @default(now())
+
+  @@unique([workspaceId, userId])
+  @@index([userId, role])
+}
+
+model Project {
+  id                 String                      @id @default(cuid())
+  workspaceId        String
+  name               String
+  slug               String
+  countryCode        String                      @default("RU")
+  status             ProjectStatus               @default(ACTIVE)
+  defaultCurrency    String                      @default("RUB")
+  workspace          Workspace                   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  bots               ProjectBot[]
+  chats              ConnectedChat[]
+  plans              CreatorPlan[]
+  customers          ProjectCustomer[]
+  subscriptions      Subscription[]
+  paymentConnections PaymentProviderConnection[]
+  payments           Payment[]
+  auditLogs          AuditLog[]
+  createdAt          DateTime                    @default(now())
+  updatedAt          DateTime                    @updatedAt
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId, status])
+}
+
+model ProjectBot {
+  id                String    @id @default(cuid())
+  projectId         String
+  telegramBotId     BigInt    @unique
+  username          String?
+  displayName       String?
+  tokenEncrypted    String
+  webhookSecretHash String?
+  status            BotStatus @default(PENDING)
+  isPrimary         Boolean   @default(true)
+  lastVerifiedAt    DateTime?
+  project           Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([projectId, status])
+}
+
+model ConnectedChat {
+  id             String            @id @default(cuid())
+  projectId      String
+  telegramChatId BigInt
+  type           TelegramChatType
+  title          String?
+  username       String?
+  isActive       Boolean           @default(true)
+  project        Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  planLinks      CreatorPlanChat[]
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@unique([projectId, telegramChatId])
+  @@index([projectId, isActive])
+}
+
+model CreatorPlan {
+  id              String            @id @default(cuid())
+  projectId       String
+  title           String
+  description     String?
+  price           Decimal           @db.Decimal(12, 2)
+  currency        String            @default("RUB")
+  durationDays    Int?
+  trialDays       Int               @default(0)
+  isRecurring     Boolean           @default(false)
+  status          CreatorPlanStatus @default(ACTIVE)
+  sortOrder       Int               @default(0)
+  project         Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  chats           CreatorPlanChat[]
+  subscriptions   Subscription[]
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([projectId, status, sortOrder])
+}
+
+model CreatorPlanChat {
+  creatorPlanId   String
+  connectedChatId String
+  creatorPlan     CreatorPlan  @relation(fields: [creatorPlanId], references: [id], onDelete: Cascade)
+  connectedChat  ConnectedChat @relation(fields: [connectedChatId], references: [id], onDelete: Cascade)
+
+  @@id([creatorPlanId, connectedChatId])
+}
+
+model ProjectCustomer {
+  id             String         @id @default(cuid())
+  projectId      String
+  telegramUserId BigInt
+  username       String?
+  firstName      String?
+  lastName       String?
+  project        Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  subscriptions Subscription[]
+  payments       Payment[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@unique([projectId, telegramUserId])
+  @@index([projectId, createdAt])
+}
+
+model Subscription {
+  id          String             @id @default(cuid())
+  projectId   String
+  customerId  String
+  planId      String
+  status      SubscriptionStatus @default(PENDING)
+  startsAt    DateTime?
+  endsAt      DateTime?
+  cancelledAt DateTime?
+  project     Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  customer    ProjectCustomer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  plan        CreatorPlan        @relation(fields: [planId], references: [id], onDelete: Restrict)
+  payments    Payment[]
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([projectId, status, endsAt])
+  @@index([customerId, status])
+}
+
+model PaymentProviderConnection {
+  id                   String                   @id @default(cuid())
+  projectId            String
+  provider             PaymentProvider
+  label                String
+  environment          ProviderEnvironment      @default(LIVE)
+  credentialsEncrypted String
+  publicConfig         Json?
+  status               ProviderConnectionStatus @default(PENDING)
+  project              Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  payments             Payment[]
+  webhookEvents        PaymentWebhookEvent[]
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+
+  @@unique([projectId, provider, label])
+  @@index([projectId, provider, status])
+}
+
+model Payment {
+  id                String          @id @default(cuid())
+  projectId         String
+  customerId        String
+  subscriptionId    String?
+  connectionId      String?
+  provider          PaymentProvider
+  providerPaymentId String?
+  idempotencyKey    String?         @unique
+  amount            Decimal         @db.Decimal(12, 2)
+  currency          String
+  status            PaymentStatus   @default(CREATED)
+  metadata          Json?
+  paidAt            DateTime?
+  refundedAt        DateTime?
+  project           Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  customer          ProjectCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  subscription      Subscription?   @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  connection        PaymentProviderConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([projectId, status, createdAt])
+  @@index([customerId, createdAt])
+  @@index([connectionId, providerPaymentId])
+}
+
+model PaymentWebhookEvent {
+  id              String                    @id @default(cuid())
+  connectionId    String
+  providerEventId String
+  eventType       String
+  payload         Json
+  receivedAt      DateTime                  @default(now())
+  processedAt     DateTime?
+  connection      PaymentProviderConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectionId, providerEventId])
+  @@index([connectionId, receivedAt])
+}
+
+model PlatformPlan {
+  id                String             @id @default(cuid())
+  code              String             @unique
+  title             String
+  description       String?
+  price             Decimal            @db.Decimal(12, 2)
+  currency          String             @default("RUB")
+  billingPeriodDays Int                @default(30)
+  features          Json?
+  isActive          Boolean            @default(true)
+  workspaceBillings WorkspaceBilling[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+}
+
+model WorkspaceBilling {
+  id                 String                 @id @default(cuid())
+  workspaceId        String                 @unique
+  platformPlanId     String
+  status             WorkspaceBillingStatus @default(TRIALING)
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  workspace          Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  platformPlan       PlatformPlan           @relation(fields: [platformPlanId], references: [id], onDelete: Restrict)
+  payments           PlatformPayment[]
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+}
+
+model PlatformPayment {
+  id                 String           @id @default(cuid())
+  workspaceBillingId String
+  provider           PaymentProvider
+  providerPaymentId  String?
+  idempotencyKey     String?          @unique
+  amount             Decimal          @db.Decimal(12, 2)
+  currency           String
+  status             PaymentStatus    @default(CREATED)
+  paidAt             DateTime?
+  metadata           Json?
+  workspaceBilling   WorkspaceBilling @relation(fields: [workspaceBillingId], references: [id], onDelete: Cascade)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([workspaceBillingId, status, createdAt])
+}
+
+model AuditLog {
+  id           String     @id @default(cuid())
+  workspaceId  String?
+  projectId    String?
+  actorUserId  String?
+  action       String
+  resourceType String
+  resourceId   String?
+  metadata     Json?
+  workspace    Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  project      Project?   @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  actor        User?      @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  createdAt    DateTime   @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([projectId, createdAt])
+}

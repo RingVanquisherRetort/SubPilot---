@@ -1,0 +1,15 @@
+{
+  "name": "@subpilot/control-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@subpilot/database": "workspace:*",
+    "dotenv": "^17.2.3",
+    "grammy": "^1.46.0"
+  }
+}
