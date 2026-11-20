@@ -15,7 +15,7 @@ The central SubPilot bot is the default control panel. A workspace can contain m
 - User: Telegram identity of an owner, agency teammate or operator.
 - Workspace: personal creator account or agency.
 - WorkspaceMember: role in a workspace (OWNER, ADMIN, MANAGER, VIEWER).
-- Project: an independently configured creator/business instance.
+- Project: an independently configured creator instance, including a declared merchant type used to filter payment-method options.
 - ProjectBot: Telegram bot token and identity attached to a project.
 - ConnectedChat: channel/group where access is managed.
 - CreatorPlan: price, currency, duration and target chats.
