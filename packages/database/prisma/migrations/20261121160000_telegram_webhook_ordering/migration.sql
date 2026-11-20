@@ -31,8 +31,8 @@ CREATE TABLE "TelegramChatMemberCursor" (
   CONSTRAINT "TelegramChatMemberCursor_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX "TelegramWebhookUpdate_projectBotId_updateId_key"
-  ON "TelegramWebhookUpdate"("projectBotId", "updateId");
+CREATE UNIQUE INDEX "TelegramWebhookUpdate_projectBotId_sequenceEpoch_updateId_key"
+  ON "TelegramWebhookUpdate"("projectBotId", "sequenceEpoch", "updateId");
 CREATE INDEX "TelegramWebhookUpdate_projectBotId_processedAt_receivedAt_idx"
   ON "TelegramWebhookUpdate"("projectBotId", "processedAt", "receivedAt");
 
