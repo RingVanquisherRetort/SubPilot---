@@ -48,7 +48,10 @@ export async function enqueueProjectOwnerNotification(event: OwnerNotificationEv
 }
 
 /** Deliver queued events through the central bot; failed deliveries retry with exponential backoff. */
-export async function deliverPendingOwnerNotifications(now = new Date()): Promise<void> {
+export async function deliverPendingOwnerNotifications(
+  now = new Date(),
+  isLeaseOwned: () => boolean = () => true
+): Promise<void> {
   const bot = getControlBot();
   if (!bot) return;
 
@@ -60,6 +63,7 @@ export async function deliverPendingOwnerNotifications(now = new Date()): Promis
   });
 
   for (const notification of pending) {
+    if (!isLeaseOwned()) return;
     try {
       await bot.api.sendMessage(Number(notification.recipient.telegramId), notification.messageText);
       await prisma.ownerNotification.update({
