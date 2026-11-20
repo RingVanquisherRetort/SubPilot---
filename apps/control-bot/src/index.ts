@@ -22,8 +22,14 @@ if (!token) {
   await bot.api.setMyCommands([
     { command: "start", description: "Start using SubPilot" },
     { command: "newproject", description: "Create a project" },
-    { command: "projects", description: "List your projects" },
+    { command: "projects", description: "List projects in the active workspace" },
+    { command: "createagency", description: "Create an agency workspace" },
+    { command: "workspaces", description: "List your workspaces" },
+    { command: "switchworkspace", description: "Switch active workspace" },
+    { command: "renameproject", description: "Rename a project" },
+    { command: "archiveproject", description: "Archive a project" },
     { command: "connectbot", description: "Connect a bot to a project" },
+    { command: "cancel", description: "Cancel the current operation" },
     { command: "help", description: "Show available commands" }
   ]);
 
