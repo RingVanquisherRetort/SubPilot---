@@ -1073,6 +1073,8 @@ export async function handleProjectBotUpdate(
   });
 
   projectBot.callbackQuery("buyer:plans", async (ctx) => {
+    if (!(await requirePrivateBuyerChat(ctx))) return;
+    await ctx.answerCallbackQuery();
     await showPlans(ctx, true);
   });
 
@@ -1086,6 +1088,7 @@ export async function handleProjectBotUpdate(
   });
 
   projectBot.callbackQuery(/^buyer:buy:(.+)$/, async (ctx) => {
+    if (!(await requirePrivateBuyerChat(ctx))) return;
     await ctx.answerCallbackQuery();
     const planId = ctx.match[1];
     if (!planId) return;
