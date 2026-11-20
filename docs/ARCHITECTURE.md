@@ -68,6 +68,10 @@ Provider eligibility is resolved per country, merchant type, currency and produc
 - The project bot subscribes to `my_chat_member` updates. When it is added or removed, the API upserts the connected chat and marks it active only when the bot has administrator/creator status.
 - `pre_checkout_query` validates a Stars invoice against the pending payment record; `successful_payment` is the only event that activates a paid entitlement.
 - Invite links are generated per subscription/chat, expire after 24 hours and have a one-member limit. Their joins are tracked by `chat_member` updates.
+- The API lifecycle worker checks active subscriptions once per minute, sends one reminder around three days and one around one day before expiry, and expires due subscriptions.
+- When a buyer renews before expiry, the existing entitlement is extended from its current end date instead of creating overlapping subscriptions.
+- On expiry, unused invite links are revoked and joined subscribers are removed from the connected chats. Failed removals remain pending for a later worker retry.
+- The current worker is process-local and assumes one API instance. Multiple replicas require distributed locking before deployment.
 - Channel/group connection requires the project bot to be added with the permissions needed for the selected feature.
 
 ## Reliability and security requirements
@@ -79,7 +83,7 @@ Provider eligibility is resolved per country, merchant type, currency and produc
 - Important actions are written to the audit log.
 - Secrets are encrypted at rest and rotated through a controlled process.
 - Workspace/project ownership is checked in every API operation.
-- Background work (renewal reminders, expirations, webhook retries and broadcasts) runs through Redis-backed queues.
+- Subscription expiry and renewal reminders currently run in a single in-process API worker. Migration to Redis-backed queues and distributed locking is required before horizontal scaling.
 - Admin actions must be permission-checked; creator data is isolated by workspace/project scope.
 
 ## Internationalization
