@@ -10,7 +10,7 @@ test("PostgreSQL advisory lock allows only one concurrent invoice-dispatch claim
   let dispatchStarted = false;
 
   const claim = async (): Promise<boolean> => prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+    await tx.$queryRaw`SELECT 1::int AS locked FROM (SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))) AS acquired`;
     if (dispatchStarted) return false;
 
     dispatchStarted = true;
