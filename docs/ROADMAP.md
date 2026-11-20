@@ -76,10 +76,17 @@ Initial provider candidates for research: YooKassa, YooMoney, Prodamus, Robokass
 
 ## Stage 6 — SubPilot billing
 
-- Platform plan catalogue and feature limits.
-- Workspace billing lifecycle.
-- Separate platform payment adapters and invoices/receipts as required.
-- Upgrade/downgrade, grace period and payment-failure handling.
+- [x] Define the seven-day, 14% introductory offer as an explicitly selected, temporary workspace-level offer.
+- [x] Add decimal-safe commission calculation with a strict seven-day eligibility window and refund-aware net sales.
+- [ ] Persist offer activation and immutable rate/period snapshots in WorkspaceBilling.
+- [ ] Add an idempotent platform commission ledger linked to creator payments and refund adjustments.
+- [ ] Define and disclose the XTR-to-settlement-currency conversion and collection policy before invoicing Stars-derived fees.
+- [ ] Add separate platform commission invoices and payment reconciliation; never debit creator Stars.
+- [ ] Add the offer selection, terms acceptance, remaining-time and accrued-fee UI to the control bot/workspace.
+- [ ] Platform plan catalogue and feature limits.
+- [ ] Workspace billing lifecycle.
+- [ ] Separate platform payment adapters and invoices/receipts as required.
+- [ ] Upgrade/downgrade, grace period and payment-failure handling.
 
 ## Stage 7 — Agency and analytics
 
