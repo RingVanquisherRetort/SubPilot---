@@ -82,7 +82,9 @@ export function calculateIntroductoryCommission(
     input.paidAt < input.trialEndsAt;
 
   // Round half up to the currency's two-decimal ledger precision.
-  const commission = (net * BigInt(rate) + 5_000n) / 10_000n;
+  const commission = eligible && net > 0n
+    ? (net * BigInt(rate) + 5_000n) / 10_000n
+    : 0n;
 
   return {
     eligible: eligible && net > 0n,
