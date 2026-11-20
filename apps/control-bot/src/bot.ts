@@ -345,7 +345,8 @@ export function createControlBot(token: string): Bot {
   bot.callbackQuery("ui:projects", async (ctx) => {
     await ctx.answerCallbackQuery();
     const user = await upsertTelegramUser(ctx);
-    const { workspace } = await getActiveWorkspace(user);
+    const { workspace, role } = await getActiveWorkspace(user);
+    const canManageWorkspace = MANAGER_ROLES.includes(role as typeof MANAGER_ROLES[number]);
     const projects = await prisma.project.findMany({
       where: { workspaceId: workspace.id, status: { not: "ARCHIVED" } },
       orderBy: { createdAt: "desc" },
@@ -356,7 +357,9 @@ export function createControlBot(token: string): Bot {
     for (const project of projects) {
       keyboard.text(project.name.slice(0, 30), `ui:project:${project.id}`).row();
     }
-    keyboard.text("➕ Создать проект", "ui:newproject").row();
+    if (canManageWorkspace) {
+      keyboard.text("➕ Создать проект", "ui:newproject").row();
+    }
     keyboard.text("⬅️ Назад", "ui:home");
 
     await ctx.editMessageText(
@@ -446,21 +449,36 @@ export function createControlBot(token: string): Bot {
       await ctx.editMessageText("Проект не найден или у вас нет доступа.", { reply_markup: backHomeKeyboard() });
       return;
     }
-    const [botCount, chatCount, planCount] = await Promise.all([
+    const [botCount, chatCount, planCount, membership] = await Promise.all([
       prisma.projectBot.count({ where: { projectId, status: "ACTIVE" } }),
       prisma.connectedChat.count({ where: { projectId, isActive: true } }),
-      prisma.creatorPlan.count({ where: { projectId, status: "ACTIVE" } })
+      prisma.creatorPlan.count({ where: { projectId, status: "ACTIVE" } }),
+      prisma.workspaceMember.findUnique({
+        where: {
+          workspaceId_userId: {
+            workspaceId: project.workspaceId,
+            userId: user.id
+          }
+        },
+        select: { role: true }
+      })
     ]);
-    const keyboard = new InlineKeyboard()
-      .text("🤖 Подключить бота", `ui:connect:${projectId}`)
-      .row()
-      .text("💎 Тарифы", `ui:plans:${projectId}`)
-      .text("➕ Создать тариф", `ui:createplan:${projectId}`)
-      .row()
+    const canManageProject = Boolean(membership && MANAGER_ROLES.includes(membership.role));
+    const keyboard = new InlineKeyboard();
+    if (canManageProject) {
+      keyboard.text("🤖 Подключить бота", `ui:connect:${projectId}`).row();
+    }
+    keyboard.text("💎 Тарифы", `ui:plans:${projectId}`);
+    if (canManageProject) {
+      keyboard.text("➕ Создать тариф", `ui:createplan:${projectId}`);
+    }
+    keyboard.row()
       .text("📣 Каналы и группы", `ui:chats:${projectId}`)
-      .row()
-      .text("💳 Способы оплаты", `ui:payment-methods:${projectId}`)
-      .text("📊 История платежей", `ui:payments:${projectId}`)
+      .row();
+    if (canManageProject) {
+      keyboard.text("💳 Способы оплаты", `ui:payment-methods:${projectId}`).row();
+    }
+    keyboard.text("📊 История платежей", `ui:payments:${projectId}`)
       .row()
       .text("⬅️ К проектам", "ui:projects");
     await ctx.editMessageText(
@@ -494,12 +512,24 @@ export function createControlBot(token: string): Bot {
     if (!projectId) return;
     const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
     if (!project) return;
-    const plans = await prisma.creatorPlan.findMany({
-      where: { projectId, status: "ACTIVE" },
-      include: { _count: { select: { chats: true, subscriptions: true } } },
-      orderBy: { sortOrder: "asc" },
-      take: 30
-    });
+    const [plans, membership] = await Promise.all([
+      prisma.creatorPlan.findMany({
+        where: { projectId, status: "ACTIVE" },
+        include: { _count: { select: { chats: true, subscriptions: true } } },
+        orderBy: { sortOrder: "asc" },
+        take: 30
+      }),
+      prisma.workspaceMember.findUnique({
+        where: {
+          workspaceId_userId: {
+            workspaceId: project.workspaceId,
+            userId: user.id
+          }
+        },
+        select: { role: true }
+      })
+    ]);
+    const canManageProject = Boolean(membership && MANAGER_ROLES.includes(membership.role));
     const keyboard = new InlineKeyboard();
     for (const plan of plans) {
       keyboard.text(
@@ -507,9 +537,11 @@ export function createControlBot(token: string): Bot {
         `p:v:${projectId}:${plan.id}`
       ).row();
     }
-    keyboard.text("➕ Создать тариф", `ui:createplan:${projectId}`).row()
-      .text("🗄 Архив тарифов", `ui:archivedplans:${projectId}`)
-      .row().text("⬅️ К проекту", `ui:project:${projectId}`);
+    if (canManageProject) {
+      keyboard.text("➕ Создать тариф", `ui:createplan:${projectId}`).row()
+        .text("🗄 Архив тарифов", `ui:archivedplans:${projectId}`).row();
+    }
+    keyboard.text("⬅️ К проекту", `ui:project:${projectId}`);
     await ctx.editMessageText(
       plans.length
         ? `Активные тарифы «${project.name}»:\nВыберите тариф для управления:`
@@ -550,6 +582,16 @@ export function createControlBot(token: string): Bot {
     if (!projectId || !planId) return;
     const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
     if (!project) return;
+    const membership = await prisma.workspaceMember.findUnique({
+      where: {
+        workspaceId_userId: {
+          workspaceId: project.workspaceId,
+          userId: user.id
+        }
+      },
+      select: { role: true }
+    });
+    const canManageProject = Boolean(membership && MANAGER_ROLES.includes(membership.role));
     const plan = await prisma.creatorPlan.findFirst({
       where: { id: planId, projectId },
       include: {
@@ -567,17 +609,19 @@ export function createControlBot(token: string): Bot {
       connectedChat.title ?? connectedChat.username ?? connectedChat.telegramChatId.toString()
     );
     const keyboard = new InlineKeyboard();
-    if (plan.status === "ACTIVE") {
-      keyboard.text("✏️ Изменить тариф", `p:e:${projectId}:${planId}`).row()
-        .text("🗄 В архив", `p:x:${projectId}:${planId}`);
-    } else {
-      keyboard.text("↩️ Восстановить", `p:r:${projectId}:${planId}`);
+    if (canManageProject) {
+      if (plan.status === "ACTIVE") {
+        keyboard.text("✏️ Изменить тариф", `p:e:${projectId}:${planId}`).row()
+          .text("🗄 В архив", `p:x:${projectId}:${planId}`);
+      } else {
+        keyboard.text("↩️ Восстановить", `p:r:${projectId}:${planId}`);
+      }
+      keyboard.row()
+        .text("📣 Настроить площадки", `p:ch:${planId}`)
+        .row();
     }
-    keyboard.row()
-      .text("📣 Настроить площадки", `p:ch:${planId}`)
-      .row()
-      .text(plan.status === "ACTIVE" ? "⬅️ К активным" : "⬅️ К архиву",
-        plan.status === "ACTIVE" ? `ui:plans:${projectId}` : `ui:archivedplans:${projectId}`)
+    keyboard.text(plan.status === "ACTIVE" ? "⬅️ К активным" : "⬅️ К архиву",
+      plan.status === "ACTIVE" ? `ui:plans:${projectId}` : `ui:archivedplans:${projectId}`)
       .text("К проекту", `ui:project:${projectId}`);
 
     await ctx.editMessageText(
@@ -602,7 +646,22 @@ export function createControlBot(token: string): Bot {
       where: { id: planId },
       select: { id: true, projectId: true }
     });
-    if (!plan || !(await canAccessProject(plan.projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]))) {
+    const project = plan
+      ? await canAccessProject(plan.projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"])
+      : null;
+    const membership = project
+      ? await prisma.workspaceMember.findUnique({
+          where: {
+            workspaceId_userId: {
+              workspaceId: project.workspaceId,
+              userId: user.id
+            }
+          },
+          select: { role: true }
+        })
+      : null;
+    const canManageProject = Boolean(membership && MANAGER_ROLES.includes(membership.role));
+    if (!plan || !project) {
       await ctx.reply("Тариф не найден или у вас нет доступа.");
       return;
     }
@@ -624,7 +683,7 @@ export function createControlBot(token: string): Bot {
       const name = chat.title ?? chat.username ?? chat.telegramChatId.toString();
       keyboard.text(
         `${linkedIds.has(chat.id) ? "✅" : "➕"} ${name.slice(0, 45)}`,
-        `p:ct:${planId}:${chat.id}`
+        canManageProject ? `p:ct:${planId}:${chat.id}` : `p:v:${plan.projectId}:${planId}`
       ).row();
     }
     keyboard.text("⬅️ К тарифу", `p:v:${plan.projectId}:${planId}`);
@@ -709,7 +768,7 @@ export function createControlBot(token: string): Bot {
       const name = item.title ?? item.username ?? item.telegramChatId.toString();
       keyboard.text(
         `${linkedIds.has(item.id) ? "✅" : "➕"} ${name.slice(0, 45)}`,
-        `p:ct:${planId}:${item.id}`
+        canManageProject ? `p:ct:${planId}:${item.id}` : `p:v:${plan.projectId}:${planId}`
       ).row();
     }
     keyboard.text("⬅️ К тарифу", `p:v:${plan.projectId}:${planId}`);
