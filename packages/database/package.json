@@ -8,7 +8,9 @@
   },
   "scripts": {
     "db:generate": "prisma generate --config prisma.config.ts",
-    "db:migrate": "prisma migrate dev --name init --config prisma.config.ts"
+    "db:migrate": "prisma migrate dev --config prisma.config.ts",
+    "db:migrate:deploy": "prisma migrate deploy --config prisma.config.ts",
+    "db:migrate:status": "prisma migrate status --config prisma.config.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.1",
