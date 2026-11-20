@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/client.ts" },
+  "exports": {
+    ".": "./src/client.ts"
+  },
   "scripts": {
     "db:generate": "prisma generate --config prisma.config.ts",
-    "db:migrate": "prisma migrate dev --config prisma.config.ts"
+    "db:migrate": "prisma migrate dev --name init --config prisma.config.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.1",
