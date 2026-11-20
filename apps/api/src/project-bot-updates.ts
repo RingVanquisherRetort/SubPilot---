@@ -460,11 +460,7 @@ async function processSuccessfulStarsPayment(
   const expirationFromTelegram = receipt.subscription_expiration_date
     ? new Date(receipt.subscription_expiration_date * 1000)
     : null;
-  let endsAt: Date | null = null;
-  let isInitialActivation = false;
-  let paymentWasProcessed = false;
-
-  await prisma.$transaction(async (tx) => {
+  const transactionResult = await prisma.$transaction(async (tx) => {
     // Serialize extensions for a shared entitlement so concurrent successful payments
     // cannot calculate their end date from the same stale subscription snapshot.
     await tx.$queryRawUnsafe('SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE', subscription.id);
@@ -488,90 +484,96 @@ async function processSuccessfulStarsPayment(
       }
     });
 
-    if (updated.count === 1) {
-      paymentWasProcessed = true;
-      const currentEnd = currentSubscription.endsAt && currentSubscription.endsAt > now
-        ? currentSubscription.endsAt
-        : now;
-      endsAt = expirationFromTelegram ??
-        (snapshotDurationDays
-          ? new Date(currentEnd.getTime() + snapshotDurationDays * 24 * 60 * 60 * 1000)
-          : null);
-      isInitialActivation = currentSubscription.status !== "ACTIVE";
+    if (updated.count !== 1) {
+      return {
+        endsAt: currentSubscription.endsAt,
+        isInitialActivation: false,
+        paymentWasProcessed: false
+      };
+    }
 
-      await tx.subscription.update({
-        where: { id: subscription.id },
-        data: {
-          status: "ACTIVE",
-          startsAt: currentSubscription.startsAt ?? now,
-          endsAt,
-          reminder3dAt: null,
-          reminder1dAt: null
-        }
-      });
+    const currentEnd = currentSubscription.endsAt && currentSubscription.endsAt > now
+      ? currentSubscription.endsAt
+      : now;
+    const endsAt = expirationFromTelegram ??
+      (snapshotDurationDays
+        ? new Date(currentEnd.getTime() + snapshotDurationDays * 24 * 60 * 60 * 1000)
+        : null);
+    const isInitialActivation = currentSubscription.status !== "ACTIVE";
 
-      await tx.paymentWebhookEvent.create({
-        data: {
-          connectionId: null,
-          dedupeKey: `telegram-stars:${receipt.telegram_payment_charge_id}`,
-          providerEventId: receipt.telegram_payment_charge_id,
-          eventType: "telegram.stars.payment.succeeded",
-          payload: {
-            invoicePayload: receipt.invoice_payload,
-            currency: receipt.currency,
-            totalAmount: receipt.total_amount,
-            telegramPaymentChargeId: receipt.telegram_payment_charge_id,
-            providerPaymentChargeId: receipt.provider_payment_charge_id
-          },
-          processedAt: now
-        }
-      });
-
-      // Persist pending access-delivery rows in the same transaction as payment
-      // confirmation. The lifecycle worker can recover if the process stops before
-      // the immediate Telegram invite-link delivery completes.
-      let connectedChatIds: string[] = [];
-      if (snapshotChatIds !== undefined) {
-        const telegramChatIds = snapshotChatIds
-          .filter((value) => /^-?\d+$/.test(value))
-          .map((value) => BigInt(value));
-        if (telegramChatIds.length > 0) {
-          const chats = await tx.connectedChat.findMany({
-            where: {
-              projectId,
-              isActive: true,
-              telegramChatId: { in: telegramChatIds }
-            },
-            select: { id: true }
-          });
-          connectedChatIds = chats.map((chat) => chat.id);
-        }
-      } else {
-        const planChats = await tx.creatorPlanChat.findMany({
-          where: {
-            creatorPlanId: currentSubscription.planId,
-            connectedChat: { isActive: true }
-          },
-          select: { connectedChatId: true }
-        });
-        connectedChatIds = planChats.map((chat) => chat.connectedChatId);
+    await tx.subscription.update({
+      where: { id: subscription.id },
+      data: {
+        status: "ACTIVE",
+        startsAt: currentSubscription.startsAt ?? now,
+        endsAt,
+        reminder3dAt: null,
+        reminder1dAt: null
       }
+    });
 
-      if (connectedChatIds.length > 0) {
-        await tx.subscriptionAccessGrant.createMany({
-          data: connectedChatIds.map((connectedChatId) => ({
-            subscriptionId: subscription.id,
-            connectedChatId,
-            inviteLink: "",
-            expiresAt: new Date(0)
-          })),
-          skipDuplicates: true
+    await tx.paymentWebhookEvent.create({
+      data: {
+        connectionId: null,
+        dedupeKey: \`telegram-stars:\${receipt.telegram_payment_charge_id}\`,
+        providerEventId: receipt.telegram_payment_charge_id,
+        eventType: "telegram.stars.payment.succeeded",
+        payload: {
+          invoicePayload: receipt.invoice_payload,
+          currency: receipt.currency,
+          totalAmount: receipt.total_amount,
+          telegramPaymentChargeId: receipt.telegram_payment_charge_id,
+          providerPaymentChargeId: receipt.provider_payment_charge_id
+        },
+        processedAt: now
+      }
+    });
+
+    // Persist pending access-delivery rows in the same transaction as payment
+    // confirmation. The lifecycle worker can recover if the process stops before
+    // the immediate Telegram invite-link delivery completes.
+    let connectedChatIds: string[] = [];
+    if (snapshotChatIds !== undefined) {
+      const telegramChatIds = snapshotChatIds
+        .filter((value) => /^-?\d+$/.test(value))
+        .map((value) => BigInt(value));
+      if (telegramChatIds.length > 0) {
+        const chats = await tx.connectedChat.findMany({
+          where: {
+            projectId,
+            isActive: true,
+            telegramChatId: { in: telegramChatIds }
+          },
+          select: { id: true }
         });
+        connectedChatIds = chats.map((chat) => chat.id);
       }
     } else {
-      endsAt = currentSubscription.endsAt;
+      const planChats = await tx.creatorPlanChat.findMany({
+        where: {
+          creatorPlanId: currentSubscription.planId,
+          connectedChat: { isActive: true }
+        },
+        select: { connectedChatId: true }
+      });
+      connectedChatIds = planChats.map((chat) => chat.connectedChatId);
     }
+
+    if (connectedChatIds.length > 0) {
+      await tx.subscriptionAccessGrant.createMany({
+        data: connectedChatIds.map((connectedChatId) => ({
+          subscriptionId: subscription.id,
+          connectedChatId,
+          inviteLink: "",
+          expiresAt: new Date(0)
+        })),
+        skipDuplicates: true
+      });
+    }
+
+    return { endsAt, isInitialActivation, paymentWasProcessed: true };
   });
+  const { endsAt, isInitialActivation, paymentWasProcessed } = transactionResult;
 
   if (!paymentWasProcessed) {
     await ctx.reply("Этот платёж уже был обработан. Для получения актуальных ссылок используйте /access.");

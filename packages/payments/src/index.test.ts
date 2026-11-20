@@ -307,3 +307,39 @@ test("provider catalog does not override Telegram Stars policy for digital acces
   assert.equal(result.available, false);
   assert.equal(result.reason, "PRODUCT_POLICY_BLOCKED");
 });
+
+
+test("introductory commission accepts fractional amounts and formats fractional rates", () => {
+  const result = calculateIntroductoryCommission({
+    grossAmount: "00012.50",
+    refundedAmount: "2.25",
+    currency: "rub",
+    paidAt: new Date("2026-11-22T00:00:00.000Z"),
+    trialStartedAt: new Date("2026-11-21T00:00:00.000Z"),
+    trialEndsAt: new Date("2026-11-28T00:00:00.000Z"),
+    commissionBasisPoints: 1_425
+  });
+
+  assert.equal(result.currency, "RUB");
+  assert.equal(result.commissionRate, "14.25");
+  assert.equal(result.grossAmount, "12.5");
+  assert.equal(result.refundedAmount, "2.25");
+  assert.equal(result.netAmount, "10.25");
+  assert.equal(result.commissionAmount, "1.46");
+});
+
+test("introductory commission rejects malformed decimal amounts", () => {
+  const base = {
+    currency: "RUB",
+    paidAt: new Date("2026-11-22T00:00:00.000Z"),
+    trialStartedAt: new Date("2026-11-21T00:00:00.000Z"),
+    trialEndsAt: new Date("2026-11-28T00:00:00.000Z")
+  };
+
+  for (const grossAmount of ["", "-1", "1.001", "1e3", "1,25"]) {
+    assert.throws(
+      () => calculateIntroductoryCommission({ ...base, grossAmount }),
+      /Invalid commission amount/
+    );
+  }
+});

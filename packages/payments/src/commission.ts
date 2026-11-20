@@ -27,7 +27,7 @@ export interface IntroductoryCommission {
 }
 
 function toMinorUnits(value: string): bigint {
-  if (!/^\\d{1,12}(?:\\.\\d{1,2})?$/.test(value)) {
+  if (!/^\d{1,12}(?:\.\d{1,2})?$/.test(value)) {
     throw new Error("Invalid commission amount.");
   }
 
@@ -42,7 +42,7 @@ function fromMinorUnits(value: bigint): string {
 }
 
 function formatRate(basisPoints: number): string {
-  return (basisPoints / 100).toFixed(2).replace(/\\.?0+$/, "");
+  return (basisPoints / 100).toFixed(2).replace(/\.?0+$/, "");
 }
 
 /**
