@@ -21,7 +21,7 @@
 - [x] Add one active project bot by token; verify with Telegram getMe and enforce one active bot per project.
 - [x] Encrypt bot tokens and validate signed webhook secrets.
 - [x] Receive my_chat_member updates and register channels/groups.
-- [ ] Add interactive channel selection and feature-specific permission checks.
+- [x] Add interactive channel selection and permission checks required for subscription access (invite users and restrict members).
 
 ## Stage 3 — Subscription engine
 
@@ -41,13 +41,16 @@
 - [x] Let buyers request current invite links again with /access.
 - [x] Add payment history and Telegram Stars refund commands.
 - [x] Add button-driven project navigation, plan creation, channel/payment views and workspace/team navigation.
-- [ ] Add button-driven plan editing and advanced access-management controls.
+- [x] Add button-driven plan editing (title, Stars price, duration) and plan-to-chat linking/unlinking.
+- [ ] Add advanced access-management controls beyond the current subscription lifecycle.
 - [x] Add scheduled expiry and access-revocation worker.
 - [x] Send renewal reminders to buyers approximately three days and one day before expiry.
 - [x] Queue new-subscriber, three-day, one-day and expiry notifications for project authors and agency owners.
 - [x] Retry owner-notification delivery through the central bot with per-recipient deduplication.
 - [x] Extend an active subscription when a buyer renews early.
-- [ ] Add distributed job locking and delivery retry/dead-letter monitoring.
+- [x] Add PostgreSQL-backed distributed lifecycle-worker lease locking across API replicas.
+- [x] Retry failed owner-notification and access-delivery operations.
+- [ ] Add dead-letter monitoring, alerting and operator recovery for exhausted retries.
 - [ ] Manual grants, manual revocation and trials.
 
 ## Stage 4 — Payments
@@ -62,7 +65,7 @@
 - [ ] Add delivery dead-letter monitoring, reconciliation and operator recovery.
 - [ ] Implement external provider adapters only for compliant checkout scenarios and eligible merchants/products.
 - [ ] Add recurring Stars subscriptions (Telegram currently constrains recurring bot invoices to a 30-day period).
-- [ ] Keep creator payments isolated from SubPilot platform billing.
+- [x] Keep creator payments isolated from SubPilot platform billing through separate payment, workspace-billing and commission ledgers.
 
 Initial research candidates for creators who are individuals: YooMoney, Crypto Pay and manual confirmation. Nemiling's public matrix lists these for physical persons, but this is reference information only. SubPilot adapters and provider approvals remain pending. YooKassa, Prodamus, Robokassa and CloudPayments are retained as candidates for merchant types listed by the reference matrix (for example, self-employed, individual entrepreneurs or legal entities). None of these external methods can be used to sell Telegram channel/group access or other digital goods/services offered or fulfilled by a Telegram bot/Mini App; Stars remain required. See docs/decisions/creator-payment-model.md.
 
