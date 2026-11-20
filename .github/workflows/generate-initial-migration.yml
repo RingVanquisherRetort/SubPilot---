@@ -53,3 +53,5 @@ jobs:
           fi
           git commit -m "db: add initial Prisma baseline migration"
           git push origin HEAD:feat/subscription-lifecycle-ui
+
+# One-time generator for the current Prisma baseline; remove after the migration is committed.
