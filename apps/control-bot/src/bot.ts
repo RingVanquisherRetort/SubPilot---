@@ -2155,6 +2155,7 @@ export function createControlBot(token: string): Bot {
           await ctx.reply("Не удалось изменить тариф.", { reply_markup: homeKeyboard() });
         }
         return;
+      }
     }
 
     const pending = pendingBotConnections.get(ctx.from.id);
