@@ -13,6 +13,18 @@ type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 const MAX_STARS_AMOUNT = 10_000;
 const INVITE_LIFETIME_SECONDS = 24 * 60 * 60;
 
+async function requirePrivateBuyerChat(ctx: Context): Promise<boolean> {
+  if (ctx.chat?.type === "private") return true;
+
+  const message = "Откройте личный чат с этим ботом, чтобы просматривать тарифы и обращаться по вопросам оплаты.";
+  if (ctx.callbackQuery) {
+    await ctx.answerCallbackQuery({ text: message, show_alert: true }).catch(() => undefined);
+  } else if (ctx.chat) {
+    await ctx.reply(message).catch(() => undefined);
+  }
+  return false;
+}
+
 function getStarAmount(amount: { toString(): string }): number | null {
   const value = amount.toString();
   if (!/^\d{1,5}$/.test(value)) return null;
@@ -316,6 +328,22 @@ export async function deliverSubscriptionAccess(
     const now = new Date();
     if (!previousJoinWasCleared && existing && !existing.revokedAt && existing.inviteLink &&
         existing.expiresAt > now) {
+      if (isBanned) {
+        try {
+          await bot.api.unbanChatMember(
+            chat.telegramChatId.toString(),
+            telegramUserId,
+            { only_if_banned: true }
+          );
+        } catch (error) {
+          console.error(
+            "Could not unban an active subscriber before reusing an invite:",
+            error instanceof Error ? error.name : "UnknownError"
+          );
+          results.failed.push(label);
+          continue;
+        }
+      }
       results.links.push(label + ": " + existing.inviteLink);
       continue;
     }
@@ -833,6 +861,7 @@ export async function handleProjectBotUpdate(
   });
 
   const showPlans = async (ctx: Context, edit = false): Promise<void> => {
+    if (!(await requirePrivateBuyerChat(ctx))) return;
     const plans = await prisma.creatorPlan.findMany({
       where: { projectId, status: "ACTIVE", currency: "XTR" },
       include: {
@@ -881,6 +910,7 @@ export async function handleProjectBotUpdate(
     "При вопросах по оплате, ошибочной оплате или возврату используйте команду /paysupport.";
 
   const showPurchaseTerms = async (ctx: Context, planId: string): Promise<void> => {
+    if (!(await requirePrivateBuyerChat(ctx))) return;
     const plan = await prisma.creatorPlan.findFirst({
       where: { id: planId, projectId, status: "ACTIVE" },
       include: { chats: { include: { connectedChat: true } } }
@@ -914,10 +944,12 @@ export async function handleProjectBotUpdate(
   };
 
   projectBot.command("terms", async (ctx) => {
+    if (!(await requirePrivateBuyerChat(ctx))) return;
     await ctx.reply(purchaseTermsText);
   });
 
   projectBot.command("paysupport", async (ctx) => {
+    if (!(await requirePrivateBuyerChat(ctx))) return;
     const project = await prisma.project.findUnique({
       where: { id: projectId },
       select: {
@@ -1016,6 +1048,7 @@ export async function handleProjectBotUpdate(
   });
 
   projectBot.command("start", async (ctx) => {
+    if (!(await requirePrivateBuyerChat(ctx))) return;
     await ctx.reply(
       "Добро пожаловать! Здесь можно выбрать подписку и безопасно оплатить её через Telegram Stars.",
       {
@@ -1040,11 +1073,11 @@ export async function handleProjectBotUpdate(
   });
 
   projectBot.callbackQuery("buyer:plans", async (ctx) => {
-    await ctx.answerCallbackQuery();
     await showPlans(ctx, true);
   });
 
   projectBot.callbackQuery("buyer:help", async (ctx) => {
+    if (!(await requirePrivateBuyerChat(ctx))) return;
     await ctx.answerCallbackQuery();
     await ctx.reply(
       "Выберите тариф кнопкой в меню. Оплата проходит внутри Telegram в Stars. После подтверждения оплаты бот пришлёт персональные ссылки для вступления. Каждая ссылка действует 24 часа и рассчитана на одного участника.",
@@ -1060,6 +1093,7 @@ export async function handleProjectBotUpdate(
   });
 
   projectBot.callbackQuery(/^buyer:accept:(.+)$/, async (ctx) => {
+    if (!(await requirePrivateBuyerChat(ctx))) return;
     await ctx.answerCallbackQuery();
     const planId = ctx.match[1];
     if (!planId) return;

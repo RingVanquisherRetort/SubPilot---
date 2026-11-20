@@ -13,6 +13,7 @@ const MANAGER_ROLES = ["OWNER", "ADMIN", "MANAGER"] as const;
 const ADMIN_ROLES = ["OWNER", "ADMIN"] as const;
 const BOT_TOKEN_PATTERN = /^\d{5,15}:[A-Za-z0-9_-]{20,}$/;
 const BOT_TOKEN_TTL_MS = 5 * 60 * 1000;
+const TEXT_ACTION_TTL_MS = 5 * 60 * 1000;
 const REFUND_RETRY_LOCK_MS = 2 * 60 * 1000;
 
 function paymentStatusLabel(status: string): string {
@@ -46,11 +47,13 @@ type PendingBotConnection = {
   expiresAt: number;
 };
 
-type PendingTextAction =
+type PendingTextActionInput =
   | { kind: "new_project" }
   | { kind: "new_agency" }
   | { kind: "create_plan"; projectId: string }
   | { kind: "edit_plan"; projectId: string; planId: string };
+
+type PendingTextAction = PendingTextActionInput & { expiresAt: number };
 
 function homeKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
@@ -211,6 +214,41 @@ export function createControlBot(token: string): Bot {
   const pendingBotConnections = new Map<number, PendingBotConnection>();
   const pendingTextActions = new Map<number, PendingTextAction>();
 
+  const setPendingTextAction = (userId: number, action: PendingTextActionInput): void => {
+    pendingBotConnections.delete(userId);
+    pendingTextActions.set(userId, {
+      ...action,
+      expiresAt: Date.now() + TEXT_ACTION_TTL_MS
+    });
+  };
+
+  const setPendingBotConnection = (userId: number, projectId: string): void => {
+    pendingTextActions.delete(userId);
+    pendingBotConnections.set(userId, {
+      projectId,
+      expiresAt: Date.now() + BOT_TOKEN_TTL_MS
+    });
+  };
+
+  // The control bot is a private workspace console. Never expose workspace
+  // members, payment history, invitation URLs or admin actions in group chats.
+  bot.use(async (ctx, next) => {
+    const chat = ctx.chat;
+    if (chat && chat.type !== "private") {
+      if (ctx.callbackQuery) {
+        await ctx.answerCallbackQuery({
+          text: "Управление SubPilot доступно только в личном чате с ботом.",
+          show_alert: true
+        }).catch(() => undefined);
+      } else if (ctx.message && "text" in ctx.message && ctx.message.text.startsWith("/")) {
+        await ctx.reply("Для безопасности используйте управляющего бота SubPilot только в личном чате.")
+          .catch(() => undefined);
+      }
+      return;
+    }
+    await next();
+  });
+
   bot.callbackQuery("ui:home", async (ctx) => {
     await ctx.answerCallbackQuery();
     const user = await upsertTelegramUser(ctx);
@@ -361,7 +399,7 @@ export function createControlBot(token: string): Bot {
       include: { workspace: true }
     });
     if (!membership) {
-      await ctx.answerCallbackQuery({ text: "У вас больше нет доступа к этому пространству.", show_alert: true });
+      await ctx.reply("У вас больше нет доступа к этому пространству.");
       return;
     }
     await prisma.user.update({ where: { id: user.id }, data: { activeWorkspaceId: workspaceId } });
@@ -373,7 +411,7 @@ export function createControlBot(token: string): Bot {
   bot.callbackQuery("ui:newproject", async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.from) return;
-    pendingTextActions.set(ctx.from.id, { kind: "new_project" });
+    setPendingTextAction(ctx.from.id, { kind: "new_project" });
     await ctx.reply("Напишите название нового проекта одним сообщением. Для отмены нажмите кнопку:", {
       reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel")
     });
@@ -382,7 +420,7 @@ export function createControlBot(token: string): Bot {
   bot.callbackQuery("ui:newagency", async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.from) return;
-    pendingTextActions.set(ctx.from.id, { kind: "new_agency" });
+    setPendingTextAction(ctx.from.id, { kind: "new_agency" });
     await ctx.reply("Напишите название агентства одним сообщением:", {
       reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel")
     });
@@ -441,7 +479,7 @@ export function createControlBot(token: string): Bot {
       await ctx.reply("Нет прав подключать бота к этому проекту.");
       return;
     }
-    pendingBotConnections.set(ctx.from.id, { projectId, expiresAt: Date.now() + BOT_TOKEN_TTL_MS });
+    setPendingBotConnection(ctx.from.id, projectId);
     await ctx.reply(
       `Подключаем бота к проекту «${project.name}». Отправьте токен от @BotFather следующим сообщением. Я удалю сообщение с токеном сразу после получения, если Telegram позволит.`,
       { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
@@ -695,7 +733,7 @@ export function createControlBot(token: string): Bot {
       await ctx.reply("Нет прав изменять этот тариф или тариф не найден.");
       return;
     }
-    pendingTextActions.set(ctx.from.id, { kind: "edit_plan", projectId, planId });
+    setPendingTextAction(ctx.from.id, { kind: "edit_plan", projectId, planId });
     await ctx.reply(
       `Изменяем тариф «${plan.title}». Отправьте новые данные в формате:\nНазвание | Цена в Stars | Дней\n\nТекущие данные: ${plan.title} | ${plan.price.toString()} | ${plan.durationDays ?? 0}`,
       { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
@@ -764,7 +802,7 @@ export function createControlBot(token: string): Bot {
       await ctx.reply("Нет прав создавать тарифы в этом проекте.");
       return;
     }
-    pendingTextActions.set(ctx.from.id, { kind: "create_plan", projectId });
+    setPendingTextAction(ctx.from.id, { kind: "create_plan", projectId });
     await ctx.reply(
       "Введите данные тарифа в одном сообщении в формате:\nНазвание | Цена в Stars | Дней\n\nПример: VIP на месяц | 499 | 30\nУкажите 0 дней для бессрочного доступа.",
       { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
@@ -2244,10 +2282,7 @@ export function createControlBot(token: string): Bot {
         return;
       }
 
-      pendingBotConnections.set(ctx.from.id, {
-        projectId,
-        expiresAt: Date.now() + BOT_TOKEN_TTL_MS
-      });
+      setPendingBotConnection(ctx.from.id, projectId);
 
       await ctx.reply(
         `Подключаем бота к проекту «${project.name}».\n\n` +
@@ -2264,6 +2299,7 @@ export function createControlBot(token: string): Bot {
   bot.command("cancel", async (ctx) => {
     if (ctx.from) {
       pendingBotConnections.delete(ctx.from.id);
+      pendingTextActions.delete(ctx.from.id);
     }
     await ctx.reply("Текущая операция отменена.");
   });
@@ -2275,6 +2311,12 @@ export function createControlBot(token: string): Bot {
     const pendingAction = pendingTextActions.get(ctx.from.id);
     if (pendingAction) {
       pendingTextActions.delete(ctx.from.id);
+      if (pendingAction.expiresAt <= Date.now()) {
+        await ctx.reply("Время ожидания ввода истекло. Запустите нужное действие заново.", {
+          reply_markup: homeKeyboard()
+        });
+        return;
+      }
       const input = ctx.message.text.trim();
 
       if (pendingAction.kind === "new_project") {
