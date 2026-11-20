@@ -23,7 +23,7 @@ The central SubPilot bot is the default control panel. A workspace can contain m
 - Project creator: the user who created a project; used as the individual author notification recipient.
 - OwnerNotification: deduplicated, retryable delivery record for project-owner and author lifecycle alerts.
 - Subscription: a buyer's access entitlement and its dates/status.
-- PaymentProviderConnection: encrypted merchant credentials belonging to a creator project.
+- PaymentProviderConnection: encrypted merchant credentials belonging to a creator project. Registration in SubPilot is open to ordinary individuals; payment-method eligibility is evaluated separately for each project and provider.
 - Payment / PaymentWebhookEvent: creator-side payment and idempotent webhook record.
 - PlatformPlan / WorkspaceBilling / PlatformPayment: SubPilot's own tariff catalogue, workspace subscription and payment ledger.
 - AuditLog: security-sensitive actions and important workspace changes.
@@ -32,7 +32,11 @@ The central SubPilot bot is the default control panel. A workspace can contain m
 
 ### Creator payments
 
-A project owner creates a creator plan and connects eligible payment-provider credentials to their project. The provider adapter creates a payment attempt and normalizes provider notifications before an entitlement is activated. Each provider connection is scoped to one project.
+A project owner creates a creator plan and connects a payment method available to that project. Payment credentials belong to the creator/project, not to SubPilot. Where the provider supports direct merchant settlement, the provider pays the creator under the creator's own provider agreement; SubPilot does not collect creator proceeds into a platform balance or run creator payouts. Each provider connection is scoped to one project.
+
+SubPilot's primary commercial model is a fixed workspace subscription. Creator-payment volume is not subject to a default SubPilot transaction commission. Provider fees are separate and are charged under the provider's terms.
+
+SubPilot registration is available to ordinary individuals. A creator's legal/merchant status is not a universal registration gate: the available payment methods are filtered by the selected provider's current onboarding requirements, the creator's declared merchant type, country, product and checkout surface. The research catalog in `packages/payments/src/provider-catalog.ts` is a discovery aid only; its seller/country matrix is based on Nemiling's public documentation and does not replace direct provider approval or legal review.
 
 The first implemented checkout is a one-time Telegram Stars flow. The shared payment-policy gate classifies this as TELEGRAM_CHANNEL_ACCESS and rejects non-Stars providers before checkout:
 - New in-Telegram digital-access plans are priced in whole Telegram Stars and use currency `XTR`.
@@ -43,7 +47,9 @@ The first implemented checkout is a one-time Telegram Stars flow. The shared pay
 - The project bot creates one-person, 24-hour invite links for the connected chats selected by the plan. `chat_member` updates record completed joins. Each Stars payment snapshot records the project bot that issued the invoice, tariff title/duration and target chat IDs so refunds and access delivery can be associated with the originating bot and purchased configuration. Buyers can request current links again with /access.
 - A workspace owner/admin can review payments and refund a successful Stars payment from the central bot. Refund also cancels the subscription, revokes outstanding invite links and removes joined subscribers from the linked chats.
 
-The shared provider package defines normalized checkout/event contracts and a registry for future integrations. The external adapters are not yet implemented.
+The shared provider package defines normalized checkout/event contracts, a registry for future integrations and a conservative provider-availability catalog. Only Telegram Stars are currently implemented for this product flow; YooMoney, Crypto Pay, manual confirmation and merchant-only providers are candidates, not enabled integrations.
+
+Telegram's digital-goods rules take precedence over the provider catalog: paid access to Telegram channels/groups and other digital goods/services offered or fulfilled by a bot/Mini App must use Telegram Stars. The presence of an external provider credential does not bypass that rule.
 
 The Stars checkout displays basic purchase disclosures before issuing an invoice and exposes /terms, /paysupport and /access. These are a technical baseline, not a substitute for project-specific buyer terms that a creator may need to supply. Payment records snapshot the selected tariff title, duration and connected chat IDs so later tariff edits do not silently rewrite an existing order. The refund flow preserves an entitlement when other successful payments remain on the same subscription; a full per-payment period ledger and exact recalculation after partial refunds are still required before refunds can be considered complete.
 
@@ -55,15 +61,11 @@ Whether funds settle directly to a creator or through a platform/marketplace arr
 
 SubPilot sells its own plans and usage-based services through a separate billing domain and ledger. Platform payments and platform-fee receivables must never be recorded as creator payments.
 
-The optional **Start Without Upfront Cost** offer is a workspace-level introductory commercial offer:
-- The workspace owner explicitly selects and accepts the offer before activation.
-- The offer lasts seven calendar days from its persisted activation timestamp; creating additional projects does not restart it.
-- SubPilot accrues a temporary 14% fee only on successful creator payments whose `paidAt` timestamp falls inside the half-open interval `[trialStartedAt, trialEndsAt)`.
-- The fee is not a permanent payment surcharge and is not applied to other platform plans.
-- Refunds reduce the net commission base. Duplicate payment events must not create duplicate fee entries.
-- The commission calculation retains the original sale currency. In particular, an XTR-denominated fee is not silently treated as RUB: the conversion rule and collection route must be explicitly agreed and disclosed before an XTR commission can be invoiced.
-- Creator Stars remain in the creator's Telegram balance. SubPilot records a separate receivable and collects it through its own approved billing flow; it does not debit or control the creator's Stars balance.
-- The current payment package contains a decimal-safe introductory commission calculator. Persistent offer activation, an idempotent commission ledger, refund adjustments, invoice collection and the workspace UI remain separate implementation steps.
+The **Start Without Upfront Cost** offer (seven days followed by a 14% commission) is retained as an isolated commercial experiment and is not part of the default launch pricing or creator checkout flow:
+- The primary launch model is fixed workspace billing; there is no default SubPilot percentage on creator transactions.
+- The seven-day/14% calculator and related schema/ledger groundwork are dormant experimental components. They must not be invoked from the normal payment success path.
+- Do not activate the offer, create receivables or collect a fee until the product terms, legal model, eligible merchant/payment scenarios, currency treatment and collection mechanism have been reviewed and explicitly approved.
+- In particular, never infer a RUB value from an XTR amount and never debit or control a creator's Telegram Stars balance.
 
 Platform plan limits are applied to workspaces, not to an individual creator's content transactions. Creator payments, platform subscription payments and platform commission receivables remain separate accounting domains.
 
