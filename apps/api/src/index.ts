@@ -5,6 +5,7 @@ import type { Bot } from "grammy";
 import { prisma } from "@subpilot/database";
 import { decryptSecret } from "@subpilot/security";
 import { handleProjectBotUpdate } from "./project-bot-updates.js";
+import { startSubscriptionLifecycleWorker } from "./subscription-lifecycle.js";
 
 const app = Fastify({
   logger: {
@@ -93,8 +94,11 @@ app.post<{ Params: { botId: string } }>("/webhooks/telegram/:botId", async (requ
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
+const stopSubscriptionLifecycle = startSubscriptionLifecycleWorker();
+
 const shutdown = async (signal: string): Promise<void> => {
   app.log.info({ signal }, "Shutting down SubPilot API");
+  stopSubscriptionLifecycle();
   await app.close();
   await prisma.$disconnect();
   process.exit(0);
