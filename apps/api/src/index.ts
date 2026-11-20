@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import Fastify from "fastify";
 import type { Bot } from "grammy";
 import { prisma } from "@subpilot/database";
@@ -7,6 +7,176 @@ import { decryptSecret } from "@subpilot/security";
 import { handleProjectBotUpdate } from "./project-bot-updates.js";
 import { startSubscriptionLifecycleWorker } from "./subscription-lifecycle.js";
 import { resolveTelegramUpdateSequenceEpoch } from "./telegram-update-order.js";
+
+const TELEGRAM_WEBHOOK_LEASE_TTL_MS = 5 * 60_000;
+const TELEGRAM_WEBHOOK_LEASE_HEARTBEAT_MS = 60_000;
+
+async function acquireTelegramWebhookLease(projectBotId: string, leaseId: string): Promise<boolean> {
+  const key = "telegram-webhook:" + projectBotId;
+  const now = new Date();
+  const lockedUntil = new Date(now.getTime() + TELEGRAM_WEBHOOK_LEASE_TTL_MS);
+  const acquired = await prisma.$queryRaw<Array<{ key: string }>>`
+    INSERT INTO "WorkerLease" ("key", "leaseId", "lockedUntil", "createdAt", "updatedAt")
+    VALUES (${key}, ${leaseId}, ${lockedUntil}, ${now}, ${now})
+    ON CONFLICT ("key") DO UPDATE
+      SET "leaseId" = EXCLUDED."leaseId",
+          "lockedUntil" = EXCLUDED."lockedUntil",
+          "updatedAt" = EXCLUDED."updatedAt"
+      WHERE "WorkerLease"."lockedUntil" <= ${now}
+    RETURNING "key"
+  `;
+  return acquired.length === 1;
+}
+
+async function renewTelegramWebhookLease(projectBotId: string, leaseId: string): Promise<boolean> {
+  const renewed = await prisma.workerLease.updateMany({
+    where: { key: "telegram-webhook:" + projectBotId, leaseId },
+    data: { lockedUntil: new Date(Date.now() + TELEGRAM_WEBHOOK_LEASE_TTL_MS) }
+  });
+  return renewed.count === 1;
+}
+
+async function releaseTelegramWebhookLease(projectBotId: string, leaseId: string): Promise<void> {
+  await prisma.workerLease.deleteMany({
+    where: { key: "telegram-webhook:" + projectBotId, leaseId }
+  });
+}
+
+type WebhookProcessingResult = "PROCESSED" | "DUPLICATE" | "BUSY";
+
+async function processProjectBotWebhookUpdate(input: {
+  projectBotId: string;
+  projectId: string;
+  botToken: string;
+  update: TelegramUpdate;
+}): Promise<WebhookProcessingResult> {
+  const { projectBotId, projectId, botToken, update } = input;
+  const updateId = update.update_id;
+  const updateType = Object.keys(update).find((key) => key !== "update_id") ?? "unknown";
+  const leaseId = randomUUID();
+
+  if (!await acquireTelegramWebhookLease(projectBotId, leaseId)) return "BUSY";
+
+  let leaseOwned = true;
+  const heartbeat = setInterval(() => {
+    void renewTelegramWebhookLease(projectBotId, leaseId)
+      .then((renewed) => {
+        if (!renewed) leaseOwned = false;
+      })
+      .catch(() => {
+        leaseOwned = false;
+      });
+  }, TELEGRAM_WEBHOOK_LEASE_HEARTBEAT_MS);
+  heartbeat.unref?.();
+
+  let webhookRecordId: string | null = null;
+  let sequenceEpoch = 0;
+
+  try {
+    const botState = await prisma.projectBot.findUnique({
+      where: { id: projectBotId },
+      select: { updateSequenceEpoch: true, lastUpdateId: true, lastUpdateAt: true }
+    });
+    if (!botState) throw new Error("Project bot disappeared while processing a Telegram update.");
+
+    const now = new Date();
+    sequenceEpoch = resolveTelegramUpdateSequenceEpoch(
+      botState.updateSequenceEpoch,
+      botState.lastUpdateAt,
+      now
+    );
+    const nextLastUpdateId = sequenceEpoch !== botState.updateSequenceEpoch ||
+      botState.lastUpdateId === null ||
+      BigInt(updateId) > botState.lastUpdateId
+      ? BigInt(updateId)
+      : botState.lastUpdateId;
+
+    await prisma.projectBot.update({
+      where: { id: projectBotId },
+      data: {
+        updateSequenceEpoch: sequenceEpoch,
+        lastUpdateId: nextLastUpdateId,
+        lastUpdateAt: now
+      }
+    });
+
+    const unique = {
+      projectBotId_sequenceEpoch_updateId: {
+        projectBotId,
+        sequenceEpoch,
+        updateId
+      }
+    };
+    const previous = await prisma.telegramWebhookUpdate.findUnique({
+      where: unique,
+      select: { id: true, processedAt: true }
+    });
+    if (previous?.processedAt) return "DUPLICATE";
+
+    const record = await prisma.telegramWebhookUpdate.upsert({
+      where: unique,
+      create: {
+        projectBotId,
+        sequenceEpoch,
+        updateId,
+        updateType
+      },
+      update: {
+        attempts: { increment: 1 },
+        lastError: null,
+        receivedAt: now
+      },
+      select: { id: true }
+    });
+    webhookRecordId = record.id;
+
+    await handleProjectBotUpdate(
+      botToken,
+      projectId,
+      projectBotId,
+      update,
+      updateId,
+      sequenceEpoch
+    );
+    if (!leaseOwned) {
+      throw new Error("Telegram webhook processing lease was lost before acknowledgement.");
+    }
+
+    await prisma.telegramWebhookUpdate.update({
+      where: { id: record.id },
+      data: { processedAt: new Date(), lastError: null }
+    });
+    return "PROCESSED";
+  } catch (error) {
+    if (webhookRecordId) {
+      await prisma.telegramWebhookUpdate.updateMany({
+        where: { id: webhookRecordId, processedAt: null },
+        data: { lastError: error instanceof Error ? error.name : "UnknownError" }
+      }).catch(() => undefined);
+    } else {
+      await prisma.telegramWebhookUpdate.upsert({
+        where: {
+          projectBotId_sequenceEpoch_updateId: { projectBotId, sequenceEpoch, updateId }
+        },
+        create: {
+          projectBotId,
+          sequenceEpoch,
+          updateId,
+          updateType,
+          lastError: error instanceof Error ? error.name : "UnknownError"
+        },
+        update: {
+          attempts: { increment: 1 },
+          lastError: error instanceof Error ? error.name : "UnknownError"
+        }
+      }).catch(() => undefined);
+    }
+    throw error;
+  } finally {
+    clearInterval(heartbeat);
+    await releaseTelegramWebhookLease(projectBotId, leaseId).catch(() => undefined);
+  }
+}
 
 const app = Fastify({
   logger: {
@@ -36,7 +206,6 @@ app.get("/ready", async (_request, reply) => {
 
 app.post<{ Params: { botId: string } }>("/webhooks/telegram/:botId", async (request, reply) => {
   const { botId } = request.params;
-  let attemptedUpdate: { projectBotId: string; updateId: number; updateType: string } | undefined;
 
   if (!/^\d{5,20}$/.test(botId)) {
     return reply.code(400).send({ error: "Invalid bot identifier" });
@@ -84,144 +253,17 @@ app.post<{ Params: { botId: string } }>("/webhooks/telegram/:botId", async (requ
     if (!Number.isSafeInteger(update.update_id) || update.update_id < 0) {
       return reply.code(400).send({ error: "Invalid Telegram update identifier" });
     }
-    attemptedUpdate = {
+    const outcome = await processProjectBotWebhookUpdate({
       projectBotId: projectBot.id,
-      updateId: update.update_id,
-      updateType: Object.keys(update).find((key) => key !== "update_id") ?? "unknown"
-    };
-
-    const updateId = BigInt(update.update_id);
-    const processed = await prisma.$transaction(async (tx) => {
-      // Serialize a bot's updates across API replicas. Telegram's update_id is
-      // still used per stateful entity below; older payment/message updates are
-      // not discarded merely because a newer unrelated update arrived first.
-      const locked = await tx.$queryRaw<Array<{ id: string }>>`
-        SELECT "id" FROM "ProjectBot" WHERE "id" = ${projectBot.id} FOR UPDATE
-      `;
-      if (locked.length !== 1) {
-        throw new Error("Project bot disappeared while processing a Telegram update.");
-      }
-
-      const botState = await tx.projectBot.findUnique({
-        where: { id: projectBot.id },
-        select: { lastUpdateId: true, lastUpdateAt: true, updateSequenceEpoch: true }
-      });
-      if (!botState) {
-        throw new Error("Project bot update cursor could not be loaded.");
-      }
-
-      const now = new Date();
-      const sequenceEpoch = resolveTelegramUpdateSequenceEpoch(
-        botState.updateSequenceEpoch,
-        botState.lastUpdateAt,
-        now
-      );
-      const nextLastUpdateId = sequenceEpoch !== botState.updateSequenceEpoch ||
-        botState.lastUpdateId === null ||
-        updateId > botState.lastUpdateId
-        ? updateId
-        : botState.lastUpdateId;
-
-      const unique = {
-        projectBotId_sequenceEpoch_updateId: {
-          projectBotId: projectBot.id,
-          sequenceEpoch,
-          updateId: update.update_id
-        }
-      };
-      const previous = await tx.telegramWebhookUpdate.findUnique({
-        where: unique,
-        select: { id: true, processedAt: true }
-      });
-      if (previous?.processedAt) return false;
-
-      const webhookRecord = await tx.telegramWebhookUpdate.upsert({
-        where: unique,
-        create: {
-          projectBotId: projectBot.id,
-          sequenceEpoch,
-          updateId: update.update_id,
-          updateType: Object.keys(update).find((key) => key !== "update_id") ?? "unknown"
-        },
-        update: {
-          attempts: { increment: 1 },
-          lastError: null,
-          receivedAt: now
-        },
-        select: { id: true }
-      });
-
-      await tx.projectBot.update({
-        where: { id: projectBot.id },
-        data: {
-          lastUpdateId: nextLastUpdateId,
-          lastUpdateAt: now,
-          updateSequenceEpoch: sequenceEpoch
-        }
-      });
-
-      await handleProjectBotUpdate(
-        botToken,
-        projectBot.projectId,
-        projectBot.id,
-        update,
-        update.update_id,
-        sequenceEpoch
-      );
-
-      await tx.telegramWebhookUpdate.update({
-        where: { id: webhookRecord.id },
-        data: { processedAt: new Date(), lastError: null }
-      });
-      return true;
-    }, { maxWait: 15_000, timeout: 60_000 });
-
-    return reply.code(200).send({ ok: true, duplicate: !processed });
-  } catch (error) {
-    if (attemptedUpdate) {
-      try {
-        const state = await prisma.projectBot.findUnique({
-          where: { id: attemptedUpdate.projectBotId },
-          select: { updateSequenceEpoch: true, lastUpdateAt: true }
-        });
-        if (state) {
-          const sequenceEpoch = resolveTelegramUpdateSequenceEpoch(
-            state.updateSequenceEpoch,
-            state.lastUpdateAt,
-            new Date()
-          );
-          const unique = {
-            projectBotId_sequenceEpoch_updateId: {
-              projectBotId: attemptedUpdate.projectBotId,
-              sequenceEpoch,
-              updateId: attemptedUpdate.updateId
-            }
-          };
-          const prior = await prisma.telegramWebhookUpdate.findUnique({
-            where: unique,
-            select: { id: true, processedAt: true }
-          });
-          if (!prior?.processedAt) {
-            await prisma.telegramWebhookUpdate.upsert({
-              where: unique,
-              create: {
-                projectBotId: attemptedUpdate.projectBotId,
-                sequenceEpoch,
-                updateId: attemptedUpdate.updateId,
-                updateType: attemptedUpdate.updateType,
-                lastError: error instanceof Error ? error.name : "UnknownError"
-              },
-              update: {
-                attempts: { increment: 1 },
-                lastError: error instanceof Error ? error.name : "UnknownError"
-              }
-            });
-          }
-        }
-      } catch {
-        // Keep the webhook retry response even when failure bookkeeping is unavailable.
-      }
+      projectId: projectBot.projectId,
+      botToken,
+      update
+    });
+    if (outcome === "BUSY") {
+      return reply.code(503).send({ error: "Another update for this bot is still processing; Telegram should retry." });
     }
+    return reply.code(200).send({ ok: true, duplicate: outcome === "DUPLICATE" });
+  } catch (error) {
     // Never log the request body, bot token or Telegram webhook secret.
     request.log.error(
       { errorName: error instanceof Error ? error.name : "UnknownError" },
