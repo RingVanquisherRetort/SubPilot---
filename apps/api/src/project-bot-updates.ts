@@ -13,6 +13,7 @@ type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
 const MAX_STARS_AMOUNT = 10_000;
 const INVITE_LIFETIME_SECONDS = 24 * 60 * 60;
+const PENDING_PAYMENT_TTL_MS = 24 * 60 * 60 * 1000;
 
 async function requirePrivateBuyerChat(ctx: Context): Promise<boolean> {
   if (ctx.chat?.type === "private") return true;
@@ -156,7 +157,8 @@ async function createPurchaseInvoice(
         customerId: customer.id,
         subscriptionId: subscription.id,
         provider: "TELEGRAM_STARS",
-        status: "PENDING"
+        status: "PENDING",
+        createdAt: { gt: new Date(now.getTime() - PENDING_PAYMENT_TTL_MS) }
       },
       orderBy: { createdAt: "desc" },
       take: 10
@@ -570,8 +572,9 @@ async function processSuccessfulStarsPayment(
     const updated = await tx.payment.updateMany({
       where: {
         id: payment.id,
-        status: "PENDING",
-        provider: "TELEGRAM_STARS"
+        status: { in: ["PENDING", "CANCELLED"] },
+        provider: "TELEGRAM_STARS",
+        providerPaymentId: null
       },
       data: {
         status: "SUCCEEDED",
