@@ -2265,6 +2265,30 @@ export function createControlBot(token: string): Bot {
     }
   });
 
+  bot.command("testnotifications", async (ctx) => {
+    if (ctx.chat.type !== "private" || !ctx.from) {
+      await ctx.reply("Запустите тест в личном чате с центральным ботом SubPilot.");
+      return;
+    }
+
+    try {
+      await upsertTelegramUser(ctx);
+      const samples = [
+        "🧪 Тест 1/4 — Новый подписчик\nПроект: «Тестовый проект»\nПодписчик: Демо-покупатель\nТариф: «Тестовый тариф»\nОплата: 100 ⭐",
+        "🧪 Тест 2/4 — До окончания 3 дня\nПроект: «Тестовый проект»\nТариф: «Тестовый тариф»\nОкончание: через 3 дня",
+        "🧪 Тест 3/4 — До окончания 1 день\nПроект: «Тестовый проект»\nТариф: «Тестовый тариф»\nОкончание: завтра",
+        "🧪 Тест 4/4 — Тариф завершён\nПроект: «Тестовый проект»\nТариф: «Тестовый тариф»\nДоступ: срок действия завершён"
+      ];
+
+      for (const sample of samples) {
+        await ctx.api.sendMessage(ctx.chat.id, sample);
+      }
+    } catch (error) {
+      console.error("Notification smoke test failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось отправить тестовые уведомления. Проверьте доступность Telegram Bot API.");
+    }
+  });
+
   bot.command("help", async (ctx) => {
     await ctx.reply(
       "SubPilot — управление платными Telegram-сообществами.\n\n" +
@@ -2285,6 +2309,7 @@ export function createControlBot(token: string): Bot {
       "/createplan ID | Название | Цена | Дней — создать тариф\n" +
       "/plans ID — посмотреть тарифы\n" +
       "/payments ID — история платежей проекта\n" +
+      "/testnotifications — отправить четыре тестовых уведомления себе\n" +
       "/refundpayment ID — вернуть платёж Stars\n" +
       "/chats ID — список каналов и групп проекта\n" +
       "/linkchat PLAN_ID CHAT_ID — привязать площадку к тарифу\n" +
