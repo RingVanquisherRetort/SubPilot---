@@ -3,6 +3,8 @@ import { test } from "node:test";
 import {
   PaymentProviderRegistry,
   calculateIntroductoryCommission,
+  getPaymentProviderAvailability,
+  listPaymentProviderAvailability,
   evaluatePaymentEligibility,
   normalizeDecimalAmount,
   type PaymentProviderAdapter
@@ -188,4 +190,82 @@ test("commission calculator uses decimal-safe rounding and validates refunds", (
     }),
     /cannot exceed/
   );
+});
+
+
+test("Russian individual creator can select Stars for Telegram channel access", () => {
+  const options = listPaymentProviderAvailability({
+    countryCode: "RU",
+    merchantType: "INDIVIDUAL",
+    productType: "TELEGRAM_CHANNEL_ACCESS",
+    surface: "TELEGRAM_BOT",
+    telegramTpaRelated: true
+  });
+
+  const available = options.filter((option) => option.available);
+  assert.deepEqual(available.map((option) => option.provider), ["TELEGRAM_STARS"]);
+
+  const cryptoPay = options.find((option) => option.provider === "CRYPTO_PAY");
+  assert.equal(cryptoPay?.available, false);
+  assert.equal(cryptoPay?.reason, "PRODUCT_POLICY_BLOCKED");
+});
+
+test("YooMoney and Crypto Pay are research candidates for an individual, not enabled adapters", () => {
+  const common = {
+    countryCode: "RU",
+    merchantType: "INDIVIDUAL" as const,
+    productType: "DIGITAL_GOODS_OR_SERVICES" as const,
+    surface: "INDEPENDENT_WEB" as const,
+    telegramTpaRelated: false
+  };
+
+  const yooMoney = getPaymentProviderAvailability({ ...common, provider: "YOOMONEY" });
+  const cryptoPay = getPaymentProviderAvailability({ ...common, provider: "CRYPTO_PAY" });
+
+  assert.equal(yooMoney.available, false);
+  assert.equal(yooMoney.reason, "INTEGRATION_NOT_READY");
+  assert.equal(cryptoPay.available, false);
+  assert.equal(cryptoPay.reason, "INTEGRATION_NOT_READY");
+});
+
+test("individual creators are not shown merchant-only providers as eligible", () => {
+  const result = getPaymentProviderAvailability({
+    provider: "YOOKASSA",
+    countryCode: "RU",
+    merchantType: "INDIVIDUAL",
+    productType: "PHYSICAL_GOODS_OR_SERVICES",
+    surface: "INDEPENDENT_WEB",
+    telegramTpaRelated: false
+  });
+
+  assert.equal(result.available, false);
+  assert.equal(result.reason, "MERCHANT_TYPE_NOT_SUPPORTED_BY_REFERENCE");
+});
+
+test("self-employed status allows research candidates but does not bypass rollout checks", () => {
+  const result = getPaymentProviderAvailability({
+    provider: "YOOKASSA",
+    countryCode: "RU",
+    merchantType: "SELF_EMPLOYED",
+    productType: "PHYSICAL_GOODS_OR_SERVICES",
+    surface: "INDEPENDENT_WEB",
+    telegramTpaRelated: false
+  });
+
+  assert.equal(result.available, false);
+  assert.equal(result.reason, "INTEGRATION_NOT_READY");
+});
+
+test("provider catalog does not override Telegram Stars policy for digital access", () => {
+  const result = getPaymentProviderAvailability({
+    provider: "YOOMONEY",
+    countryCode: "RU",
+    merchantType: "INDIVIDUAL",
+    productType: "TELEGRAM_CHANNEL_ACCESS",
+    surface: "INDEPENDENT_WEB",
+    telegramTpaRelated: true
+  });
+
+  assert.equal(result.available, false);
+  assert.equal(result.reason, "PRODUCT_POLICY_BLOCKED");
 });
