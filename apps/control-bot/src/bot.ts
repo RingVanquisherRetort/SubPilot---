@@ -834,35 +834,69 @@ export function createControlBot(token: string): Bot {
         return;
       }
 
+      const publicApiUrl = (process.env.PUBLIC_API_URL ?? "").trim().replace(/\/+$/, "");
+      const webhookSecret = publicApiUrl ? randomBytes(32).toString("base64url") : null;
+      const webhookSecretHash = webhookSecret
+        ? createHash("sha256").update(webhookSecret).digest("hex")
+        : null;
+
       const botData = {
         username: botInfo.username ?? null,
         displayName: botInfo.first_name,
         tokenEncrypted: encryptSecret(botToken),
+        webhookSecretHash,
         status: "PENDING" as const,
         lastVerifiedAt: new Date()
       };
 
+      let savedProjectBotId: string;
+
       if (existingBot) {
-        await prisma.projectBot.update({
+        const saved = await prisma.projectBot.update({
           where: { id: existingBot.id },
           data: botData
         });
+        savedProjectBotId = saved.id;
       } else {
-        await prisma.projectBot.create({
+        const saved = await prisma.projectBot.create({
           data: {
             projectId: project.id,
             telegramBotId,
             ...botData
           }
         });
+        savedProjectBotId = saved.id;
+      }
+
+      let webhookReady = false;
+
+      if (webhookSecret && publicApiUrl) {
+        const webhookUrl = `${publicApiUrl}/webhooks/telegram/${telegramBotId.toString()}`;
+        const configured = await candidateBot.api.setWebhook(webhookUrl, {
+          secret_token: webhookSecret,
+          allowed_updates: ["my_chat_member"]
+        });
+
+        if (!configured) {
+          throw new Error("Telegram did not confirm webhook configuration.");
+        }
+
+        await prisma.projectBot.update({
+          where: { id: savedProjectBotId },
+          data: { status: "ACTIVE" }
+        });
+        webhookReady = true;
       }
 
       await ctx.reply(
         "Бот проверен и сохранён.\n\n" +
         `Проект: ${project.name}\n` +
-        `Бот: @${botInfo.username ?? botInfo.first_name}\n\n` +
-        "Токен хранится в зашифрованном виде. Следующий этап — установка webhook и подключение каналов."
+        `Бот: @${botInfo.username ?? botInfo.first_name}\n` +
+        (webhookReady
+          ? "Webhook настроен. Теперь добавьте бота администратором в канал или группу — SubPilot обнаружит её автоматически."
+          : "Токен зашифрован и сохранён. Для автоматической работы укажите публичный HTTPS-адрес API в PUBLIC_API_URL и подключите webhook.")
       );
+
     } catch (error) {
       // Do not log the input message or token. Telegram error text is intentionally omitted.
       console.error("Control bot token verification failed:", error instanceof Error ? error.name : "UnknownError");
