@@ -76,9 +76,9 @@ async function sendRenewalReminders(now: Date): Promise<void> {
       dedupeKey: `subscription:${subscription.id}:owner:${field}`,
       eventType: isOneDayReminder ? "subscription_ending_1d" : "subscription_ending_3d",
       messageText:
-        `⏳ Скоро закончится тариф\\nПроект: «${subscription.project.name}»\\n` +
-        `Тариф: «${subscription.plan.title}»\\n` +
-        `Окончание: ${expiresAt.toLocaleString("ru-RU")}\\n` +
+        `⏳ Скоро закончится тариф\nПроект: «${subscription.project.name}»\n` +
+        `Тариф: «${subscription.plan.title}»\n` +
+        `Окончание: ${expiresAt.toLocaleString("ru-RU")}\n` +
         `Осталось примерно ${daysLeft} дн.`
     });
 
@@ -157,8 +157,8 @@ async function expireSubscriptions(now: Date): Promise<void> {
         dedupeKey: `subscription:${subscription.id}:owner:expired`,
         eventType: "subscription_expired",
         messageText:
-          `🔔 Срок тарифа закончился\\nПроект: «${subscription.project.name}»\\n` +
-          `Тариф: «${subscription.plan.title}»\\n` +
+          `🔔 Срок тарифа закончился\nПроект: «${subscription.project.name}»\n` +
+          `Тариф: «${subscription.plan.title}»\n` +
           "SubPilot запустил автоматическое отключение доступа."
       });
     }

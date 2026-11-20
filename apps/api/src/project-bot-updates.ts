@@ -405,9 +405,9 @@ async function processSuccessfulStarsPayment(
       dedupeKey: `payment:${payment.id}:new-subscriber`,
       eventType: "new_subscriber",
       messageText:
-        `🎉 Новый подписчик\\nПроект: «${payment.project.name}»\\n` +
-        `Подписчик: ${buyerName}\\nТариф: «${subscription.plan.title}»\\n` +
-        `Оплата: ${amountLabel}\\n` +
+        `🎉 Новый подписчик\nПроект: «${payment.project.name}»\n` +
+        `Подписчик: ${buyerName}\nТариф: «${subscription.plan.title}»\n` +
+        `Оплата: ${amountLabel}\n` +
         (endsAt ? `Доступ до: ${endsAt.toLocaleString("ru-RU")}` : "Срок действия: без ограничения")
     });
   }
