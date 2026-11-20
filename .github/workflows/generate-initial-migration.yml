@@ -1,0 +1,55 @@
+name: Generate initial Prisma migration
+
+on:
+  push:
+    branches: ["feat/subscription-lifecycle-ui"]
+    paths: [".github/workflows/generate-initial-migration.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: feat/subscription-lifecycle-ui
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Generate baseline SQL from the full Prisma schema
+        working-directory: packages/database
+        env:
+          DATABASE_URL: postgresql://subpilot:subpilot_dev_password@localhost:5432/subpilot?schema=public
+        run: |
+          mkdir -p prisma/migrations/0_init
+          pnpm exec prisma migrate diff --from-empty --to-schema prisma/schema.prisma --script --config prisma.config.ts > prisma/migrations/0_init/migration.sql
+          printf 'provider = "postgresql"\n' > prisma/migrations/migration_lock.toml
+          test -s prisma/migrations/0_init/migration.sql
+
+      - name: Commit generated migration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/database/prisma/migrations
+          if git diff --cached --quiet; then
+            echo "No migration changes to commit."
+            exit 0
+          fi
+          git commit -m "db: add initial Prisma baseline migration"
+          git push origin HEAD:feat/subscription-lifecycle-ui
