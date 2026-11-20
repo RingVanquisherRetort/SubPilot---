@@ -306,7 +306,6 @@ async function createPurchaseInvoice(
       "Используйте уже отправленное сообщение для оплаты или обратитесь в /paysupport."
     );
   }
-  }
 }
 
 async function validatePreCheckout(
