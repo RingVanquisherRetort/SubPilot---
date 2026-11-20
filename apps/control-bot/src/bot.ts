@@ -2,11 +2,27 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { Bot, InlineKeyboard, type Context } from "grammy";
 import { prisma } from "@subpilot/database";
 import { decryptSecret, encryptSecret } from "@subpilot/security";
+import {
+  listPaymentProviderAvailability,
+  type CreatorMerchantType
+} from "@subpilot/payments";
 
 const MANAGER_ROLES = ["OWNER", "ADMIN", "MANAGER"] as const;
 const ADMIN_ROLES = ["OWNER", "ADMIN"] as const;
 const BOT_TOKEN_PATTERN = /^\d{5,15}:[A-Za-z0-9_-]{20,}$/;
 const BOT_TOKEN_TTL_MS = 5 * 60 * 1000;
+const MERCHANT_TYPE_CHOICES = [
+  { key: "PERSON", value: "INDIVIDUAL", label: "Физическое лицо" },
+  { key: "SELF", value: "SELF_EMPLOYED", label: "Самозанятый" },
+  { key: "IP", value: "INDIVIDUAL_ENTREPRENEUR", label: "Индивидуальный предприниматель" },
+  { key: "LEGAL", value: "LEGAL_ENTITY", label: "Юридическое лицо" }
+] as const;
+const MERCHANT_TYPE_LABELS: Record<CreatorMerchantType, string> = {
+  INDIVIDUAL: "Физическое лицо",
+  SELF_EMPLOYED: "Самозанятый",
+  INDIVIDUAL_ENTREPRENEUR: "Индивидуальный предприниматель",
+  LEGAL_ENTITY: "Юридическое лицо"
+};
 
 type TelegramUser = Awaited<ReturnType<typeof upsertTelegramUser>>;
 type PendingBotConnection = {
@@ -161,7 +177,14 @@ async function canAccessProject(
         }
       }
     },
-    select: { id: true, name: true, workspaceId: true, defaultCurrency: true }
+    select: {
+      id: true,
+      name: true,
+      workspaceId: true,
+      defaultCurrency: true,
+      countryCode: true,
+      merchantType: true
+    }
   });
 }
 
@@ -380,7 +403,9 @@ export function createControlBot(token: string): Bot {
       .text("➕ Создать тариф", `ui:createplan:${projectId}`)
       .row()
       .text("📣 Каналы и группы", `ui:chats:${projectId}`)
-      .text("💳 Платежи", `ui:payments:${projectId}`)
+      .row()
+      .text("💳 Способы оплаты", `ui:payment-methods:${projectId}`)
+      .text("📊 История платежей", `ui:payments:${projectId}`)
       .row()
       .text("⬅️ К проектам", "ui:projects");
     await ctx.editMessageText(
@@ -748,6 +773,107 @@ export function createControlBot(token: string): Bot {
     await ctx.editMessageText(
       lines.length ? `Каналы и группы «${project.name}»:\n\n${lines.join("\n")}` : "Пока нет подключённых каналов или групп. Добавьте бота проекта администратором в нужную площадку.",
       { reply_markup: backHomeKeyboard() }
+    );
+  });
+
+
+  bot.callbackQuery(/^ui:payment-methods:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const projectId = ctx.match[1];
+    if (!projectId) return;
+    const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
+    if (!project) {
+      await ctx.reply("Проект не найден или у вас нет доступа.");
+      return;
+    }
+
+    const options = listPaymentProviderAvailability({
+      countryCode: project.countryCode,
+      merchantType: project.merchantType,
+      productType: "TELEGRAM_CHANNEL_ACCESS",
+      surface: "TELEGRAM_BOT",
+      telegramTpaRelated: true
+    });
+    const enabled = options.filter((option) => option.available);
+    const enabledLines = enabled.map((option) => `✅ ${option.title}`);
+    const profileLabel = MERCHANT_TYPE_LABELS[project.merchantType];
+
+    const keyboard = new InlineKeyboard()
+      .text("👤 Изменить статус автора", `ui:merchant-type:${projectId}`)
+      .row()
+      .text("⬅️ К проекту", `ui:project:${projectId}`);
+
+    await ctx.editMessageText(
+      `💳 Способы оплаты проекта «${project.name}»\\n\\n` +
+      `Профиль автора: ${profileLabel}\\n\\n` +
+      `Для платного доступа к Telegram-каналам и группам сейчас доступно:\\n` +
+      `${enabledLines.join("\\n") || "Пока нет доступных способов оплаты."}\\n\\n` +
+      "Для цифрового доступа, продаваемого через Telegram-бота, Telegram требует оплату Stars. " +
+      "Внешние провайдеры и ручные переводы нельзя включать в этот сценарий.\\n\\n" +
+      "Статус автора нужен для подбора будущих интеграций. Он не заменяет проверку и одобрение со стороны платёжного провайдера.",
+      { reply_markup: keyboard }
+    );
+  });
+
+  bot.callbackQuery(/^ui:merchant-type:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const projectId = ctx.match[1];
+    if (!projectId) return;
+    const project = await canAccessProject(projectId, user.id, MANAGER_ROLES);
+    if (!project) {
+      await ctx.reply("Изменять профиль автора могут только владелец или менеджер проекта.");
+      return;
+    }
+
+    const keyboard = new InlineKeyboard();
+    for (const choice of MERCHANT_TYPE_CHOICES) {
+      const selected = project.merchantType === choice.value ? " ✓" : "";
+      keyboard.text(
+        `${choice.label}${selected}`.slice(0, 60),
+        `ui:merchant:${projectId}:${choice.key}`
+      ).row();
+    }
+    keyboard.text("⬅️ Назад", `ui:payment-methods:${projectId}`);
+
+    await ctx.editMessageText(
+      "Укажите статус автора проекта. Он используется только для подбора подходящих способов оплаты. " +
+      "Провайдер отдельно проверяет владельца аккаунта и принимает решение о подключении.\\n\\n" +
+      `Текущий статус: ${MERCHANT_TYPE_LABELS[project.merchantType]}`,
+      { reply_markup: keyboard }
+    );
+  });
+
+  bot.callbackQuery(/^ui:merchant:([^:]+):(PERSON|SELF|IP|LEGAL)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const projectId = ctx.match[1];
+    const key = ctx.match[2];
+    if (!projectId || !key) return;
+    const project = await canAccessProject(projectId, user.id, MANAGER_ROLES);
+    if (!project) {
+      await ctx.reply("Изменять профиль автора могут только владелец или менеджер проекта.");
+      return;
+    }
+    const choice = MERCHANT_TYPE_CHOICES.find((item) => item.key === key);
+    if (!choice) {
+      await ctx.reply("Неизвестный статус автора.");
+      return;
+    }
+
+    await prisma.project.updateMany({
+      where: { id: projectId },
+      data: { merchantType: choice.value }
+    });
+    await ctx.editMessageText(
+      `Статус автора обновлён: ${choice.label}.\\n\\nЭтот выбор помогает подобрать способы оплаты, но не заменяет проверку платёжного провайдера.`,
+      {
+        reply_markup: new InlineKeyboard()
+          .text("💳 Способы оплаты", `ui:payment-methods:${projectId}`)
+          .row()
+          .text("⬅️ К проекту", `ui:project:${projectId}`)
+      }
     );
   });
 
