@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Bot, InlineKeyboard, type Context } from "grammy";
 import { prisma } from "@subpilot/database";
-import { evaluatePaymentEligibility } from "@subpilot/payments";
+import {
+  evaluatePaymentEligibility,
+  matchesTelegramStarsRefundReceipt,
+  recalculateSubscriptionPeriod
+} from "@subpilot/payments";
 import { enqueueProjectOwnerNotification } from "./owner-notifications.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
@@ -649,6 +653,134 @@ async function processSuccessfulStarsPayment(
   await ctx.reply(messageParts.join("\n\n"));
 }
 
+async function processRefundedStarsPayment(
+  projectBotId: string,
+  ctx: Context
+): Promise<void> {
+  const message = ctx.message;
+  if (!message || !("refunded_payment" in message)) return;
+  if (ctx.chat.type !== "private") {
+    console.error("Telegram sent a Stars refund update outside a private buyer chat.");
+    return;
+  }
+
+  const receipt = message.refunded_payment;
+  const payment = await prisma.payment.findUnique({
+    where: { id: receipt.invoice_payload },
+    include: { customer: true }
+  });
+  if (!payment) {
+    console.error("Telegram Stars refund update did not match a SubPilot payment.");
+    return;
+  }
+
+  const metadata = payment.metadata && typeof payment.metadata === "object" && !Array.isArray(payment.metadata)
+    ? payment.metadata as Record<string, unknown>
+    : {};
+  const originProjectBotId = typeof metadata.projectBotId === "string" ? metadata.projectBotId : null;
+  const matches = matchesTelegramStarsRefundReceipt({
+    id: payment.id,
+    provider: payment.provider,
+    currency: payment.currency,
+    amount: payment.amount.toString(),
+    providerPaymentId: payment.providerPaymentId,
+    customerTelegramUserId: payment.customer.telegramUserId.toString(),
+    originProjectBotId
+  }, receipt, ctx.chat.id, projectBotId);
+
+  if (!matches) {
+    console.error("Telegram Stars refund update failed payment, buyer, bot, amount or charge validation.");
+    return;
+  }
+  if (payment.status !== "SUCCEEDED" && payment.status !== "REFUNDING" && payment.status !== "REFUNDED") {
+    console.error("Telegram Stars refund update matched a payment in an unexpected state:", payment.status);
+    return;
+  }
+
+  const refundedAt = new Date();
+  await prisma.$transaction(async (tx) => {
+    if (payment.subscriptionId) {
+      await tx.$queryRawUnsafe('SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE', payment.subscriptionId);
+    }
+
+    const updated = await tx.payment.updateMany({
+      where: {
+        id: payment.id,
+        provider: "TELEGRAM_STARS",
+        providerPaymentId: receipt.telegram_payment_charge_id,
+        status: { in: ["SUCCEEDED", "REFUNDING"] }
+      },
+      data: { status: "REFUNDED", refundedAt, refundLastError: null }
+    });
+
+    const refundEventKey = "telegram-stars-refund:" + receipt.telegram_payment_charge_id;
+    await tx.paymentWebhookEvent.upsert({
+      where: { dedupeKey: refundEventKey },
+      create: {
+        connectionId: null,
+        dedupeKey: refundEventKey,
+        providerEventId: receipt.telegram_payment_charge_id,
+        eventType: "telegram.stars.payment.refunded",
+        payload: {
+          paymentId: payment.id,
+          telegramUserId: payment.customer.telegramUserId.toString(),
+          telegramPaymentChargeId: receipt.telegram_payment_charge_id,
+          amount: payment.amount.toString(),
+          currency: payment.currency,
+          source: "telegram_refunded_payment_update"
+        },
+        processedAt: refundedAt
+      },
+      update: { processedAt: refundedAt }
+    });
+
+    if (updated.count !== 1 || !payment.subscriptionId) return;
+
+    const subscription = await tx.subscription.findUnique({
+      where: { id: payment.subscriptionId },
+      select: { status: true, startsAt: true, endsAt: true }
+    });
+    if (!subscription) return;
+
+    const remainingPayments = await tx.payment.findMany({
+      where: { subscriptionId: payment.subscriptionId, status: { in: ["SUCCEEDED", "REFUNDING"] } },
+      orderBy: [{ paidAt: "asc" }, { createdAt: "asc" }],
+      select: { paidAt: true, metadata: true }
+    });
+
+    if (remainingPayments.length === 0) {
+      await tx.subscription.update({
+        where: { id: payment.subscriptionId },
+        data: { status: "EXPIRED", endsAt: refundedAt, cancelledAt: null }
+      });
+      return;
+    }
+
+    const recalculated = recalculateSubscriptionPeriod(remainingPayments, {
+      startsAt: subscription.startsAt,
+      endsAt: subscription.endsAt
+    });
+    if (!recalculated.exact) {
+      const shouldExpire = subscription.status === "EXPIRED" ||
+        (subscription.endsAt !== null && subscription.endsAt <= refundedAt);
+      if (shouldExpire && subscription.status !== "EXPIRED") {
+        await tx.subscription.update({ where: { id: payment.subscriptionId }, data: { status: "EXPIRED" } });
+      }
+      return;
+    }
+
+    const isExpired = recalculated.endsAt !== null && recalculated.endsAt <= refundedAt;
+    await tx.subscription.update({
+      where: { id: payment.subscriptionId },
+      data: {
+        status: isExpired ? "EXPIRED" : "ACTIVE",
+        startsAt: recalculated.startsAt,
+        endsAt: recalculated.endsAt,
+        cancelledAt: null
+      }
+    });
+  });
+}
 /**
  * Processes a single update for a connected project bot.
  * No polling is started; updates are dispatched by the authenticated webhook route.
@@ -958,6 +1090,10 @@ export async function handleProjectBotUpdate(
 
   projectBot.on("message:successful_payment", async (ctx) => {
     await processSuccessfulStarsPayment(projectBot, projectId, ctx);
+  });
+
+  projectBot.on("message:refunded_payment", async (ctx) => {
+    await processRefundedStarsPayment(projectBotId, ctx);
   });
 
   projectBot.on("chat_member", async (ctx) => {

@@ -78,3 +78,43 @@ export function recalculateSubscriptionPeriod(
   }
   return { exact: true, startsAt, endsAt: periodEnd };
 }
+
+export interface TelegramStarsRefundReceipt {
+  invoice_payload: string;
+  currency: string;
+  total_amount: number;
+  telegram_payment_charge_id: string;
+}
+
+export interface TelegramStarsRefundPaymentSnapshot {
+  id: string;
+  provider: string;
+  currency: string;
+  amount: string;
+  providerPaymentId: string | null;
+  customerTelegramUserId: string;
+  originProjectBotId: string | null;
+}
+
+/** Validate a refund service message against the original project payment before changing local state. */
+export function matchesTelegramStarsRefundReceipt(
+  payment: TelegramStarsRefundPaymentSnapshot,
+  receipt: TelegramStarsRefundReceipt,
+  buyerChatId: number,
+  webhookProjectBotId: string
+): boolean {
+  const amount = Number(payment.amount);
+  return payment.provider === "TELEGRAM_STARS" &&
+    payment.currency === "XTR" &&
+    payment.id === receipt.invoice_payload &&
+    receipt.currency === "XTR" &&
+    Number.isSafeInteger(receipt.total_amount) &&
+    Number.isSafeInteger(amount) &&
+    amount > 0 &&
+    receipt.total_amount === amount &&
+    Boolean(payment.providerPaymentId) &&
+    payment.providerPaymentId === receipt.telegram_payment_charge_id &&
+    Number.isSafeInteger(buyerChatId) &&
+    BigInt(buyerChatId) === BigInt(payment.customerTelegramUserId) &&
+    (!payment.originProjectBotId || payment.originProjectBotId === webhookProjectBotId);
+}

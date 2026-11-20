@@ -143,11 +143,14 @@ export type {
 export {
   classifyTelegramRefundError,
   isTelegramInviteAlreadyRevoked,
-  recalculateSubscriptionPeriod
+  recalculateSubscriptionPeriod,
+  matchesTelegramStarsRefundReceipt
 } from "./telegram-refund.js";
 export type {
   TelegramRefundErrorClassification,
   PaidSubscriptionPeriod,
   SubscriptionPeriodFallback,
-  RecalculatedSubscriptionPeriod
+  RecalculatedSubscriptionPeriod,
+  TelegramStarsRefundReceipt,
+  TelegramStarsRefundPaymentSnapshot
 } from "./telegram-refund.js";

@@ -384,3 +384,27 @@ test("an indefinite remaining payment keeps the recalculated subscription open-e
   assert.equal(result.exact, true);
   assert.equal(result.endsAt, null);
 });
+
+test("refunded_payment service updates must match the original buyer, bot, invoice, charge, amount and currency", () => {
+  const payment = {
+    id: "payment_123",
+    provider: "TELEGRAM_STARS",
+    currency: "XTR",
+    amount: "499.00",
+    providerPaymentId: "charge_123",
+    customerTelegramUserId: "123456789",
+    originProjectBotId: "project_bot_1"
+  };
+  const receipt = {
+    invoice_payload: "payment_123",
+    currency: "XTR",
+    total_amount: 499,
+    telegram_payment_charge_id: "charge_123"
+  };
+
+  assert.equal(matchesTelegramStarsRefundReceipt(payment, receipt, 123456789, "project_bot_1"), true);
+  assert.equal(matchesTelegramStarsRefundReceipt(payment, { ...receipt, total_amount: 500 }, 123456789, "project_bot_1"), false);
+  assert.equal(matchesTelegramStarsRefundReceipt(payment, receipt, 123456780, "project_bot_1"), false);
+  assert.equal(matchesTelegramStarsRefundReceipt(payment, receipt, 123456789, "different_bot"), false);
+  assert.equal(matchesTelegramStarsRefundReceipt(payment, { ...receipt, telegram_payment_charge_id: "other_charge" }, 123456789, "project_bot_1"), false);
+});
