@@ -132,8 +132,8 @@ async function createPurchaseInvoice(
       plan.title.slice(0, 32),
       (plan.description ?? `Доступ к подписке «${plan.title}»`).slice(0, 255),
       pending.payment.id,
-      [{ label: plan.title.slice(0, 32), amount: amountStars }],
-      "XTR"
+      "XTR",
+      [{ label: plan.title.slice(0, 32), amount: amountStars }]
     );
   } catch (error) {
     await prisma.$transaction([
