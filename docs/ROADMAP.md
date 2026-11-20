@@ -28,21 +28,28 @@
 - [x] Automatically link new plans to currently active project chats.
 - [x] List, archive and restore plans.
 - [x] List connected channels/groups and link/unlink individual chats on a plan.
+- [x] Add buyer-facing project bot commands: /start, /plans and /buy.
+- [x] Create pending Telegram Stars invoice and subscription records.
+- [x] Validate pre-checkout buyer, amount, currency and payment status.
+- [x] Activate subscriptions only after successful_payment.
+- [x] Persist idempotent payment receipts.
+- [x] Issue one-person, 24-hour invite links for plan chats after verified payment.
+- [x] Track joins against subscription grants.
+- [x] Add payment history and Telegram Stars refund commands.
 - [ ] Edit plans and build an interactive plan editor.
-- Map plans to one or more connected chats.
-- Create checkout attempts.
-- Issue invite links after verified payment.
-- Track subscription periods and revoke access after expiry/cancellation.
-- Manual grants, manual revocation, trials and reminders.
+- [ ] Add scheduled expiry, renewal and access-revocation jobs.
+- [ ] Manual grants, manual revocation, trials and reminders.
 
 ## Stage 4 — Payments
 
-- Define a provider adapter contract.
-- Implement Telegram Stars for supported in-Telegram digital purchase flows.
-- Add external provider adapters only for compliant checkout scenarios and eligible merchants/products.
-- Verify webhook signatures and provider-side payment state.
-- Add idempotency, refunds, reconciliation and payment history.
-- Keep creator payments isolated from SubPilot platform billing.
+- [x] Define a shared provider adapter contract and registry in packages/payments.
+- [x] Implement one-time Telegram Stars checkout for in-Telegram digital access.
+- [x] Verify pre-checkout data and require Telegram successful_payment before activation.
+- [x] Add idempotent Stars receipt storage, payment history and refund handling.
+- [ ] Add scheduled reconciliation and retry handling for failed access delivery.
+- [ ] Implement external provider adapters only for compliant checkout scenarios and eligible merchants/products.
+- [ ] Add recurring Stars subscriptions (Telegram currently constrains recurring bot invoices to a 30-day period).
+- [ ] Keep creator payments isolated from SubPilot platform billing.
 
 Initial provider candidates for research: YooKassa, YooMoney, Prodamus, Robokassa, CloudPayments and Crypto Pay. Each requires a separate eligibility and integration assessment.
 
