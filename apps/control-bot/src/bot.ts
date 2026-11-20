@@ -2705,6 +2705,7 @@ export function createControlBot(token: string): Bot {
         const webhookUrl = `${publicApiUrl}/webhooks/telegram/${telegramBotId.toString()}`;
         const configured = await candidateBot.api.setWebhook(webhookUrl, {
           secret_token: webhookSecret,
+          max_connections: 1,
           allowed_updates: ["my_chat_member", "message", "pre_checkout_query", "chat_member", "callback_query"]
         });
 
