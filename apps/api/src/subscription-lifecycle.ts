@@ -87,7 +87,18 @@ async function retryPendingAccessDeliveries(now: Date): Promise<void> {
       ? metadata.chatIds.filter((value): value is string => typeof value === "string")
       : undefined;
     const bot = await getProjectBot(subscription.projectId, projectBotId);
-    if (!bot) continue;
+    if (!bot) {
+      await enqueueProjectOwnerNotification({
+        projectId: subscription.projectId,
+        dedupeKey: "subscription:" + subscription.id + ":access-delivery-bot-unavailable",
+        eventType: "access_delivery_bot_unavailable",
+        messageText:
+          "⚠️ Не удалось восстановить доступ по тарифу «" + subscription.plan.title +
+          "» в проекте «" + subscription.project.name +
+          "»: исходный бот недоступен или отключён. Восстановите подключение исходного бота, чтобы SubPilot повторил выдачу ссылок."
+      });
+      continue;
+    }
 
     try {
       const access = await deliverSubscriptionAccess(bot, subscription.id, chatIds);
@@ -283,8 +294,20 @@ async function expireSubscriptions(now: Date): Promise<void> {
       bot = await getProjectBot(subscription.projectId, originProjectBotId);
       bots.set(botKey, bot);
     }
-    if (!bot) continue;
+    if (!bot) {
+      await enqueueProjectOwnerNotification({
+        projectId: subscription.projectId,
+        dedupeKey: "subscription:" + subscription.id + ":access-revocation-bot-unavailable",
+        eventType: "access_revocation_bot_unavailable",
+        messageText:
+          "⚠️ Срок доступа по тарифу «" + subscription.plan.title +
+          "» в проекте «" + subscription.project.name +
+          "» завершился, но исходный бот недоступен. Восстановите подключение исходного бота, чтобы SubPilot смог отключить доступ."
+      });
+      continue;
+    }
 
+    const removalFailures: string[] = [];
     for (const grant of subscription.accessGrants) {
       const chatId = grant.connectedChat.telegramChatId.toString();
       let completed = true;
@@ -305,6 +328,9 @@ async function expireSubscriptions(now: Date): Promise<void> {
         }
       } catch (error) {
         completed = false;
+        removalFailures.push(
+          grant.connectedChat.title ?? grant.connectedChat.username ?? chatId
+        );
         console.error(
           "Could not revoke expired subscription access:",
           error instanceof Error ? error.name : "UnknownError"
@@ -317,6 +343,18 @@ async function expireSubscriptions(now: Date): Promise<void> {
           data: { revokedAt: now }
         });
       }
+    }
+
+    if (removalFailures.length > 0) {
+      await enqueueProjectOwnerNotification({
+        projectId: subscription.projectId,
+        dedupeKey: "subscription:" + subscription.id + ":access-revocation-pending",
+        eventType: "access_revocation_pending",
+        messageText:
+          "⚠️ SubPilot не смог полностью отключить истёкший доступ по тарифу «" +
+          subscription.plan.title + "» в проекте «" + subscription.project.name +
+          "». Проверьте права исходного бота и подключённые площадки: " + removalFailures.join(", ")
+      });
     }
 
     if (subscription.status === "ACTIVE") {
