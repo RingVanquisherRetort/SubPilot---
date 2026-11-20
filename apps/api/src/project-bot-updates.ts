@@ -88,16 +88,11 @@ async function createPurchaseInvoice(
       status: "ACTIVE",
       OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }]
     },
-    select: { id: true }
+    orderBy: { endsAt: "desc" }
   });
 
-  if (activeSubscription) {
-    await ctx.reply("У вас уже есть активная подписка на этот тариф.");
-    return;
-  }
-
   const pending = await prisma.$transaction(async (tx) => {
-    const subscription = await tx.subscription.create({
+    const subscription = activeSubscription ?? await tx.subscription.create({
       data: {
         projectId,
         customerId: customer.id,
@@ -328,12 +323,15 @@ async function processSuccessfulStarsPayment(
 
   const subscription = payment.subscription;
   const now = new Date();
+  const currentEnd = subscription.endsAt && subscription.endsAt > now
+    ? subscription.endsAt
+    : now;
   const expirationFromTelegram = receipt.subscription_expiration_date
     ? new Date(receipt.subscription_expiration_date * 1000)
     : null;
   const endsAt = expirationFromTelegram ??
     (subscription.plan.durationDays
-      ? new Date(now.getTime() + subscription.plan.durationDays * 24 * 60 * 60 * 1000)
+      ? new Date(currentEnd.getTime() + subscription.plan.durationDays * 24 * 60 * 60 * 1000)
       : null);
 
   await prisma.$transaction(async (tx) => {
@@ -355,8 +353,10 @@ async function processSuccessfulStarsPayment(
         where: { id: subscription.id },
         data: {
           status: "ACTIVE",
-          startsAt: now,
-          endsAt
+          startsAt: subscription.startsAt ?? now,
+          endsAt,
+          reminder3dAt: null,
+          reminder1dAt: null
         }
       });
 
