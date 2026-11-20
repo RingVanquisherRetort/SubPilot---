@@ -40,7 +40,8 @@ These items have been inspected in source; the table does not claim that every s
 | Buyer flow | Private-chat plan browsing, purchase terms, Stars invoice, /access and /paysupport flows are implemented. |
 | Payment lifecycle | Pre-checkout validation, successful-payment activation, receipt deduplication, refunds and refund reconciliation are implemented for Telegram Stars. Invoice dispatch is serialized under the checkout advisory lock, and payment events are bound to the originating project bot. |
 | Subscription lifecycle | Expiry, buyer reminders, retryable access delivery/revocation, owner notifications and PostgreSQL worker lease are implemented. Lease loss is handled fail-closed between lifecycle operations; a full lifecycle-worker competing-replica integration test remains open. |
-| Payment eligibility | Telegram digital access is restricted to Stars by the policy gate; provider catalog entries do not make an adapter live. |\n| Telegram webhooks | Project-bot webhook updates are serialized per bot with a PostgreSQL lease, recorded/deduplicated by update ID and sequence epoch, and protected against stale chat/member status updates. `setWebhook` uses `max_connections: 1` for newly configured project bots. |
+| Payment eligibility | Telegram digital access is restricted to Stars by the policy gate; provider catalog entries do not make an adapter live. |
+| Telegram webhooks | Project-bot webhook updates are serialized per bot with a PostgreSQL lease, recorded/deduplicated by update ID and sequence epoch, and protected against stale chat/member status updates. `setWebhook` uses `max_connections: 1` for newly configured project bots. |
 | Payment separation | Creator payments, workspace billing and commission entries have separate database models/ledgers. Platform billing models and the 7-day/14% calculator are schema/utility groundwork only; no runtime platform billing flow exists. |
 
 ## 3. Defects to repair
