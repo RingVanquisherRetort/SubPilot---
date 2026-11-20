@@ -5,6 +5,7 @@ import {
   classifyTelegramRefundError,
   isTelegramInviteAlreadyRevoked,
   recalculateSubscriptionPeriod,
+  matchesTelegramStarsRefundReceipt,
   calculateIntroductoryCommission,
   getPaymentProviderAvailability,
   listPaymentProviderAvailability,
