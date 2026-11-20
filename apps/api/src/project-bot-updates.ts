@@ -10,6 +10,7 @@ import { enqueueProjectOwnerNotification } from "./owner-notifications.js";
 import { hasRequiredSubscriptionChatRights } from "./telegram-chat-access.js";
 import { isPaymentFromProjectBot } from "./telegram-payment-origin.js";
 import { getInvoiceDispatchState } from "./telegram-invoice-state.js";
+import { getSubscriptionGrantChatIds } from "./subscription-grant-persistence.js";
 import { shouldProcessTelegramUpdate } from "./telegram-update-order.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
@@ -743,22 +744,23 @@ async function processSuccessfulStarsPayment(
         const chats = await tx.connectedChat.findMany({
           where: {
             projectId,
-            isActive: true,
             telegramChatId: { in: telegramChatIds }
           },
-          select: { id: true }
+          select: { id: true, isActive: true }
         });
-        connectedChatIds = chats.map((chat) => chat.id);
+        connectedChatIds = getSubscriptionGrantChatIds(chats);
       }
     } else {
       const planChats = await tx.creatorPlanChat.findMany({
-        where: {
-          creatorPlanId: currentSubscription.planId,
-          connectedChat: { isActive: true }
-        },
-        select: { connectedChatId: true }
+        where: { creatorPlanId: currentSubscription.planId },
+        select: {
+          connectedChatId: true,
+          connectedChat: { select: { isActive: true } }
+        }
       });
-      connectedChatIds = planChats.map((chat) => chat.connectedChatId);
+      connectedChatIds = getSubscriptionGrantChatIds(
+        planChats.map((chat) => ({ id: chat.connectedChatId, isActive: chat.connectedChat.isActive }))
+      );
     }
 
     if (connectedChatIds.length > 0) {
