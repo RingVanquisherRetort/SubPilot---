@@ -559,7 +559,6 @@ export function createControlBot(token: string): Bot {
   });
 
   bot.callbackQuery(/^p:ct:([^:]+):([^:]+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
     const planId = ctx.match[1];
     const chatId = ctx.match[2];
     if (!planId || !chatId) return;
@@ -590,6 +589,16 @@ export function createControlBot(token: string): Bot {
       }
     });
     if (existing) {
+      const activeLinkCount = await prisma.creatorPlanChat.count({
+        where: { creatorPlanId: planId, connectedChat: { isActive: true } }
+      });
+      if (activeLinkCount <= 1) {
+        await ctx.answerCallbackQuery({
+          text: "У тарифа должна оставаться хотя бы одна активная площадка.",
+          show_alert: true
+        });
+        return;
+      }
       await prisma.creatorPlanChat.delete({
         where: {
           creatorPlanId_connectedChatId: {
@@ -603,6 +612,7 @@ export function createControlBot(token: string): Bot {
         data: { creatorPlanId: planId, connectedChatId: chatId }
       });
     }
+    await ctx.answerCallbackQuery({ text: "Список площадок обновлён." });
 
     const [linked, chats] = await Promise.all([
       prisma.creatorPlanChat.findMany({
