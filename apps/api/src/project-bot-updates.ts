@@ -171,7 +171,7 @@ async function createPurchaseInvoice(
     });
 
     if (reusablePayment) {
-      return { payment: reusablePayment, subscription };
+      return { payment: reusablePayment, subscription, createdPayment: false };
     }
 
     const payment = await tx.payment.create({
@@ -200,7 +200,7 @@ async function createPurchaseInvoice(
       }
     });
 
-    return { payment, subscription };
+    return { payment, subscription, createdPayment: true };
   });
 
   const invoiceMetadata = pending.payment.metadata &&
@@ -230,16 +230,27 @@ async function createPurchaseInvoice(
       [{ label: invoiceTitle.slice(0, 32), amount: invoiceAmountStars }]
     );
   } catch (error) {
-    await prisma.$transaction([
-      prisma.payment.updateMany({
-        where: { id: pending.payment.id, status: "PENDING" },
-        data: { status: "FAILED" }
-      }),
-      prisma.subscription.updateMany({
-        where: { id: pending.subscription.id, status: "PENDING" },
-        data: { status: "CANCELLED", cancelledAt: new Date() }
-      })
-    ]);
+    if (pending.createdPayment) {
+      await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`subscription:${projectId}:${customer.id}:${plan.id}`}, 0))`;
+
+        const failed = await tx.payment.updateMany({
+          where: { id: pending.payment.id, status: "PENDING" },
+          data: { status: "FAILED" }
+        });
+        if (failed.count !== 1) return;
+
+        const remainingPendingPayments = await tx.payment.count({
+          where: { subscriptionId: pending.subscription.id, status: "PENDING" }
+        });
+        if (remainingPendingPayments === 0) {
+          await tx.subscription.updateMany({
+            where: { id: pending.subscription.id, status: "PENDING" },
+            data: { status: "CANCELLED", cancelledAt: new Date() }
+          });
+        }
+      });
+    }
 
     console.error(
       "Project bot could not create Telegram Stars invoice:",
