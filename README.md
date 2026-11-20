@@ -56,7 +56,7 @@ The following commands remain available as an advanced fallback:
 - `/createplan PROJECT_ID | Title | StarPrice | DurationDays` — create a Telegram Stars tariff. Use `0` for no fixed expiry.
 - `/plans PROJECT_ID` — list plans.
 - `/payments PROJECT_ID` — view recent payments.
-- `/refundpayment PAYMENT_ID` — issue a Telegram Stars refund and cancel the entitlement.
+- `/refundpayment PAYMENT_ID` — issue or reconcile a Telegram Stars refund; remaining paid subscription time is recalculated when payment snapshots allow it.
 - `/testnotifications` — send four sample lifecycle notifications to your own private chat with the central bot. This smoke test does not contact project owners or subscribers.
 
 The control bot deletes the BotFather token message on a best-effort basis. If the message remains visible, revoke the token in BotFather and issue a new one. Project-bot webhook activation requires `PUBLIC_API_URL` and a reachable HTTPS API.
