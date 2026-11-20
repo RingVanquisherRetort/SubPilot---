@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createLifecycleLeaseGuard } from "./lifecycle-lease-guard.js";
 import { Bot, InlineKeyboard } from "grammy";
 import { prisma } from "@subpilot/database";
 import { decryptSecret } from "@subpilot/security";
@@ -16,6 +17,7 @@ const BATCH_SIZE = 100;
 const LIFECYCLE_WORKER_LEASE_KEY = "subscription-lifecycle";
 const WORKER_LEASE_TTL_MS = 5 * 60_000;
 const WORKER_LEASE_HEARTBEAT_MS = 60_000;
+type LeaseOwnershipCheck = () => boolean;
 
 async function acquireLifecycleWorkerLease(leaseId: string): Promise<boolean> {
   const now = new Date();
@@ -47,7 +49,10 @@ async function releaseLifecycleWorkerLease(leaseId: string): Promise<void> {
   });
 }
 
-async function cancelStalePendingPayments(now: Date): Promise<void> {
+async function cancelStalePendingPayments(
+  now: Date,
+  isLeaseOwned: LeaseOwnershipCheck = () => true
+): Promise<void> {
   const cutoff = new Date(now.getTime() - PENDING_PAYMENT_TTL_MS);
   const stalePayments = await prisma.payment.findMany({
     where: {
@@ -61,6 +66,7 @@ async function cancelStalePendingPayments(now: Date): Promise<void> {
   });
 
   for (const payment of stalePayments) {
+    if (!isLeaseOwned()) return;
     await prisma.$transaction(async (tx) => {
       const cancelled = await tx.payment.updateMany({
         where: {
@@ -113,7 +119,10 @@ async function getProjectBot(projectId: string, projectBotId?: string): Promise<
   }
 }
 
-async function retryPendingAccessDeliveries(now: Date): Promise<void> {
+async function retryPendingAccessDeliveries(
+  now: Date,
+  isLeaseOwned: LeaseOwnershipCheck = () => true
+): Promise<void> {
   const due = await prisma.subscription.findMany({
     where: {
       status: "ACTIVE",
@@ -150,6 +159,7 @@ async function retryPendingAccessDeliveries(now: Date): Promise<void> {
   });
 
   for (const subscription of due) {
+    if (!isLeaseOwned()) return;
     const metadata = subscription.payments[0]?.metadata &&
       typeof subscription.payments[0].metadata === "object" &&
       !Array.isArray(subscription.payments[0].metadata)
@@ -162,6 +172,7 @@ async function retryPendingAccessDeliveries(now: Date): Promise<void> {
       ? metadata.chatIds.filter((value): value is string => typeof value === "string")
       : undefined;
     const bot = await getProjectBot(subscription.projectId, projectBotId);
+    if (!isLeaseOwned()) return;
     if (!bot) {
       await enqueueProjectOwnerNotification({
         projectId: subscription.projectId,
@@ -176,7 +187,8 @@ async function retryPendingAccessDeliveries(now: Date): Promise<void> {
     }
 
     try {
-      const access = await deliverSubscriptionAccess(bot, subscription.id, chatIds);
+      const access = await deliverSubscriptionAccess(bot, subscription.id, chatIds, isLeaseOwned);
+      if (!isLeaseOwned()) return;
       if (access.links.length > 0 && access.failed.length === 0) {
         await bot.api.sendMessage(
           Number(subscription.customer.telegramUserId),
@@ -204,7 +216,10 @@ async function retryPendingAccessDeliveries(now: Date): Promise<void> {
   }
 }
 
-async function sendRenewalReminders(now: Date): Promise<void> {
+async function sendRenewalReminders(
+  now: Date,
+  isLeaseOwned: LeaseOwnershipCheck = () => true
+): Promise<void> {
   const threeDayLimit = new Date(now.getTime() + 3 * DAY_MS);
   const oneDayLimit = new Date(now.getTime() + DAY_MS);
 
@@ -241,6 +256,7 @@ async function sendRenewalReminders(now: Date): Promise<void> {
   const bots = new Map<string, Bot | null>();
 
   for (const subscription of due) {
+    if (!isLeaseOwned()) return;
     const expiresAt = subscription.endsAt;
     if (!expiresAt) continue;
 
@@ -260,6 +276,8 @@ async function sendRenewalReminders(now: Date): Promise<void> {
         `Осталось примерно ${daysLeft} дн.`
     });
 
+    if (!isLeaseOwned()) return;
+
     const latestMetadata = subscription.payments[0]?.metadata &&
       typeof subscription.payments[0].metadata === "object" &&
       !Array.isArray(subscription.payments[0].metadata)
@@ -275,6 +293,8 @@ async function sendRenewalReminders(now: Date): Promise<void> {
       bots.set(botKey, bot);
     }
     if (!bot) continue;
+
+    if (!isLeaseOwned()) return;
 
     try {
       await bot.api.sendMessage(
@@ -302,7 +322,10 @@ async function sendRenewalReminders(now: Date): Promise<void> {
   }
 }
 
-async function expireSubscriptions(now: Date): Promise<void> {
+async function expireSubscriptions(
+  now: Date,
+  isLeaseOwned: LeaseOwnershipCheck = () => true
+): Promise<void> {
   const due = await prisma.subscription.findMany({
     where: {
       OR: [
@@ -334,6 +357,7 @@ async function expireSubscriptions(now: Date): Promise<void> {
   const bots = new Map<string, Bot | null>();
 
   for (const subscription of due) {
+    if (!isLeaseOwned()) return;
     let newlyExpired = false;
     if (subscription.status === "ACTIVE") {
       const expired = await prisma.subscription.updateMany({
@@ -384,6 +408,7 @@ async function expireSubscriptions(now: Date): Promise<void> {
 
     const removalFailures: string[] = [];
     for (const grant of subscription.accessGrants) {
+      if (!isLeaseOwned()) return;
       const chatId = grant.connectedChat.telegramChatId.toString();
       let completed = true;
 
@@ -391,6 +416,7 @@ async function expireSubscriptions(now: Date): Promise<void> {
         if (grant.inviteLink && grant.expiresAt > now) {
           try {
             await bot.api.revokeChatInviteLink(chatId, grant.inviteLink);
+            if (!isLeaseOwned()) return;
           } catch (error) {
             if (!isTelegramInviteAlreadyRevoked(error)) throw error;
           }
@@ -399,7 +425,9 @@ async function expireSubscriptions(now: Date): Promise<void> {
         if (grant.joinedAt) {
           const telegramUserId = Number(subscription.customer.telegramUserId);
           await bot.api.banChatMember(chatId, telegramUserId);
+          if (!isLeaseOwned()) return;
           await bot.api.unbanChatMember(chatId, telegramUserId, { only_if_banned: true });
+          if (!isLeaseOwned()) return;
         }
       } catch (error) {
         completed = false;
@@ -413,6 +441,7 @@ async function expireSubscriptions(now: Date): Promise<void> {
       }
 
       if (completed) {
+        if (!isLeaseOwned()) return;
         await prisma.subscriptionAccessGrant.updateMany({
           where: { id: grant.id, revokedAt: null },
           data: { revokedAt: now }
@@ -446,16 +475,19 @@ export async function runSubscriptionLifecycle(now = new Date()): Promise<void> 
   const leaseId = randomUUID();
   if (!await acquireLifecycleWorkerLease(leaseId)) return;
 
+  const leaseGuard = createLifecycleLeaseGuard();
   const heartbeat = setInterval(() => {
     void renewLifecycleWorkerLease(leaseId)
       .then((renewed) => {
         if (!renewed) {
-          console.error("Subscription lifecycle worker lost its PostgreSQL lease.");
+          leaseGuard.markLost();
+          console.error("Subscription lifecycle worker lost its PostgreSQL lease; the current pass will stop.");
         }
       })
       .catch((error: unknown) => {
+        leaseGuard.markLost();
         console.error(
-          "Could not renew subscription lifecycle worker lease:",
+          "Could not renew subscription lifecycle worker lease; ownership is now treated as lost:",
           error instanceof Error ? error.name : "UnknownError"
         );
       });
@@ -463,11 +495,15 @@ export async function runSubscriptionLifecycle(now = new Date()): Promise<void> 
   heartbeat.unref?.();
 
   try {
-    await cancelStalePendingPayments(now);
-    await retryPendingAccessDeliveries(now);
-    await sendRenewalReminders(now);
-    await expireSubscriptions(now);
-    await deliverPendingOwnerNotifications(now);
+    await cancelStalePendingPayments(now, leaseGuard.isOwned);
+    if (!leaseGuard.isOwned()) return;
+    await retryPendingAccessDeliveries(now, leaseGuard.isOwned);
+    if (!leaseGuard.isOwned()) return;
+    await sendRenewalReminders(now, leaseGuard.isOwned);
+    if (!leaseGuard.isOwned()) return;
+    await expireSubscriptions(now, leaseGuard.isOwned);
+    if (!leaseGuard.isOwned()) return;
+    await deliverPendingOwnerNotifications(now, leaseGuard.isOwned);
   } finally {
     clearInterval(heartbeat);
     await releaseLifecycleWorkerLease(leaseId).catch((error: unknown) => {
