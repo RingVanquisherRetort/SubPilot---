@@ -53,7 +53,19 @@ Whether funds settle directly to a creator or through a platform/marketplace arr
 
 ### SubPilot billing
 
-SubPilot sells its own plans through a separate billing domain and ledger. Platform payments must never be recorded as creator payments. Platform plan limits are applied to workspaces, not to an individual creator's content transactions.
+SubPilot sells its own plans and usage-based services through a separate billing domain and ledger. Platform payments and platform-fee receivables must never be recorded as creator payments.
+
+The optional **Start Without Upfront Cost** offer is a workspace-level introductory commercial offer:
+- The workspace owner explicitly selects and accepts the offer before activation.
+- The offer lasts seven calendar days from its persisted activation timestamp; creating additional projects does not restart it.
+- SubPilot accrues a temporary 14% fee only on successful creator payments whose `paidAt` timestamp falls inside the half-open interval `[trialStartedAt, trialEndsAt)`.
+- The fee is not a permanent payment surcharge and is not applied to other platform plans.
+- Refunds reduce the net commission base. Duplicate payment events must not create duplicate fee entries.
+- The commission calculation retains the original sale currency. In particular, an XTR-denominated fee is not silently treated as RUB: the conversion rule and collection route must be explicitly agreed and disclosed before an XTR commission can be invoiced.
+- Creator Stars remain in the creator's Telegram balance. SubPilot records a separate receivable and collects it through its own approved billing flow; it does not debit or control the creator's Stars balance.
+- The current payment package contains a decimal-safe introductory commission calculator. Persistent offer activation, an idempotent commission ledger, refund adjustments, invoice collection and the workspace UI remain separate implementation steps.
+
+Platform plan limits are applied to workspaces, not to an individual creator's content transactions. Creator payments, platform subscription payments and platform commission receivables remain separate accounting domains.
 
 ### Telegram and regional rules
 
