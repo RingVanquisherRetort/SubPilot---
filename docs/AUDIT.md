@@ -2,7 +2,7 @@
 
 **Audit branch:** `feat/subscription-lifecycle-ui`  
 **Repository:** `RingVanquisherRetort/SubPilot---`  
-**Audit snapshot:** `2f26350ba393d23371e928ed2bb84761226d35e2`  
+**Audit snapshot:** `0ab8463ed91677116096d9364460fd126efb6f53`  
 **Base branch:** `main` is intentionally untouched.  
 **Purpose:** close the previously requested implementation audit and repair existing behavior; this register is not a new feature roadmap.
 
@@ -56,6 +56,8 @@ These items have been inspected in source; the table does not claim that every s
 | AUD-006 | Resolved | Invoice dispatch records a start marker before calling Telegram, suppresses retries after ambiguous outcomes, and serializes concurrent dispatch claims with the same PostgreSQL advisory key used by checkout creation. The PostgreSQL test verified that three competing transactions produce one claim. | Implemented in `apps/api/src/project-bot-updates.ts`; state tests and PostgreSQL lock test pass. |
 | AUD-007 | Medium | Telegram `update_id` is not durably recorded or compared by project-bot webhook handlers. `chat_member` and `my_chat_member` state changes lack an explicit ordering guard; an older update processed late may overwrite newer membership state. | Add durable per-bot update idempotency/order handling and regression tests for duplicate/out-of-order member updates. Telegram documents `update_id` for ignoring repeated updates and restoring order: https://core.telegram.org/bots/api#update. |
 
+| AUD-008 | Resolved | Owner notifications could be queued and delivered to a project creator after that user had been removed from the workspace. This could disclose subscription/payment activity to a former teammate. | Recipients are checked against current workspace membership when queued and rechecked immediately before sending; queued notifications for removed members are marked terminal. `owner-notifications-policy.test.ts` covers owner, active creator, removed creator and de-duplication. |
+
 ## 4. Explicitly not implemented / not enabled
 
 | Area | Current status |
@@ -72,7 +74,7 @@ These items have been inspected in source; the table does not claim that every s
 
 ## 5. Test evidence and limitations
 
-- The validated code snapshot completed migrations against clean PostgreSQL, generated Prisma Client, passed TypeScript checks and passed 44 tests (44 pass, 0 fail), including a PostgreSQL advisory-lock concurrency test.
+- The validated code snapshot `0ab8463` completed migrations against clean PostgreSQL, generated Prisma Client, passed TypeScript checks and passed 48 tests (48 pass, 0 fail), including a PostgreSQL advisory-lock concurrency test.
 - `docs/AUDIT.md` and later documentation changes have their own CI runs; verify the latest branch head rather than reusing an earlier green run.
 - A green CI run validates the checks configured in `.github/workflows/ci.yml`; it does not prove live BotFather setup, actual Stars payment, Telegram chat permissions or end-to-end subscriber access behavior.
 - No production merge or deployment is authorized by this audit.
