@@ -2614,6 +2614,42 @@ export function createControlBot(token: string): Bot {
         return;
       }
 
+      if (existingBot?.status === "ACTIVE") {
+        // Same Telegram bot identity: a token refresh must not rotate the current
+        // webhook secret or mark a working bot as PENDING.
+        await prisma.projectBot.update({
+          where: { id: existingBot.id },
+          data: {
+            username: botInfo.username ?? null,
+            displayName: botInfo.first_name,
+            tokenEncrypted: encryptSecret(botToken),
+            lastVerifiedAt: new Date()
+          }
+        });
+
+        try {
+          await candidateBot.api.setMyCommands([
+            { command: "start", description: "Открыть меню подписок" },
+            { command: "plans", description: "Посмотреть тарифы" },
+            { command: "buy", description: "Оформить выбранный тариф" },
+            { command: "access", description: "Получить ссылки для вступления" },
+            { command: "terms", description: "Условия покупки" },
+            { command: "paysupport", description: "Поддержка по оплате и возвратам" }
+          ]);
+        } catch (error) {
+          console.warn(
+            "Project bot token was updated, but Telegram command hints could not be refreshed:",
+            error instanceof Error ? error.name : "UnknownError"
+          );
+        }
+
+        await ctx.reply(
+          "Действующий бот проекта повторно проверен. Новый токен зашифрован и сохранён. " +
+          "Текущие webhook и секрет webhook оставлены без изменений; перенос webhook на другой адрес API выполняется отдельно."
+        );
+        return;
+      }
+
       const publicApiUrl = (process.env.PUBLIC_API_URL ?? "").trim().replace(/\/+$/, "");
 
       if (publicApiUrl) {
@@ -2628,14 +2664,6 @@ export function createControlBot(token: string): Bot {
           await ctx.reply("Для webhook Telegram требуется публичный HTTPS-адрес. Текущая конфигурация бота не изменена.");
           return;
         }
-      }
-
-      if (existingBot?.status === "ACTIVE" && !publicApiUrl) {
-        await ctx.reply(
-          "Этот бот уже активен. PUBLIC_API_URL не настроен, поэтому текущая конфигурация webhook сохранена без изменений. " +
-          "Укажите публичный HTTPS-адрес API и повторите подключение, когда будете готовы обновлять webhook."
-        );
-        return;
       }
 
       const webhookSecret = publicApiUrl ? randomBytes(32).toString("base64url") : null;
