@@ -38,7 +38,11 @@ The API exposes `GET /health` and `GET /ready`. Project bot updates are received
 
 ## Central control bot
 
-Use these commands in a private chat with the central bot:
+Open the central bot with `/start` once. After that, use the inline button dashboard: projects, workspaces, agency creation, team members and invitations, project bots, plans, channels/groups and payment history. Text is requested only for values that need to be entered, such as a project name, bot token or plan details.
+
+The Telegram command menu is intentionally reduced to `/start` and `/help`. The underlying commands remain available for administration and troubleshooting, but normal operation is button-first.
+
+The following commands remain available as an advanced fallback:
 
 - `/start` — open the control panel.
 - `/newproject Name` — create a project in the active workspace.
@@ -58,17 +62,22 @@ The control bot deletes the BotFather token message on a best-effort basis. If t
 
 ## Buyer flow
 
-Each connected project bot exposes:
+Each connected project bot exposes a button-first buyer interface:
 
-- `/start` — show purchase instructions.
-- `/plans` — list active tariffs priced in Telegram Stars.
-- `/buy PLAN_ID` — create a Stars invoice.
+- `/start` — opens the subscription menu.
+- **View subscriptions** — opens an inline tariff list.
+- **Select a tariff** — opens the Stars invoice.
+- Renewal reminders include a **Renew subscription** button.
+
+The `/plans` and `/buy PLAN_ID` commands remain as an advanced fallback, but are not required for normal purchases.
 
 For a digital subscription sold inside Telegram, the invoice uses `XTR`. Before accepting payment, SubPilot checks the pending payment, buyer Telegram ID, amount and currency. A subscription is activated only after a Telegram `successful_payment` update.
 
 After payment, the project bot creates a one-person invite link for each active channel/group attached to the tariff. Each invite expires after 24 hours; joins are recorded from `chat_member` updates. Refunds can be initiated from the central bot using `/refundpayment`.
 
-**Important current limitations:** subscription expiry jobs and automatic removal after the entitlement period are not implemented yet. Telegram Stars recurring billing, external provider adapters, donations, paid messages and consultation billing are also still in development. Do not treat the current checkout as production-ready until database migrations, bot runtime, payment tests and access-expiry handling have been tested in a configured environment.
+The API starts a lifecycle worker after the database and HTTP server are ready. It sends renewal reminders approximately three days and one day before expiry, extends an existing active subscription when a buyer renews early, expires subscriptions on schedule, revokes unused invite links and removes joined subscribers from connected chats. Removal requires the project bot to retain the necessary administrator rights. The current worker is in-process; deploy a single API worker instance until distributed job locking is introduced.
+
+**Important current limitations:** Telegram Stars recurring billing, external provider adapters, donations, paid messages and consultation billing are still in development. The lifecycle worker and button flows need integration testing against a configured PostgreSQL database and real Telegram bots before production use. Do not treat the current checkout as production-ready until database migrations, bot runtime, payment tests and access-expiry handling have been tested in a configured environment.
 
 ## Repository layout
 
