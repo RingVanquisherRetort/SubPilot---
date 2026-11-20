@@ -445,12 +445,14 @@ export async function deliverSubscriptionAccess(
           await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), existing.inviteLink);
           if (!isLeaseOwned()) return results;
         } catch (error) {
-          console.error(
-            "Could not revoke an unused invite link for an existing member:",
-            error instanceof Error ? error.name : "UnknownError"
-          );
-          results.failed.push(label);
-          continue;
+          if (!isTelegramInviteAlreadyRevoked(error)) {
+            console.error(
+              "Could not revoke an unused invite link for an existing member:",
+              error instanceof Error ? error.name : "UnknownError"
+            );
+            results.failed.push(label);
+            continue;
+          }
         }
       }
 
@@ -512,7 +514,11 @@ export async function deliverSubscriptionAccess(
       // rejects the revoke, retain the old link so the next worker pass can retry safely.
       if (existing?.inviteLink && !existing.revokedAt && existing.expiresAt > now) {
         if (!isLeaseOwned()) return results;
-        await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), existing.inviteLink);
+        try {
+          await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), existing.inviteLink);
+        } catch (error) {
+          if (!isTelegramInviteAlreadyRevoked(error)) throw error;
+        }
         if (!isLeaseOwned()) return results;
       }
 
