@@ -38,7 +38,7 @@ The API exposes `GET /health` and `GET /ready`. Project bot updates are received
 
 ## Central control bot
 
-Open the central bot with `/start` once. After that, use the inline button dashboard: projects, workspaces, agency creation, team members and invitations, project bots, plans, channels/groups and payment history. Text is requested only for values that need to be entered, such as a project name, bot token or plan details.
+Open the central bot with `/start` once. After that, use the inline button dashboard: projects, workspaces, agency creation, team members and invitations, project bots, tariff management, channels/groups, subscribers and payment history. Tariff cards support editing the title, Stars price and duration, archiving/restoring, and linking/unlinking project channels and groups. The subscriber list opens customer cards with Telegram identity, subscription status and expiry dates, and recent payment history. A tariff must retain at least one active destination. Text is requested only for values that need to be entered, such as a project name, bot token or tariff details.
 
 The Telegram command menu is intentionally reduced to `/start` and `/help`. The underlying commands remain available for administration and troubleshooting, but normal operation is button-first.
 
