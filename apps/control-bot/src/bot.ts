@@ -484,16 +484,8 @@ export function createControlBot(token: string): Bot {
       const { workspace } = await getActiveWorkspace(user);
 
       await ctx.reply(
-        "Добро пожаловать в SubPilot!\n\n" +
-        `Активное пространство: ${workspace.name}\n\n` +
-        "Вы сможете управлять проектами, Telegram-ботами, подписками и монетизацией.\n\n" +
-        "Основные команды:\n" +
-        "/newproject Название — создать проект\n" +
-        "/projects — список проектов\n" +
-        "/workspaces — мои пространства\n" +
-        "/createagency Название — создать агентство\n" +
-        "/invite — пригласить участника\n" +
-        "/help — помощь"
+        `🚀 Добро пожаловать в SubPilot!\n\nАктивное пространство: ${workspace.name}\n\nВыберите нужный раздел кнопками ниже.`,
+        { reply_markup: homeKeyboard() }
       );
     } catch (error) {
       console.error("Control bot /start failed:", error);
@@ -1620,15 +1612,136 @@ export function createControlBot(token: string): Bot {
 
   bot.on("message:text", async (ctx) => {
     if (ctx.chat.type !== "private" || !ctx.from) return;
+    if (ctx.message.text.startsWith("/")) return;
+
+    const pendingAction = pendingTextActions.get(ctx.from.id);
+    if (pendingAction) {
+      pendingTextActions.delete(ctx.from.id);
+      const input = ctx.message.text.trim();
+
+      if (pendingAction.kind === "new_project") {
+        if (input.length < 2 || input.length > 80) {
+          await ctx.reply("Название должно содержать от 2 до 80 символов. Нажмите «Новый проект» и попробуйте ещё раз.", {
+            reply_markup: homeKeyboard()
+          });
+          return;
+        }
+
+        try {
+          const user = await upsertTelegramUser(ctx);
+          const { workspace, role } = await getActiveWorkspace(user);
+          if (!MANAGER_ROLES.includes(role as typeof MANAGER_ROLES[number])) {
+            await ctx.reply("У вас нет прав создавать проекты в этом пространстве.", { reply_markup: homeKeyboard() });
+            return;
+          }
+          const slug = `${slugify(input)}-${randomUUID().slice(0, 6)}`;
+          const project = await prisma.project.create({
+            data: {
+              workspaceId: workspace.id,
+              name: input,
+              slug,
+              defaultCurrency: "RUB",
+              countryCode: "RU"
+            }
+          });
+          await ctx.reply(`Проект «${project.name}» создан.`, {
+            reply_markup: new InlineKeyboard().text("Открыть проект", `ui:project:${project.id}`).row().text("В главное меню", "ui:home")
+          });
+        } catch (error) {
+          console.error("Button create project failed:", error instanceof Error ? error.name : "UnknownError");
+          await ctx.reply("Не удалось создать проект. Попробуйте ещё раз.", { reply_markup: homeKeyboard() });
+        }
+        return;
+      }
+
+      if (pendingAction.kind === "new_agency") {
+        if (input.length < 2 || input.length > 80) {
+          await ctx.reply("Название агентства должно содержать от 2 до 80 символов.", { reply_markup: homeKeyboard() });
+          return;
+        }
+        try {
+          const user = await upsertTelegramUser(ctx);
+          const slug = `agency-${slugify(input)}-${randomUUID().slice(0, 6)}`;
+          const workspace = await prisma.workspace.create({
+            data: {
+              name: input,
+              slug,
+              type: "AGENCY",
+              createdById: user.id,
+              members: { create: { userId: user.id, role: "OWNER" } }
+            }
+          });
+          await prisma.user.update({ where: { id: user.id }, data: { activeWorkspaceId: workspace.id } });
+          await ctx.reply(`Агентство «${workspace.name}» создано и выбрано активным пространством.`, {
+            reply_markup: homeKeyboard()
+          });
+        } catch (error) {
+          console.error("Button create agency failed:", error instanceof Error ? error.name : "UnknownError");
+          await ctx.reply("Не удалось создать агентство.", { reply_markup: homeKeyboard() });
+        }
+        return;
+      }
+
+      if (pendingAction.kind === "create_plan") {
+        const fields = input.split("|").map((field) => field.trim());
+        const [title, priceInput, durationInput] = fields;
+        const price = priceInput?.replace(",", ".");
+        const durationDays = Number(durationInput);
+
+        if (fields.length !== 3 || !title || title.length > 80 || !price ||
+            !/^\d{1,5}$/.test(price) || Number(price) < 1 || Number(price) > 10_000 ||
+            !Number.isInteger(durationDays) || durationDays < 0 || durationDays > 3650) {
+          await ctx.reply("Проверьте формат. Нужно: Название | Цена в Stars | Дней. Цена — 1–10 000, срок — 0–3650.", {
+            reply_markup: new InlineKeyboard().text("Повторить", `ui:createplan:${pendingAction.projectId}`).row().text("В главное меню", "ui:home")
+          });
+          return;
+        }
+
+        try {
+          const user = await upsertTelegramUser(ctx);
+          const project = await canAccessProject(pendingAction.projectId, user.id, MANAGER_ROLES);
+          if (!project) {
+            await ctx.reply("Проект не найден или у вас нет прав.", { reply_markup: homeKeyboard() });
+            return;
+          }
+          const activeChats = await prisma.connectedChat.findMany({
+            where: { projectId: project.id, isActive: true },
+            select: { id: true }
+          });
+          if (activeChats.length === 0) {
+            await ctx.reply("Сначала добавьте бота проекта администратором хотя бы в один канал или группу.", {
+              reply_markup: new InlineKeyboard().text("Подключить бота", `ui:connect:${project.id}`).row().text("К проекту", `ui:project:${project.id}`)
+            });
+            return;
+          }
+          const plan = await prisma.creatorPlan.create({
+            data: {
+              projectId: project.id,
+              title,
+              price,
+              currency: "XTR",
+              durationDays: durationDays === 0 ? null : durationDays,
+              isRecurring: false,
+              chats: { create: activeChats.map((chat) => ({ connectedChatId: chat.id })) }
+            }
+          });
+          await ctx.reply(`Тариф «${plan.title}» создан за ${plan.price.toString()} ⭐.`, {
+            reply_markup: new InlineKeyboard().text("Посмотреть тарифы", `ui:plans:${project.id}`).row().text("К проекту", `ui:project:${project.id}`)
+          });
+        } catch (error) {
+          console.error("Button create plan failed:", error instanceof Error ? error.name : "UnknownError");
+          await ctx.reply("Не удалось создать тариф.", { reply_markup: homeKeyboard() });
+        }
+        return;
+      }
+    }
 
     const pending = pendingBotConnections.get(ctx.from.id);
     if (!pending) return;
 
-    if (ctx.message.text.startsWith("/")) return;
-
     if (pending.expiresAt < Date.now()) {
       pendingBotConnections.delete(ctx.from.id);
-      await ctx.reply("Время ожидания истекло. Запустите /connectbot ещё раз.");
+      await ctx.reply("Время ожидания истекло. Запустите подключение бота заново.");
       return;
     }
 
