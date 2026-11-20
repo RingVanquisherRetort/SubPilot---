@@ -28,13 +28,14 @@ SubPilot gives each creator a branded Telegram bot and a project workspace. Agen
 2. Copy .env.example to .env.
 3. Set CONTROL_BOT_TOKEN from @BotFather.
 4. Generate SECRETS_ENCRYPTION_KEY with: openssl rand -base64 32.
-5. Start infrastructure: pnpm infra:up.
-6. Install dependencies: pnpm install.
-7. Generate the database client: pnpm db:generate.
-8. Apply the development schema: pnpm db:migrate.
-9. Start the API and central bot: pnpm dev.
+5. Set PUBLIC_API_URL to the public HTTPS origin of the API (for example, https://api.example.com). Telegram webhooks require a reachable HTTPS endpoint.
+6. Start infrastructure: pnpm infra:up.
+7. Install dependencies: pnpm install.
+8. Generate the database client: pnpm db:generate.
+9. Apply the development schema: pnpm db:migrate.
+10. Start the API and central bot: pnpm dev.
 
-The API health endpoint is GET /health; database readiness is GET /ready.\n\nIn the control bot, use /start, /newproject Project name and /projects. Create an agency with /createagency Name, list and switch spaces with /workspaces and /switchworkspace ID. Owners/admins can create one-use, seven-day team invitations with /invite [ADMIN|MANAGER|VIEWER].\n\nTo connect a project bot, use /connectbot PROJECT_ID in a private chat and then send its BotFather token as the next message. The token message is deleted on a best-effort basis; if it remains visible, revoke the token in BotFather and issue a new one.
+The API health endpoint is GET /health; database readiness is GET /ready. Project bot webhooks are received at POST /webhooks/telegram/:botId and authenticated with Telegram's secret-token header.\n\nIn the control bot, use /start, /newproject Project name and /projects. Create an agency with /createagency Name, list and switch spaces with /workspaces and /switchworkspace ID. Owners/admins can create one-use, seven-day team invitations with /invite [ADMIN|MANAGER|VIEWER].\n\nTo connect a project bot, use /connectbot PROJECT_ID in a private chat and then send its BotFather token as the next message. The token message is deleted on a best-effort basis; if it remains visible, revoke the token in BotFather and issue a new one. With PUBLIC_API_URL configured, SubPilot installs a signed webhook and detects channels/groups when the bot is added as an administrator.
 
 ## Repository layout
 
