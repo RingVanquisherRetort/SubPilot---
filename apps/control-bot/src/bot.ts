@@ -355,6 +355,11 @@ export function createControlBot(token: string): Bot {
     try {
       const user = await upsertTelegramUser(ctx);
       const { workspace } = await getActiveWorkspace(user);
+      if (!MANAGER_ROLES.includes(role as typeof MANAGER_ROLES[number])) {
+        await ctx.reply("У вас нет прав переименовывать проекты в этом пространстве.");
+        return;
+      }
+
       const project = await prisma.project.findFirst({
         where: { id: projectId, workspaceId: workspace.id }
       });
