@@ -80,6 +80,22 @@ async function createPurchaseInvoice(
     }
   });
 
+  const activeSubscription = await prisma.subscription.findFirst({
+    where: {
+      projectId,
+      customerId: customer.id,
+      planId: plan.id,
+      status: "ACTIVE",
+      OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }]
+    },
+    select: { id: true }
+  });
+
+  if (activeSubscription) {
+    await ctx.reply("У вас уже есть активная подписка на этот тариф.");
+    return;
+  }
+
   const pending = await prisma.$transaction(async (tx) => {
     const subscription = await tx.subscription.create({
       data: {
@@ -441,6 +457,39 @@ export async function handleProjectBotUpdate(
         isActive
       }
     });
+  });
+
+  projectBot.command("start", async (ctx) => {
+    await ctx.reply(
+      "Добро пожаловать! Здесь можно посмотреть доступные подписки и оплатить их через Telegram Stars.\n\n" +
+      "/plans — доступные тарифы\n" +
+      "/buy PLAN_ID — купить выбранный тариф"
+    );
+  });
+
+  projectBot.command("plans", async (ctx) => {
+    const plans = await prisma.creatorPlan.findMany({
+      where: { projectId, status: "ACTIVE", currency: "XTR" },
+      include: {
+        chats: {
+          where: { connectedChat: { isActive: true } },
+          select: { connectedChatId: true }
+        }
+      },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "desc" }]
+    });
+
+    if (plans.length === 0) {
+      await ctx.reply("Пока нет доступных тарифов.");
+      return;
+    }
+
+    const lines = plans.map((plan, index) => {
+      const duration = plan.durationDays ? `${plan.durationDays} дн.` : "без ограничения срока";
+      return `${index + 1}. ${plan.title}\nЦена: ${plan.price.toString()} ⭐\nСрок: ${duration}\nПлощадки: ${plan.chats.length}\nID: ${plan.id}\nКупить: /buy ${plan.id}`;
+    });
+
+    await ctx.reply("Доступные тарифы:\n\n" + lines.join("\n\n"));
   });
 
   projectBot.command("buy", async (ctx) => {
