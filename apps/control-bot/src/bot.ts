@@ -17,7 +17,8 @@ type PendingBotConnection = {
 type PendingTextAction =
   | { kind: "new_project" }
   | { kind: "new_agency" }
-  | { kind: "create_plan"; projectId: string };
+  | { kind: "create_plan"; projectId: string }
+  | { kind: "edit_plan"; projectId: string; planId: string };
 
 function homeKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
@@ -419,15 +420,170 @@ export function createControlBot(token: string): Bot {
       where: { projectId, status: "ACTIVE" },
       include: { _count: { select: { chats: true, subscriptions: true } } },
       orderBy: { sortOrder: "asc" },
-      take: 20
+      take: 30
     });
-    const lines = plans.map((plan, i) =>
-      `${i + 1}. ${plan.title} — ${plan.price.toString()} ${plan.currency}\nПлощадок: ${plan._count.chats} · Подписок: ${plan._count.subscriptions}\nID: ${plan.id}`
-    );
+    const keyboard = new InlineKeyboard();
+    for (const plan of plans) {
+      keyboard.text(
+        `${plan.title.slice(0, 26)} · ${plan.price.toString()} ⭐`,
+        `p:v:${projectId}:${plan.id}`
+      ).row();
+    }
+    keyboard.text("➕ Создать тариф", `ui:createplan:${projectId}`).row()
+      .text("🗄 Архив тарифов", `ui:archivedplans:${projectId}`)
+      .row().text("⬅️ К проекту", `ui:project:${projectId}`);
     await ctx.editMessageText(
-      lines.length ? `Тарифы проекта «${project.name}»:\n\n${lines.join("\n\n")}` : "В проекте пока нет активных тарифов.",
-      { reply_markup: new InlineKeyboard().text("➕ Создать тариф", `ui:createplan:${projectId}`).row().text("⬅️ К проекту", `ui:project:${projectId}`) }
+      plans.length
+        ? `Активные тарифы «${project.name}»:\\nВыберите тариф для управления:`
+        : `В проекте «${project.name}» пока нет активных тарифов.`,
+      { reply_markup: keyboard }
     );
+  });
+
+  bot.callbackQuery(/^ui:archivedplans:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const projectId = ctx.match[1];
+    if (!projectId) return;
+    const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
+    if (!project) return;
+    const plans = await prisma.creatorPlan.findMany({
+      where: { projectId, status: "ARCHIVED" },
+      orderBy: { updatedAt: "desc" },
+      take: 30
+    });
+    const keyboard = new InlineKeyboard();
+    for (const plan of plans) {
+      keyboard.text(`↩️ ${plan.title.slice(0, 30)}`, `p:v:${projectId}:${plan.id}`).row();
+    }
+    keyboard.text("⬅️ Активные тарифы", `ui:plans:${projectId}`).row()
+      .text("К проекту", `ui:project:${projectId}`);
+    await ctx.editMessageText(
+      plans.length ? `Архив тарифов «${project.name}»:\\nВыберите тариф для восстановления:` : "Архив пуст.",
+      { reply_markup: keyboard }
+    );
+  });
+
+  bot.callbackQuery(/^p:v:([^:]+):([^:]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const projectId = ctx.match[1];
+    const planId = ctx.match[2];
+    if (!projectId || !planId) return;
+    const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
+    if (!project) return;
+    const plan = await prisma.creatorPlan.findFirst({
+      where: { id: planId, projectId },
+      include: {
+        _count: { select: { chats: true, subscriptions: true } },
+        chats: { include: { connectedChat: true } }
+      }
+    });
+    if (!plan) {
+      await ctx.editMessageText("Тариф не найден.", { reply_markup: new InlineKeyboard().text("К тарифам", `ui:plans:${projectId}`) });
+      return;
+    }
+
+    const duration = plan.durationDays ? `${plan.durationDays} дн.` : "без ограничения";
+    const chatNames = plan.chats.map(({ connectedChat }) =>
+      connectedChat.title ?? connectedChat.username ?? connectedChat.telegramChatId.toString()
+    );
+    const keyboard = new InlineKeyboard();
+    if (plan.status === "ACTIVE") {
+      keyboard.text("✏️ Изменить тариф", `p:e:${projectId}:${planId}`).row()
+        .text("🗄 В архив", `p:x:${projectId}:${planId}`);
+    } else {
+      keyboard.text("↩️ Восстановить", `p:r:${projectId}:${planId}`);
+    }
+    keyboard.row()
+      .text(plan.status === "ACTIVE" ? "⬅️ К активным" : "⬅️ К архиву",
+        plan.status === "ACTIVE" ? `ui:plans:${projectId}` : `ui:archivedplans:${projectId}`)
+      .text("К проекту", `ui:project:${projectId}`);
+
+    await ctx.editMessageText(
+      `💎 ${plan.title}\\n\\n` +
+      `Цена: ${plan.price.toString()} ⭐\\n` +
+      `Срок: ${duration}\\n` +
+      `Статус: ${plan.status === "ACTIVE" ? "Активен" : "В архиве"}\\n` +
+      `Площадок: ${plan._count.chats}\\n` +
+      `Подписок всего: ${plan._count.subscriptions}\\n\\n` +
+      `Каналы и группы:\\n${chatNames.join("\\n") || "Не привязаны"}\\n\\n` +
+      `ID: ${plan.id}`,
+      { reply_markup: keyboard }
+    );
+  });
+
+  bot.callbackQuery(/^p:e:([^:]+):([^:]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.from) return;
+    const projectId = ctx.match[1];
+    const planId = ctx.match[2];
+    if (!projectId || !planId) return;
+    const user = await upsertTelegramUser(ctx);
+    const project = await canAccessProject(projectId, user.id, MANAGER_ROLES);
+    const plan = project
+      ? await prisma.creatorPlan.findFirst({ where: { id: planId, projectId } })
+      : null;
+    if (!plan) {
+      await ctx.reply("Нет прав изменять этот тариф или тариф не найден.");
+      return;
+    }
+    pendingTextActions.set(ctx.from.id, { kind: "edit_plan", projectId, planId });
+    await ctx.reply(
+      `Изменяем тариф «${plan.title}». Отправьте новые данные в формате:\\nНазвание | Цена в Stars | Дней\\n\\nТекущие данные: ${plan.title} | ${plan.price.toString()} | ${plan.durationDays ?? 0}`,
+      { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
+    );
+  });
+
+  bot.callbackQuery(/^p:x:([^:]+):([^:]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const projectId = ctx.match[1];
+    const planId = ctx.match[2];
+    if (!projectId || !planId) return;
+    const user = await upsertTelegramUser(ctx);
+    const project = await canAccessProject(projectId, user.id, MANAGER_ROLES);
+    if (!project) {
+      await ctx.reply("Нет прав архивировать тариф.");
+      return;
+    }
+    const result = await prisma.creatorPlan.updateMany({
+      where: { id: planId, projectId, status: "ACTIVE" },
+      data: { status: "ARCHIVED" }
+    });
+    if (result.count !== 1) {
+      await ctx.reply("Тариф не найден или уже находится в архиве.");
+      return;
+    }
+    await ctx.editMessageText("Тариф перемещён в архив. Действующие подписки сохраняются до своего окончания.", {
+      reply_markup: new InlineKeyboard()
+        .text("🗄 Архив тарифов", `ui:archivedplans:${projectId}`)
+        .row().text("К активным тарифам", `ui:plans:${projectId}`)
+    });
+  });
+
+  bot.callbackQuery(/^p:r:([^:]+):([^:]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const projectId = ctx.match[1];
+    const planId = ctx.match[2];
+    if (!projectId || !planId) return;
+    const user = await upsertTelegramUser(ctx);
+    const project = await canAccessProject(projectId, user.id, MANAGER_ROLES);
+    if (!project) {
+      await ctx.reply("Нет прав восстанавливать тариф.");
+      return;
+    }
+    const result = await prisma.creatorPlan.updateMany({
+      where: { id: planId, projectId, status: "ARCHIVED" },
+      data: { status: "ACTIVE" }
+    });
+    if (result.count !== 1) {
+      await ctx.reply("Тариф не найден или уже активен.");
+      return;
+    }
+    await ctx.editMessageText("Тариф восстановлен и снова доступен в меню покупателя.", {
+      reply_markup: new InlineKeyboard().text("Открыть тариф", `p:v:${projectId}:${planId}`)
+        .row().text("К активным тарифам", `ui:plans:${projectId}`)
+    });
   });
 
   bot.callbackQuery(/^ui:createplan:(.+)$/, async (ctx) => {
@@ -1947,6 +2103,58 @@ export function createControlBot(token: string): Bot {
         }
         return;
       }
+
+      if (pendingAction.kind === "edit_plan") {
+        const fields = input.split("|").map((field) => field.trim());
+        const [title, priceInput, durationInput] = fields;
+        const price = priceInput?.replace(",", ".");
+        const durationDays = Number(durationInput);
+
+        if (fields.length !== 3 || !title || title.length > 80 || !price ||
+            !/^\d{1,5}$/.test(price) || Number(price) < 1 || Number(price) > 10_000 ||
+            !Number.isInteger(durationDays) || durationDays < 0 || durationDays > 3650) {
+          await ctx.reply("Проверьте формат. Нужно: Название | Цена в Stars | Дней. Цена — 1–10 000, срок — 0–3650.", {
+            reply_markup: new InlineKeyboard()
+              .text("Повторить", `p:e:${pendingAction.projectId}:${pendingAction.planId}`)
+              .row().text("В главное меню", "ui:home")
+          });
+          return;
+        }
+
+        try {
+          const user = await upsertTelegramUser(ctx);
+          const project = await canAccessProject(pendingAction.projectId, user.id, MANAGER_ROLES);
+          if (!project) {
+            await ctx.reply("Проект не найден или у вас нет прав.", { reply_markup: homeKeyboard() });
+            return;
+          }
+          const plan = await prisma.creatorPlan.findFirst({
+            where: { id: pendingAction.planId, projectId: project.id, status: "ACTIVE" }
+          });
+          if (!plan) {
+            await ctx.reply("Активный тариф не найден. Возможно, он уже перемещён в архив.", {
+              reply_markup: new InlineKeyboard().text("К тарифам", `ui:plans:${project.id}`)
+            });
+            return;
+          }
+          await prisma.creatorPlan.update({
+            where: { id: plan.id },
+            data: {
+              title,
+              price,
+              durationDays: durationDays === 0 ? null : durationDays
+            }
+          });
+          await ctx.reply("Тариф обновлён. Новая цена применяется к новым покупкам; уже созданные платежи не меняются.", {
+            reply_markup: new InlineKeyboard()
+              .text("Открыть тариф", `p:v:${project.id}:${plan.id}`)
+              .row().text("К тарифам", `ui:plans:${project.id}`)
+          });
+        } catch (error) {
+          console.error("Button edit plan failed:", error instanceof Error ? error.name : "UnknownError");
+          await ctx.reply("Не удалось изменить тариф.", { reply_markup: homeKeyboard() });
+        }
+        return;
     }
 
     const pending = pendingBotConnections.get(ctx.from.id);
