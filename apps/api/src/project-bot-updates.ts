@@ -10,6 +10,7 @@ import { enqueueProjectOwnerNotification } from "./owner-notifications.js";
 import { hasRequiredSubscriptionChatRights } from "./telegram-chat-access.js";
 import { isPaymentFromProjectBot } from "./telegram-payment-origin.js";
 import { getInvoiceDispatchState } from "./telegram-invoice-state.js";
+import { shouldProcessTelegramUpdate } from "./telegram-update-order.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
@@ -987,7 +988,9 @@ export async function handleProjectBotUpdate(
   botToken: string,
   projectId: string,
   projectBotId: string,
-  update: TelegramUpdate
+  update: TelegramUpdate,
+  updateId: number,
+  sequenceEpoch: number
 ): Promise<void> {
   const projectBot = new Bot(botToken);
 
@@ -1002,28 +1005,46 @@ export async function handleProjectBotUpdate(
 
     if (!chatType) return;
 
+    const telegramChatId = BigInt(chat.id);
+    const existingChat = await prisma.connectedChat.findUnique({
+      where: { projectId_telegramChatId: { projectId, telegramChatId } },
+      select: { lastBotStatusUpdateId: true, lastBotStatusSequenceEpoch: true }
+    });
+    if (existingChat && !shouldProcessTelegramUpdate(
+      updateId,
+      existingChat.lastBotStatusUpdateId === null ? null : BigInt(existingChat.lastBotStatusUpdateId),
+      existingChat.lastBotStatusSequenceEpoch,
+      sequenceEpoch
+    )) {
+      return;
+    }
+
     const isActive = hasRequiredSubscriptionChatRights(ctx.myChatMember.new_chat_member);
 
     await prisma.connectedChat.upsert({
       where: {
         projectId_telegramChatId: {
           projectId,
-          telegramChatId: BigInt(chat.id)
+          telegramChatId
         }
       },
       create: {
         projectId,
-        telegramChatId: BigInt(chat.id),
+        telegramChatId,
         type: chatType,
         title: "title" in chat ? chat.title ?? null : null,
         username: "username" in chat ? chat.username ?? null : null,
-        isActive
+        isActive,
+        lastBotStatusUpdateId: updateId,
+        lastBotStatusSequenceEpoch: sequenceEpoch
       },
       update: {
         type: chatType,
         title: "title" in chat ? chat.title ?? null : null,
         username: "username" in chat ? chat.username ?? null : null,
-        isActive
+        isActive,
+        lastBotStatusUpdateId: updateId,
+        lastBotStatusSequenceEpoch: sequenceEpoch
       }
     });
   });
@@ -1342,6 +1363,38 @@ export async function handleProjectBotUpdate(
 
     if (newMember.user.is_bot) return;
 
+    const cursorWhere = {
+      projectBotId_telegramChatId_telegramUserId: {
+        projectBotId,
+        telegramChatId,
+        telegramUserId
+      }
+    };
+    const existingCursor = await prisma.telegramChatMemberCursor.findUnique({
+      where: cursorWhere
+    });
+    if (existingCursor && !shouldProcessTelegramUpdate(
+      updateId,
+      BigInt(existingCursor.lastUpdateId),
+      existingCursor.sequenceEpoch,
+      sequenceEpoch
+    )) {
+      return;
+    }
+    const saveCursor = async (): Promise<void> => {
+      await prisma.telegramChatMemberCursor.upsert({
+        where: cursorWhere,
+        create: {
+          projectBotId,
+          telegramChatId,
+          telegramUserId,
+          lastUpdateId: updateId,
+          sequenceEpoch
+        },
+        update: { lastUpdateId: updateId, sequenceEpoch }
+      });
+    };
+
     if (!isMember) {
       const leftGrants = await prisma.subscriptionAccessGrant.findMany({
         where: {
@@ -1362,10 +1415,14 @@ export async function handleProjectBotUpdate(
           data: { joinedAt: null, inviteLink: "", expiresAt: new Date(0) }
         });
       }
+      await saveCursor();
       return;
     }
 
-    if (!inviteLink) return;
+    if (!inviteLink) {
+      await saveCursor();
+      return;
+    }
 
     const grant = await prisma.subscriptionAccessGrant.findFirst({
       where: {
@@ -1379,7 +1436,10 @@ export async function handleProjectBotUpdate(
       }
     });
 
-    if (!grant) return;
+    if (!grant) {
+      await saveCursor();
+      return;
+    }
 
     if (grant.subscription.customer.telegramUserId !== telegramUserId) {
       let inviteRevoked = false;
@@ -1433,6 +1493,7 @@ export async function handleProjectBotUpdate(
           ).catch(() => undefined);
         }
       }
+      await saveCursor();
       return;
     }
 
