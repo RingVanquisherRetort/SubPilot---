@@ -754,7 +754,7 @@ export function createControlBot(token: string): Bot {
 
     if (!projectId || !title || title.length > 80 || !normalizedPrice ||
         !/^\d{1,5}$/.test(normalizedPrice)) {
-      await ctx.reply("Проверьте ID проекта, название и цену. Цена должна быть положительным числом с максимум двумя знаками после точки.");
+      await ctx.reply("Проверьте ID проекта, название и цену. Цена должна быть целым количеством Telegram Stars от 1 до 10 000.");
       return;
     }
 
