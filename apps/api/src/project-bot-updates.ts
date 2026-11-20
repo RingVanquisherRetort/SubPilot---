@@ -497,7 +497,7 @@ async function processSuccessfulStarsPayment(
       await tx.paymentWebhookEvent.create({
         data: {
           connectionId: null,
-          dedupeKey: \`telegram-stars:\${receipt.telegram_payment_charge_id}\`,
+          dedupeKey: `telegram-stars:${receipt.telegram_payment_charge_id}`,
           providerEventId: receipt.telegram_payment_charge_id,
           eventType: "telegram.stars.payment.succeeded",
           payload: {
@@ -526,11 +526,7 @@ async function processSuccessfulStarsPayment(
     return;
   }
 
-  const isInitialActivation =
-    subscription.status !== "ACTIVE" ||
-    (subscription.startsAt !== null &&
-      payment.paidAt !== null &&
-      subscription.startsAt.getTime() === payment.paidAt.getTime());
+
 
   if (isInitialActivation) {
     const buyerName = [payment.customer.firstName, payment.customer.lastName]
