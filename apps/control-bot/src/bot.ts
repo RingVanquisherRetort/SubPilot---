@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { Bot, type Context } from "grammy";
 import { prisma } from "@subpilot/database";
 import { encryptSecret } from "@subpilot/security";
@@ -151,6 +151,69 @@ export function createControlBot(token: string): Bot {
   bot.command("start", async (ctx) => {
     try {
       const user = await upsertTelegramUser(ctx);
+      const startPayload = String(ctx.match ?? "").trim();
+
+      if (startPayload.startsWith("join_")) {
+        const inviteToken = startPayload.slice(5);
+        const tokenHash = createHash("sha256").update(inviteToken).digest("hex");
+        const invite = await prisma.workspaceInvite.findUnique({
+          where: { tokenHash },
+          include: { workspace: true }
+        });
+
+        if (!invite || invite.usedAt || invite.expiresAt.getTime() <= Date.now()) {
+          await ctx.reply("Приглашение не найдено, уже использовано или срок его действия истёк.");
+          return;
+        }
+
+        const accepted = await prisma.$transaction(async (tx) => {
+          const claimed = await tx.workspaceInvite.updateMany({
+            where: {
+              id: invite.id,
+              usedAt: null,
+              expiresAt: { gt: new Date() }
+            },
+            data: { usedAt: new Date() }
+          });
+
+          if (claimed.count !== 1) return false;
+
+          await tx.workspaceMember.upsert({
+            where: {
+              workspaceId_userId: {
+                workspaceId: invite.workspaceId,
+                userId: user.id
+              }
+            },
+            update: {},
+            create: {
+              workspaceId: invite.workspaceId,
+              userId: user.id,
+              role: invite.role
+            }
+          });
+
+          await tx.user.update({
+            where: { id: user.id },
+            data: { activeWorkspaceId: invite.workspaceId }
+          });
+
+          return true;
+        });
+
+        if (!accepted) {
+          await ctx.reply("Это приглашение уже было использовано. Попросите владельца создать новое.");
+          return;
+        }
+
+        await ctx.reply(
+          `Вы присоединились к пространству «${invite.workspace.name}».\n` +
+          `Ваша роль: ${invite.role.toLowerCase()}.\n\n` +
+          "Текущий кабинет: /start · Проекты: /projects"
+        );
+        return;
+      }
+
       const { workspace } = await getActiveWorkspace(user);
 
       await ctx.reply(
@@ -162,6 +225,7 @@ export function createControlBot(token: string): Bot {
         "/projects — список проектов\n" +
         "/workspaces — мои пространства\n" +
         "/createagency Название — создать агентство\n" +
+        "/invite — пригласить участника\n" +
         "/help — помощь"
       );
     } catch (error) {
@@ -279,6 +343,62 @@ export function createControlBot(token: string): Bot {
     } catch (error) {
       console.error("Control bot /createagency failed:", error);
       await ctx.reply("Не удалось создать агентство. Попробуйте ещё раз позже.");
+    }
+  });
+
+  bot.command("invite", async (ctx) => {
+    if (ctx.chat.type !== "private") {
+      await ctx.reply("Создавать приглашения можно только в личном чате с SubPilot.");
+      return;
+    }
+
+    const requestedRole = String(ctx.match ?? "").trim().toUpperCase() || "MANAGER";
+
+    if (!["ADMIN", "MANAGER", "VIEWER"].includes(requestedRole)) {
+      await ctx.reply("Формат: /invite [ADMIN|MANAGER|VIEWER]");
+      return;
+    }
+
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace, role: actorRole } = await getActiveWorkspace(user);
+
+      if (!ADMIN_ROLES.includes(actorRole as typeof ADMIN_ROLES[number])) {
+        await ctx.reply("Приглашать участников могут только владелец или администратор пространства.");
+        return;
+      }
+
+      if (requestedRole === "ADMIN" && actorRole !== "OWNER") {
+        await ctx.reply("Назначать администраторов может только владелец пространства.");
+        return;
+      }
+
+      const token = randomBytes(32).toString("base64url");
+      const tokenHash = createHash("sha256").update(token).digest("hex");
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+      await prisma.workspaceInvite.create({
+        data: {
+          workspaceId: workspace.id,
+          invitedByUserId: user.id,
+          tokenHash,
+          role: requestedRole as "ADMIN" | "MANAGER" | "VIEWER",
+          expiresAt
+        }
+      });
+
+      const botInfo = await ctx.api.getMe();
+      const inviteLink = `https://t.me/${botInfo.username}?start=join_${token}`;
+
+      await ctx.reply(
+        `Приглашение в «${workspace.name}» создано.\n\n` +
+        `Роль: ${requestedRole.toLowerCase()}\n` +
+        "Срок действия: 7 дней, одно использование.\n\n" +
+        `Ссылка для отправки участнику:\n${inviteLink}`
+      );
+    } catch (error) {
+      console.error("Control bot /invite failed:", error);
+      await ctx.reply("Не удалось создать приглашение.");
     }
   });
 
@@ -559,6 +679,7 @@ export function createControlBot(token: string): Bot {
       "/newproject Название — создать проект\n" +
       "/projects — проекты активного пространства\n" +
       "/createagency Название — создать агентство\n" +
+      "/invite [ROLE] — одноразовая ссылка для участника\n" +
       "/workspaces — список пространств\n" +
       "/switchworkspace ID — переключить пространство\n" +
       "/renameproject ID Название — переименовать проект\n" +
