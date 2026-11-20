@@ -463,7 +463,7 @@ export function createControlBot(token: string): Bot {
         select: { role: true }
       })
     ]);
-    const canManageProject = Boolean(membership && MANAGER_ROLES.includes(membership.role));
+    const canManageProject = Boolean(membership && MANAGER_ROLES.includes(membership.role as typeof MANAGER_ROLES[number]));
     const keyboard = new InlineKeyboard();
     if (canManageProject) {
       keyboard.text("🤖 Подключить бота", `ui:connect:${projectId}`).row();
@@ -529,7 +529,7 @@ export function createControlBot(token: string): Bot {
         select: { role: true }
       })
     ]);
-    const canManageProject = Boolean(membership && MANAGER_ROLES.includes(membership.role));
+    const canManageProject = Boolean(membership && MANAGER_ROLES.includes(membership.role as typeof MANAGER_ROLES[number]));
     const keyboard = new InlineKeyboard();
     for (const plan of plans) {
       keyboard.text(
@@ -591,7 +591,7 @@ export function createControlBot(token: string): Bot {
       },
       select: { role: true }
     });
-    const canManageProject = Boolean(membership && MANAGER_ROLES.includes(membership.role));
+    const canManageProject = Boolean(membership && MANAGER_ROLES.includes(membership.role as typeof MANAGER_ROLES[number]));
     const plan = await prisma.creatorPlan.findFirst({
       where: { id: planId, projectId },
       include: {
@@ -660,7 +660,7 @@ export function createControlBot(token: string): Bot {
           select: { role: true }
         })
       : null;
-    const canManageProject = Boolean(membership && MANAGER_ROLES.includes(membership.role));
+    const canManageProject = Boolean(membership && MANAGER_ROLES.includes(membership.role as typeof MANAGER_ROLES[number]));
     if (!plan || !project) {
       await ctx.reply("Тариф не найден или у вас нет доступа.");
       return;
@@ -768,7 +768,7 @@ export function createControlBot(token: string): Bot {
       const name = item.title ?? item.username ?? item.telegramChatId.toString();
       keyboard.text(
         `${linkedIds.has(item.id) ? "✅" : "➕"} ${name.slice(0, 45)}`,
-        canManageProject ? `p:ct:${planId}:${item.id}` : `p:v:${plan.projectId}:${planId}`
+        `p:ct:${planId}:${item.id}`
       ).row();
     }
     keyboard.text("⬅️ К тарифу", `p:v:${plan.projectId}:${planId}`);
