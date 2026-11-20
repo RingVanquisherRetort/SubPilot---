@@ -171,7 +171,16 @@ async function createPurchaseInvoice(
     });
 
     if (reusablePayment) {
-      return { payment: reusablePayment, subscription, createdPayment: false };
+      const metadata = reusablePayment.metadata && typeof reusablePayment.metadata === "object" &&
+        !Array.isArray(reusablePayment.metadata)
+        ? reusablePayment.metadata as Record<string, unknown>
+        : {};
+      return {
+        payment: reusablePayment,
+        subscription,
+        createdPayment: false,
+        invoiceAlreadySent: typeof metadata.invoiceMessageId === "number"
+      };
     }
 
     const payment = await tx.payment.create({
@@ -200,8 +209,16 @@ async function createPurchaseInvoice(
       }
     });
 
-    return { payment, subscription, createdPayment: true };
+    return { payment, subscription, createdPayment: true, invoiceAlreadySent: false };
   });
+
+  if (pending.invoiceAlreadySent) {
+    await ctx.reply(
+      "У вас уже есть неоплаченный счёт по этому тарифу. Найдите предыдущее сообщение от бота с кнопкой оплаты. " +
+      "Повторный счёт не создан, чтобы не допустить двойного списания. Неоплаченный счёт действует 24 часа."
+    );
+    return;
+  }
 
   const invoiceMetadata = pending.payment.metadata &&
     typeof pending.payment.metadata === "object" &&
@@ -221,7 +238,7 @@ async function createPurchaseInvoice(
   }
 
   try {
-    await ctx.api.sendInvoice(
+    const invoiceMessage = await ctx.api.sendInvoice(
       ctx.chat.id,
       invoiceTitle.slice(0, 32),
       invoiceDescription.slice(0, 255),
@@ -229,6 +246,17 @@ async function createPurchaseInvoice(
       "XTR",
       [{ label: invoiceTitle.slice(0, 32), amount: invoiceAmountStars }]
     );
+
+    await prisma.payment.updateMany({
+      where: { id: pending.payment.id, status: "PENDING" },
+      data: {
+        metadata: {
+          ...invoiceMetadata,
+          invoiceMessageId: invoiceMessage.message_id,
+          invoiceSentAt: new Date().toISOString()
+        }
+      }
+    });
   } catch (error) {
     if (pending.createdPayment) {
       await prisma.$transaction(async (tx) => {
