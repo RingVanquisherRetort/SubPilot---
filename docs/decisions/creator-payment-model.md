@@ -25,7 +25,7 @@ Payment-method availability is provider-specific. The current research catalog u
 
 | Method | Seller types shown by Nemiling | Reference country coverage | SubPilot state |
 |---|---|---|---|
-| Telegram Stars | Individuals and other seller types | Worldwide | Implemented for channel/group access |
+| Telegram Stars | Individuals | Worldwide | Implemented for channel/group access |
 | YooMoney | Individuals, self-employed | Russia | Planned; verify direct provider/API terms |
 | Crypto Pay | Individuals | Worldwide | Planned; API adapter not implemented |
 | Manual confirmation | Individuals, self-employed, individual entrepreneurs, legal entities | Worldwide | Planned; workflow not implemented |
