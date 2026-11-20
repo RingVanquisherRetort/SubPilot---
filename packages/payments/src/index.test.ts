@@ -322,7 +322,7 @@ test("introductory commission accepts fractional amounts and formats fractional 
 
   assert.equal(result.currency, "RUB");
   assert.equal(result.commissionRate, "14.25");
-  assert.equal(result.grossAmount, "12.5");
+  assert.equal(result.grossAmount, "12.50");
   assert.equal(result.refundedAmount, "2.25");
   assert.equal(result.netAmount, "10.25");
   assert.equal(result.commissionAmount, "1.46");
