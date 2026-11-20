@@ -515,7 +515,7 @@ async function processSuccessfulStarsPayment(
     await tx.paymentWebhookEvent.create({
       data: {
         connectionId: null,
-        dedupeKey: \`telegram-stars:\${receipt.telegram_payment_charge_id}\`,
+        dedupeKey: "telegram-stars:" + receipt.telegram_payment_charge_id,
         providerEventId: receipt.telegram_payment_charge_id,
         eventType: "telegram.stars.payment.succeeded",
         payload: {
