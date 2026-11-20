@@ -12,6 +12,7 @@
     "dotenv": "^17.2.3",
     "fastify": "^5.12.8",
     "@subpilot/security": "workspace:*",
-    "grammy": "^1.46.0"
+    "grammy": "^1.46.0",
+    "@subpilot/payments": "workspace:*"
   }
 }
