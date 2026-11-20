@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { Bot, InlineKeyboard, type Context } from "grammy";
 import { prisma } from "@subpilot/database";
 import { decryptSecret, encryptSecret } from "@subpilot/security";
+import { buildWorkspaceInviteAcceptanceMessage } from "./invite-acceptance.js";
 import {
   classifyTelegramRefundError,
   listPaymentProviderAvailability,
@@ -1043,7 +1044,16 @@ export function createControlBot(token: string): Bot {
 
           if (claimed.count !== 1) return false;
 
-          await tx.workspaceMember.upsert({
+          const existingMembership = await tx.workspaceMember.findUnique({
+            where: {
+              workspaceId_userId: {
+                workspaceId: invite.workspaceId,
+                userId: user.id
+              }
+            },
+            select: { id: true }
+          });
+          const membership = await tx.workspaceMember.upsert({
             where: {
               workspaceId_userId: {
                 workspaceId: invite.workspaceId,
@@ -1055,7 +1065,8 @@ export function createControlBot(token: string): Bot {
               workspaceId: invite.workspaceId,
               userId: user.id,
               role: invite.role
-            }
+            },
+            select: { role: true }
           });
 
           await tx.user.update({
@@ -1063,7 +1074,7 @@ export function createControlBot(token: string): Bot {
             data: { activeWorkspaceId: invite.workspaceId }
           });
 
-          return true;
+          return { role: membership.role, wasAlreadyMember: Boolean(existingMembership) };
         });
 
         if (!accepted) {
@@ -1071,11 +1082,11 @@ export function createControlBot(token: string): Bot {
           return;
         }
 
-        await ctx.reply(
-          `Вы присоединились к пространству «${invite.workspace.name}».\n` +
-          `Ваша роль: ${invite.role.toLowerCase()}.\n\n` +
-          "Текущий кабинет: /start · Проекты: /projects"
-        );
+        await ctx.reply(buildWorkspaceInviteAcceptanceMessage(
+          invite.workspace.name,
+          accepted.role,
+          accepted.wasAlreadyMember
+        ));
         return;
       }
 
