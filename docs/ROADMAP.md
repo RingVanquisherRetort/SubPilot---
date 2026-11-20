@@ -28,7 +28,7 @@
 - [x] Automatically link new plans to currently active project chats.
 - [x] List, archive and restore plans.
 - [x] List connected channels/groups and link/unlink individual chats on a plan.
-- [x] Add buyer-facing project bot commands: /start, /plans and /buy.
+- [x] Add buyer-facing button menu, tariff list and one-tap Stars checkout.
 - [x] Create pending Telegram Stars invoice and subscription records.
 - [x] Validate pre-checkout buyer, amount, currency and payment status.
 - [x] Activate subscriptions only after successful_payment.
@@ -36,9 +36,13 @@
 - [x] Issue one-person, 24-hour invite links for plan chats after verified payment.
 - [x] Track joins against subscription grants.
 - [x] Add payment history and Telegram Stars refund commands.
-- [ ] Edit plans and build an interactive plan editor.
-- [ ] Add scheduled expiry, renewal and access-revocation jobs.
-- [ ] Manual grants, manual revocation, trials and reminders.
+- [x] Add button-driven project navigation, plan creation, channel/payment views and workspace/team navigation.
+- [ ] Add button-driven plan editing and advanced access-management controls.
+- [x] Add scheduled expiry and access-revocation worker.
+- [x] Send renewal reminders approximately three days and one day before expiry.
+- [x] Extend an active subscription when a buyer renews early.
+- [ ] Add distributed job locking and delivery retry/dead-letter monitoring.
+- [ ] Manual grants, manual revocation and trials.
 
 ## Stage 4 — Payments
 
