@@ -52,6 +52,7 @@
 ## Stage 4 — Payments
 
 - [x] Define a shared provider adapter contract and registry in packages/payments.
+- [x] Add a product/surface-aware Telegram payment eligibility policy and enforce it in the creator Stars checkout.
 - [x] Implement one-time Telegram Stars checkout for in-Telegram digital access.
 - [x] Verify pre-checkout data and require Telegram successful_payment before activation.
 - [x] Add idempotent Stars receipt storage, payment history and refund handling.
@@ -61,7 +62,7 @@
 - [ ] Add recurring Stars subscriptions (Telegram currently constrains recurring bot invoices to a 30-day period).
 - [ ] Keep creator payments isolated from SubPilot platform billing.
 
-Initial provider candidates for research: YooKassa, YooMoney, Prodamus, Robokassa, CloudPayments and Crypto Pay. Each requires a separate eligibility and integration assessment.
+Initial provider candidates for research: YooKassa, YooMoney, Prodamus, Robokassa, CloudPayments and Crypto Pay. Each requires a separate eligibility and integration assessment. These providers remain disabled for Telegram channel/group access; a future adapter must pass the product-policy gate, merchant review and provider-contract checks before it can be enabled.
 
 ## Stage 5 — Monetization features
 
