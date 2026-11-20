@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { Bot, type Context } from "grammy";
+import { Bot, InlineKeyboard, type Context } from "grammy";
 import { prisma } from "@subpilot/database";
 import { decryptSecret, encryptSecret } from "@subpilot/security";
 
@@ -13,6 +13,27 @@ type PendingBotConnection = {
   projectId: string;
   expiresAt: number;
 };
+
+type PendingTextAction =
+  | { kind: "new_project" }
+  | { kind: "new_agency" }
+  | { kind: "create_plan"; projectId: string };
+
+function homeKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("📁 Мои проекты", "ui:projects")
+    .text("🏢 Пространства", "ui:workspaces")
+    .row()
+    .text("➕ Новый проект", "ui:newproject")
+    .text("🏬 Создать агентство", "ui:newagency")
+    .row()
+    .text("❔ Помощь", "ui:help");
+}
+
+function backHomeKeyboard(): InlineKeyboard {
+  return new InlineKeyboard().text("⬅️ В главное меню", "ui:home");
+}
+
 
 function slugify(value: string): string {
   const slug = value
@@ -147,6 +168,252 @@ export function createControlBot(token: string): Bot {
   // Pending states are short-lived and intentionally kept in memory only.
   // A bot restart cancels a pending token submission; no secrets are persisted here.
   const pendingBotConnections = new Map<number, PendingBotConnection>();
+  const pendingTextActions = new Map<number, PendingTextAction>();
+
+  bot.callbackQuery("ui:home", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const { workspace, role } = await getActiveWorkspace(user);
+    await ctx.editMessageText(
+      `🚀 SubPilot\n\nПространство: ${workspace.name}\nРоль: ${String(role).toLowerCase()}\n\nВыберите действие:`,
+      { reply_markup: homeKeyboard() }
+    );
+  });
+
+  bot.callbackQuery("ui:help", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(
+      "SubPilot — кабинет для управления проектами, ботами, подписками и платежами.\n\n" +
+      "Используйте кнопки меню. Когда потребуется текст (например, название проекта), бот сам попросит его ввести.",
+      { reply_markup: backHomeKeyboard() }
+    );
+  });
+
+  bot.callbackQuery("ui:projects", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const { workspace } = await getActiveWorkspace(user);
+    const projects = await prisma.project.findMany({
+      where: { workspaceId: workspace.id, status: { not: "ARCHIVED" } },
+      orderBy: { createdAt: "desc" },
+      take: 30
+    });
+
+    const keyboard = new InlineKeyboard();
+    for (const project of projects) {
+      keyboard.text(project.name.slice(0, 30), `ui:project:${project.id}`).row();
+    }
+    keyboard.text("➕ Создать проект", "ui:newproject").row();
+    keyboard.text("⬅️ Назад", "ui:home");
+
+    await ctx.editMessageText(
+      projects.length
+        ? `Проекты пространства «${workspace.name}»:\nВыберите проект:`
+        : `В пространстве «${workspace.name}» пока нет проектов. Создайте первый:`,
+      { reply_markup: keyboard }
+    );
+  });
+
+  bot.callbackQuery("ui:workspaces", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const memberships = await prisma.workspaceMember.findMany({
+      where: { userId: user.id },
+      include: { workspace: true },
+      orderBy: { createdAt: "asc" }
+    });
+    const keyboard = new InlineKeyboard();
+    for (const membership of memberships) {
+      const active = membership.workspaceId === user.activeWorkspaceId ? " ✓" : "";
+      keyboard.text(
+        `${membership.workspace.name.slice(0, 24)} · ${membership.role}${active}`,
+        `ui:switch:${membership.workspaceId}`
+      ).row();
+    }
+    keyboard.text("🏬 Создать агентство", "ui:newagency").row();
+    keyboard.text("⬅️ Назад", "ui:home");
+    await ctx.editMessageText("Ваши рабочие пространства. Нажмите, чтобы переключиться:", {
+      reply_markup: keyboard
+    });
+  });
+
+  bot.callbackQuery(/^ui:switch:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const workspaceId = ctx.match[1];
+    if (!workspaceId) return;
+    const membership = await prisma.workspaceMember.findUnique({
+      where: { workspaceId_userId: { workspaceId, userId: user.id } },
+      include: { workspace: true }
+    });
+    if (!membership) {
+      await ctx.answerCallbackQuery({ text: "У вас больше нет доступа к этому пространству.", show_alert: true });
+      return;
+    }
+    await prisma.user.update({ where: { id: user.id }, data: { activeWorkspaceId: workspaceId } });
+    await ctx.editMessageText(`Активное пространство: ${membership.workspace.name}\n\nВыберите действие:`, {
+      reply_markup: homeKeyboard()
+    });
+  });
+
+  bot.callbackQuery("ui:newproject", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.from) return;
+    pendingTextActions.set(ctx.from.id, { kind: "new_project" });
+    await ctx.reply("Напишите название нового проекта одним сообщением. Для отмены нажмите кнопку:", {
+      reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel")
+    });
+  });
+
+  bot.callbackQuery("ui:newagency", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.from) return;
+    pendingTextActions.set(ctx.from.id, { kind: "new_agency" });
+    await ctx.reply("Напишите название агентства одним сообщением:", {
+      reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel")
+    });
+  });
+
+  bot.callbackQuery("ui:cancel", async (ctx) => {
+    await ctx.answerCallbackQuery({ text: "Операция отменена." });
+    if (ctx.from) {
+      pendingTextActions.delete(ctx.from.id);
+      pendingBotConnections.delete(ctx.from.id);
+    }
+    await ctx.reply("Возвращаемся в меню.", { reply_markup: homeKeyboard() });
+  });
+
+  bot.callbackQuery(/^ui:project:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const projectId = ctx.match[1];
+    if (!projectId) return;
+    const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
+    if (!project) {
+      await ctx.editMessageText("Проект не найден или у вас нет доступа.", { reply_markup: backHomeKeyboard() });
+      return;
+    }
+    const [botCount, chatCount, planCount] = await Promise.all([
+      prisma.projectBot.count({ where: { projectId, status: "ACTIVE" } }),
+      prisma.connectedChat.count({ where: { projectId, isActive: true } }),
+      prisma.creatorPlan.count({ where: { projectId, status: "ACTIVE" } })
+    ]);
+    const keyboard = new InlineKeyboard()
+      .text("🤖 Подключить бота", `ui:connect:${projectId}`)
+      .row()
+      .text("💎 Тарифы", `ui:plans:${projectId}`)
+      .text("➕ Создать тариф", `ui:createplan:${projectId}`)
+      .row()
+      .text("📣 Каналы и группы", `ui:chats:${projectId}`)
+      .text("💳 Платежи", `ui:payments:${projectId}`)
+      .row()
+      .text("⬅️ К проектам", "ui:projects");
+    await ctx.editMessageText(
+      `📁 ${project.name}\n\nБоты: ${botCount}\nАктивные площадки: ${chatCount}\nАктивные тарифы: ${planCount}\n\nВыберите раздел:`,
+      { reply_markup: keyboard }
+    );
+  });
+
+  bot.callbackQuery(/^ui:connect:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.from) return;
+    const projectId = ctx.match[1];
+    if (!projectId) return;
+    const user = await upsertTelegramUser(ctx);
+    const project = await canAccessProject(projectId, user.id, MANAGER_ROLES);
+    if (!project) {
+      await ctx.reply("Нет прав подключать бота к этому проекту.");
+      return;
+    }
+    pendingBotConnections.set(ctx.from.id, { projectId, expiresAt: Date.now() + BOT_TOKEN_TTL_MS });
+    await ctx.reply(
+      `Подключаем бота к проекту «${project.name}». Отправьте токен от @BotFather следующим сообщением. Я удалю сообщение с токеном сразу после получения, если Telegram позволит.`,
+      { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
+    );
+  });
+
+  bot.callbackQuery(/^ui:plans:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const projectId = ctx.match[1];
+    if (!projectId) return;
+    const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
+    if (!project) return;
+    const plans = await prisma.creatorPlan.findMany({
+      where: { projectId, status: "ACTIVE" },
+      include: { _count: { select: { chats: true, subscriptions: true } } },
+      orderBy: { sortOrder: "asc" },
+      take: 20
+    });
+    const lines = plans.map((plan, i) =>
+      `${i + 1}. ${plan.title} — ${plan.price.toString()} ${plan.currency}\nПлощадок: ${plan._count.chats} · Подписок: ${plan._count.subscriptions}\nID: ${plan.id}`
+    );
+    await ctx.editMessageText(
+      lines.length ? `Тарифы проекта «${project.name}»:\n\n${lines.join("\n\n")}` : "В проекте пока нет активных тарифов.",
+      { reply_markup: new InlineKeyboard().text("➕ Создать тариф", `ui:createplan:${projectId}`).row().text("⬅️ К проекту", `ui:project:${projectId}`) }
+    );
+  });
+
+  bot.callbackQuery(/^ui:createplan:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.from) return;
+    const projectId = ctx.match[1];
+    if (!projectId) return;
+    const user = await upsertTelegramUser(ctx);
+    const project = await canAccessProject(projectId, user.id, MANAGER_ROLES);
+    if (!project) {
+      await ctx.reply("Нет прав создавать тарифы в этом проекте.");
+      return;
+    }
+    pendingTextActions.set(ctx.from.id, { kind: "create_plan", projectId });
+    await ctx.reply(
+      "Введите данные тарифа в одном сообщении в формате:\nНазвание | Цена в Stars | Дней\n\nПример: VIP на месяц | 499 | 30\nУкажите 0 дней для бессрочного доступа.",
+      { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
+    );
+  });
+
+  bot.callbackQuery(/^ui:chats:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const projectId = ctx.match[1];
+    if (!projectId) return;
+    const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
+    if (!project) return;
+    const chats = await prisma.connectedChat.findMany({
+      where: { projectId },
+      orderBy: [{ isActive: "desc" }, { title: "asc" }],
+      take: 30
+    });
+    const lines = chats.map((chat, i) =>
+      `${i + 1}. ${chat.title ?? chat.username ?? chat.telegramChatId.toString()} — ${chat.isActive ? "активна" : "неактивна"}`
+    );
+    await ctx.editMessageText(
+      lines.length ? `Каналы и группы «${project.name}»:\n\n${lines.join("\n")}` : "Пока нет подключённых каналов или групп. Добавьте бота проекта администратором в нужную площадку.",
+      { reply_markup: backHomeKeyboard() }
+    );
+  });
+
+  bot.callbackQuery(/^ui:payments:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const projectId = ctx.match[1];
+    if (!projectId) return;
+    const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
+    if (!project) return;
+    const payments = await prisma.payment.findMany({
+      where: { projectId },
+      include: { customer: true, subscription: { include: { plan: true } } },
+      orderBy: { createdAt: "desc" },
+      take: 10
+    });
+    const lines = payments.map((payment, i) =>
+      `${i + 1}. ${payment.subscription?.plan.title ?? "Платёж"} — ${payment.amount.toString()} ${payment.currency}\nСтатус: ${payment.status} · ${payment.customer.username ? "@" + payment.customer.username : payment.customer.telegramUserId.toString()}\nID: ${payment.id}`
+    );
+    await ctx.editMessageText(
+      lines.length ? `Последние платежи «${project.name}»:\n\n${lines.join("\n\n")}` : "Платежей пока нет.",
+      { reply_markup: backHomeKeyboard() }
+    );
+  });
 
   bot.command("start", async (ctx) => {
     try {
