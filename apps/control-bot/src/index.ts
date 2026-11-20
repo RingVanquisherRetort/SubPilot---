@@ -36,6 +36,8 @@ if (!token) {
     { command: "restoreproject", description: "Restore an archived project" },
     { command: "createplan", description: "Create a creator subscription plan" },
     { command: "plans", description: "List project subscription plans" },
+    { command: "payments", description: "List project payments" },
+    { command: "refundpayment", description: "Refund a Telegram Stars payment" },
     { command: "chats", description: "List connected project channels and groups" },
     { command: "linkchat", description: "Assign a chat to a subscription plan" },
     { command: "unlinkchat", description: "Remove a chat from a subscription plan" },
