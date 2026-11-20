@@ -27,6 +27,7 @@ function homeKeyboard(): InlineKeyboard {
     .text("➕ Новый проект", "ui:newproject")
     .text("🏬 Создать агентство", "ui:newagency")
     .row()
+    .text("👥 Команда", "ui:team")
     .text("❔ Помощь", "ui:help");
 }
 
