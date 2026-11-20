@@ -1,6 +1,10 @@
 import { Bot, InlineKeyboard } from "grammy";
 import { prisma } from "@subpilot/database";
 import { decryptSecret } from "@subpilot/security";
+import {
+  deliverPendingOwnerNotifications,
+  enqueueProjectOwnerNotification
+} from "./owner-notifications.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const BATCH_SIZE = 100;
@@ -59,13 +63,6 @@ async function sendRenewalReminders(now: Date): Promise<void> {
   const bots = new Map<string, Bot | null>();
 
   for (const subscription of due) {
-    let bot = bots.get(subscription.projectId);
-    if (bot === undefined) {
-      bot = await getProjectBot(subscription.projectId);
-      bots.set(subscription.projectId, bot);
-    }
-    if (!bot) continue;
-
     const expiresAt = subscription.endsAt;
     if (!expiresAt) continue;
 
@@ -73,6 +70,24 @@ async function sendRenewalReminders(now: Date): Promise<void> {
     const isOneDayReminder = expiresAt.getTime() <= oneDayLimit.getTime();
     const field = isOneDayReminder ? "reminder1dAt" : "reminder3dAt";
     if (subscription[field]) continue;
+
+    await enqueueProjectOwnerNotification({
+      projectId: subscription.projectId,
+      dedupeKey: `subscription:${subscription.id}:owner:${field}`,
+      eventType: isOneDayReminder ? "subscription_ending_1d" : "subscription_ending_3d",
+      messageText:
+        `⏳ Скоро закончится тариф\\nПроект: «${subscription.project.name}»\\n` +
+        `Тариф: «${subscription.plan.title}»\\n` +
+        `Окончание: ${expiresAt.toLocaleString("ru-RU")}\\n` +
+        `Осталось примерно ${daysLeft} дн.`
+    });
+
+    let bot = bots.get(subscription.projectId);
+    if (bot === undefined) {
+      bot = await getProjectBot(subscription.projectId);
+      bots.set(subscription.projectId, bot);
+    }
+    if (!bot) continue;
 
     try {
       await bot.api.sendMessage(
@@ -117,7 +132,8 @@ async function expireSubscriptions(now: Date): Promise<void> {
         where: { revokedAt: null },
         include: { connectedChat: true }
       },
-      project: { select: { id: true, name: true } }
+      project: { select: { id: true, name: true } },
+      plan: { select: { title: true } }
     },
     orderBy: { endsAt: "asc" },
     take: BATCH_SIZE
@@ -126,10 +142,24 @@ async function expireSubscriptions(now: Date): Promise<void> {
   const bots = new Map<string, Bot | null>();
 
   for (const subscription of due) {
+    let newlyExpired = false;
     if (subscription.status === "ACTIVE") {
-      await prisma.subscription.updateMany({
+      const expired = await prisma.subscription.updateMany({
         where: { id: subscription.id, status: "ACTIVE", endsAt: { lte: now } },
         data: { status: "EXPIRED" }
+      });
+      newlyExpired = expired.count === 1;
+    }
+
+    if (newlyExpired) {
+      await enqueueProjectOwnerNotification({
+        projectId: subscription.projectId,
+        dedupeKey: `subscription:${subscription.id}:owner:expired`,
+        eventType: "subscription_expired",
+        messageText:
+          `🔔 Срок тарифа закончился\\nПроект: «${subscription.project.name}»\\n` +
+          `Тариф: «${subscription.plan.title}»\\n` +
+          "SubPilot запустил автоматическое отключение доступа."
       });
     }
 
@@ -181,6 +211,7 @@ async function expireSubscriptions(now: Date): Promise<void> {
 export async function runSubscriptionLifecycle(now = new Date()): Promise<void> {
   await sendRenewalReminders(now);
   await expireSubscriptions(now);
+  await deliverPendingOwnerNotifications(now);
 }
 
 export function startSubscriptionLifecycleWorker(

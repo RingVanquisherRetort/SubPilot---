@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Bot, InlineKeyboard, type Context } from "grammy";
 import { prisma } from "@subpilot/database";
+import { enqueueProjectOwnerNotification } from "./owner-notifications.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
@@ -302,7 +303,8 @@ async function processSuccessfulStarsPayment(
       customer: true,
       subscription: {
         include: { plan: true }
-      }
+      },
+      project: { select: { name: true } }
     }
   });
 
@@ -334,6 +336,7 @@ async function processSuccessfulStarsPayment(
       ? new Date(currentEnd.getTime() + subscription.plan.durationDays * 24 * 60 * 60 * 1000)
       : null);
 
+  let activatedByThisUpdate = false;
   await prisma.$transaction(async (tx) => {
     const updated = await tx.payment.updateMany({
       where: {
@@ -349,6 +352,7 @@ async function processSuccessfulStarsPayment(
     });
 
     if (updated.count === 1) {
+      activatedByThisUpdate = true;
       await tx.subscription.update({
         where: { id: subscription.id },
         data: {
@@ -387,6 +391,25 @@ async function processSuccessfulStarsPayment(
   if (latestPayment?.status !== "SUCCEEDED") {
     await ctx.reply("Оплата пока не подтверждена в системе. Квитанцию Telegram сохраните и обратитесь к владельцу проекта.");
     return;
+  }
+
+  if (activatedByThisUpdate && subscription.status !== "ACTIVE") {
+    const buyerName = [payment.customer.firstName, payment.customer.lastName]
+      .filter(Boolean)
+      .join(" ") || (payment.customer.username ? `@${payment.customer.username}` : "Покупатель Telegram");
+    const amountLabel = payment.currency === "XTR"
+      ? `${payment.amount.toString()} ⭐`
+      : `${payment.amount.toString()} ${payment.currency}`;
+    await enqueueProjectOwnerNotification({
+      projectId,
+      dedupeKey: `payment:${payment.id}:new-subscriber`,
+      eventType: "new_subscriber",
+      messageText:
+        `🎉 Новый подписчик\\nПроект: «${payment.project.name}»\\n` +
+        `Подписчик: ${buyerName}\\nТариф: «${subscription.plan.title}»\\n` +
+        `Оплата: ${amountLabel}\\n` +
+        (endsAt ? `Доступ до: ${endsAt.toLocaleString("ru-RU")}` : "Срок действия: без ограничения")
+    });
   }
 
   const access = await deliverSubscriptionAccess(bot, subscription.id);

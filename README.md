@@ -7,7 +7,7 @@ SubPilot gives each creator a project workspace and a dedicated Telegram bot. Ag
 ## Product principles
 
 - **Telegram-first:** the central SubPilot bot is the main control panel; a web dashboard is optional.
-- **Multi-project:** one workspace can own multiple creator projects, each with its own Telegram bot, channels/groups, plans and customers.
+- **Multi-project:** one workspace can own multiple creator projects, each with its own Telegram bot, channels/groups and plans.
 - **Agency-ready:** workspaces support multiple members with role-based access.
 - **Separate payment domains:** creator revenue is separate from SubPilot's own subscription billing.
 - **Provider adapters:** payment integrations are modular and enabled only for eligible merchants and compliant purchase flows.
@@ -38,7 +38,7 @@ The API exposes `GET /health` and `GET /ready`. Project bot updates are received
 
 ## Central control bot
 
-Open the central bot with `/start` once. After that, use the inline button dashboard: projects, workspaces, agency creation, team members and invitations, project bots, tariff management, channels/groups, subscribers and payment history. Tariff cards support editing the title, Stars price and duration, archiving/restoring, and linking/unlinking project channels and groups. The subscriber list opens customer cards with Telegram identity, subscription status and expiry dates, and recent payment history. A tariff must retain at least one active destination. Text is requested only for values that need to be entered, such as a project name, bot token or tariff details.
+Open the central bot with `/start` once. After that, use the inline button dashboard: projects, workspaces, agency creation, team members and invitations, project bots, tariff management, channels/groups and payment history. Tariff cards support editing the title, Stars price and duration, archiving/restoring, and linking/unlinking project channels and groups. SubPilot sends the project author and agency owner notifications about newly activated subscriptions, tariff expiry reminders (three days and one day before expiry), and subscription expiry. It does not expose a customer directory or individual customer cards. A tariff must retain at least one active destination. Text is requested only for values that need to be entered, such as a project name, bot token or tariff details.
 
 The Telegram command menu is intentionally reduced to `/start` and `/help`. The underlying commands remain available for administration and troubleshooting, but normal operation is button-first.
 
@@ -75,7 +75,7 @@ For a digital subscription sold inside Telegram, the invoice uses `XTR`. Before 
 
 After payment, the project bot creates a one-person invite link for each active channel/group attached to the tariff. Each invite expires after 24 hours; joins are recorded from `chat_member` updates. Refunds can be initiated from the central bot using `/refundpayment`.
 
-The API starts a lifecycle worker after the database and HTTP server are ready. It sends renewal reminders approximately three days and one day before expiry, extends an existing active subscription when a buyer renews early, expires subscriptions on schedule, revokes unused invite links and removes joined subscribers from connected chats. Removal requires the project bot to retain the necessary administrator rights. The current worker is in-process; deploy a single API worker instance until distributed job locking is introduced.
+The API starts a lifecycle worker after the database and HTTP server are ready. It sends buyer renewal reminders approximately three days and one day before expiry, queues owner/author notifications for those milestones and expiry, extends an existing active subscription when a buyer renews early, expires subscriptions on schedule, revokes unused invite links and removes joined subscribers from connected chats. Owner notifications are delivered by the central control bot and retried with backoff. Removal requires the project bot to retain the necessary administrator rights. Configure `CONTROL_BOT_TOKEN` for the API service as well as the control-bot service. The current worker is in-process; deploy a single API worker instance until distributed job locking is introduced.
 
 **Important current limitations:** Telegram Stars recurring billing, external provider adapters, donations, paid messages and consultation billing are still in development. The lifecycle worker and button flows need integration testing against a configured PostgreSQL database and real Telegram bots before production use. Do not treat the current checkout as production-ready until database migrations, bot runtime, payment tests and access-expiry handling have been tested in a configured environment.
 

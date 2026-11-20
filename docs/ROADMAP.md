@@ -39,7 +39,9 @@
 - [x] Add button-driven project navigation, plan creation, channel/payment views and workspace/team navigation.
 - [ ] Add button-driven plan editing and advanced access-management controls.
 - [x] Add scheduled expiry and access-revocation worker.
-- [x] Send renewal reminders approximately three days and one day before expiry.
+- [x] Send renewal reminders to buyers approximately three days and one day before expiry.
+- [x] Queue new-subscriber, three-day, one-day and expiry notifications for project authors and agency owners.
+- [x] Retry owner-notification delivery through the central bot with per-recipient deduplication.
 - [x] Extend an active subscription when a buyer renews early.
 - [ ] Add distributed job locking and delivery retry/dead-letter monitoring.
 - [ ] Manual grants, manual revocation and trials.
@@ -65,7 +67,7 @@ Initial provider candidates for research: YooKassa, YooMoney, Prodamus, Robokass
 - Gift subscriptions.
 - Promo codes and referral links.
 - Giveaways.
-- Subscriber cards and broadcasts.
+- Broadcasts (optional future feature; no subscriber directory or customer cards).
 
 ## Stage 6 — SubPilot billing
 

@@ -20,6 +20,8 @@ The central SubPilot bot is the default control panel. A workspace can contain m
 - ConnectedChat: channel/group where access is managed.
 - CreatorPlan: price, currency, duration and target chats.
 - ProjectCustomer: Telegram buyer known to a project.
+- Project creator: the user who created a project; used as the individual author notification recipient.
+- OwnerNotification: deduplicated, retryable delivery record for project-owner and author lifecycle alerts.
 - Subscription: a buyer's access entitlement and its dates/status.
 - PaymentProviderConnection: encrypted merchant credentials belonging to a creator project.
 - Payment / PaymentWebhookEvent: creator-side payment and idempotent webhook record.
@@ -71,6 +73,8 @@ Provider eligibility is resolved per country, merchant type, currency and produc
 - The API lifecycle worker checks active subscriptions once per minute, sends one reminder around three days and one around one day before expiry, and expires due subscriptions.
 - When a buyer renews before expiry, the existing entitlement is extended from its current end date instead of creating overlapping subscriptions.
 - On expiry, unused invite links are revoked and joined subscribers are removed from the connected chats. Failed removals remain pending for a later worker retry.
+- Successful first activation queues a new-subscriber alert for the workspace creator and project creator. In a personal workspace these are normally the same user, so only one message is queued.
+- Three-day and one-day expiry reminders, plus the expiry event, are queued for the same recipients through the central control bot. Deliveries are idempotent per event/recipient and retry with backoff.
 - The current worker is process-local and assumes one API instance. Multiple replicas require distributed locking before deployment.
 - Channel/group connection requires the project bot to be added with the permissions needed for the selected feature.
 
