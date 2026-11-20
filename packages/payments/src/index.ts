@@ -113,3 +113,12 @@ export type {
   PaymentProductType,
   PaymentSurface
 } from "./eligibility.js";
+
+export {
+  calculateIntroductoryCommission,
+  START_WITHOUT_UPFRONT_COST
+} from "./commission.js";
+export type {
+  IntroductoryCommission,
+  IntroductoryCommissionInput
+} from "./commission.js";
