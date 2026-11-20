@@ -6,7 +6,7 @@ import { prisma } from "@subpilot/database";
 import { decryptSecret } from "@subpilot/security";
 import { handleProjectBotUpdate } from "./project-bot-updates.js";
 import { startSubscriptionLifecycleWorker } from "./subscription-lifecycle.js";
-import { shouldProcessTelegramUpdate } from "./telegram-update-order.js";
+import { resolveTelegramUpdateSequenceEpoch } from "./telegram-update-order.js";
 
 const app = Fastify({
   logger: {
@@ -86,8 +86,9 @@ app.post<{ Params: { botId: string } }>("/webhooks/telegram/:botId", async (requ
 
     const updateId = BigInt(update.update_id);
     const processed = await prisma.$transaction(async (tx) => {
-      // Hold a row lock for the whole update so webhook requests processed by
-      // different API replicas share one durable order per project bot.
+      // Serialize a bot's updates across API replicas. Telegram's update_id is
+      // still used per stateful entity below; older payment/message updates are
+      // not discarded merely because a newer unrelated update arrived first.
       const locked = await tx.$queryRaw<Array<{ id: string }>>`
         SELECT "id" FROM "ProjectBot" WHERE "id" = ${projectBot.id} FOR UPDATE
       `;
@@ -95,34 +96,89 @@ app.post<{ Params: { botId: string } }>("/webhooks/telegram/:botId", async (requ
         throw new Error("Project bot disappeared while processing a Telegram update.");
       }
 
-      const cursor = await tx.projectBot.findUnique({
+      const botState = await tx.projectBot.findUnique({
         where: { id: projectBot.id },
-        select: { lastUpdateId: true }
+        select: { lastUpdateId: true, lastUpdateAt: true, updateSequenceEpoch: true }
       });
-      if (!cursor) {
+      if (!botState) {
         throw new Error("Project bot update cursor could not be loaded.");
       }
 
-      if (!shouldProcessTelegramUpdate(update.update_id, cursor.lastUpdateId)) {
-        return false;
-      }
+      const now = new Date();
+      const sequenceEpoch = resolveTelegramUpdateSequenceEpoch(
+        botState.updateSequenceEpoch,
+        botState.lastUpdateAt,
+        now
+      );
+      const nextLastUpdateId = sequenceEpoch !== botState.updateSequenceEpoch ||
+        botState.lastUpdateId === null ||
+        updateId > botState.lastUpdateId
+        ? updateId
+        : botState.lastUpdateId;
 
-      await handleProjectBotUpdate(botToken, projectBot.projectId, projectBot.id, update);
-
-      const cursorSaved = await tx.projectBot.updateMany({
-        where: {
-          id: projectBot.id,
-          OR: [{ lastUpdateId: null }, { lastUpdateId: { lt: updateId } }]
-        },
-        data: { lastUpdateId: updateId }
+      const unique = {
+        projectBotId_sequenceEpoch_updateId: {
+          projectBotId: projectBot.id,
+          sequenceEpoch,
+          updateId: update.update_id
+        }
+      };
+      const previous = await tx.telegramWebhookUpdate.findUnique({
+        where: unique,
+        select: { id: true, processedAt: true }
       });
-      if (cursorSaved.count !== 1) {
-        throw new Error("Telegram update cursor could not be advanced.");
+      if (previous?.processedAt) return false;
+
+      const webhookRecord = await tx.telegramWebhookUpdate.upsert({
+        where: unique,
+        create: {
+          projectBotId: projectBot.id,
+          sequenceEpoch,
+          updateId: update.update_id,
+          updateType: Object.keys(update).find((key) => key !== "update_id") ?? "unknown"
+        },
+        update: {
+          attempts: { increment: 1 },
+          lastError: null,
+          receivedAt: now
+        },
+        select: { id: true }
+      });
+
+      await tx.projectBot.update({
+        where: { id: projectBot.id },
+        data: {
+          lastUpdateId: nextLastUpdateId,
+          lastUpdateAt: now,
+          updateSequenceEpoch: sequenceEpoch
+        }
+      });
+
+      try {
+        await handleProjectBotUpdate(
+          botToken,
+          projectBot.projectId,
+          projectBot.id,
+          update,
+          update.update_id,
+          sequenceEpoch
+        );
+      } catch (error) {
+        await tx.telegramWebhookUpdate.update({
+          where: { id: webhookRecord.id },
+          data: { lastError: error instanceof Error ? error.name : "UnknownError" }
+        });
+        throw error;
       }
+
+      await tx.telegramWebhookUpdate.update({
+        where: { id: webhookRecord.id },
+        data: { processedAt: new Date(), lastError: null }
+      });
       return true;
     }, { maxWait: 15_000, timeout: 60_000 });
 
-    return reply.code(200).send({ ok: true, duplicateOrStale: !processed });
+    return reply.code(200).send({ ok: true, duplicate: !processed });
   } catch (error) {
     // Never log the request body, bot token or Telegram webhook secret.
     request.log.error(
