@@ -100,3 +100,16 @@ export function normalizeDecimalAmount(amount: string): string {
     ? `${trimmedWhole}.${trimmedFraction}`
     : trimmedWhole;
 }
+
+export {
+  evaluatePaymentEligibility,
+  PAYMENT_PRODUCT_TYPES,
+  PAYMENT_SURFACES
+} from "./eligibility.js";
+export type {
+  PaymentEligibilityInput,
+  PaymentEligibilityDecision,
+  PaymentEligibilityCode,
+  PaymentProductType,
+  PaymentSurface
+} from "./eligibility.js";
