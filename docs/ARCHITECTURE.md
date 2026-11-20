@@ -90,14 +90,14 @@ The gate is a Telegram product-policy check, not merchant approval. Provider eli
 - When a buyer renews before expiry, the existing entitlement is extended from its current end date instead of creating overlapping subscriptions.
 - On expiry, unused invite links are revoked and joined subscribers are removed from the connected chats. Failed removals remain pending for a later worker retry.
 - Successful first activation queues a new-subscriber alert for the workspace creator and project creator. In a personal workspace these are normally the same user, so only one message is queued.
-- Three-day and one-day expiry reminders, plus the expiry event, are queued for the same recipients through the central control bot. Deliveries are idempotent per event/recipient and retry with backoff.
+- Three-day and one-day expiry reminders, plus the expiry event, are queued for the same recipients through the central control bot. Queue creation is idempotent per event/recipient and delivery retries use backoff; a Telegram send that succeeds immediately before a database acknowledgement failure can still be delivered twice.
 - Each lifecycle pass acquires a PostgreSQL-backed lease with a five-minute expiry and one-minute heartbeat. Only one API replica can run the lifecycle pass at a time; a crashed worker releases naturally when its lease expires.
 - Channel/group connection requires the project bot to be added with the permissions needed for the selected feature.
 
 ## Reliability and security requirements
 
 - All webhook handlers are idempotent. Telegram Stars receipts are deduplicated by the Telegram charge ID.
-- Payment status changes are monotonic and recorded in the payment ledger and webhook-event ledger.
+- Payment transitions use conditional database updates and are recorded in the payment and webhook-event ledgers. A verified Telegram `successful_payment` receipt can reconcile a stale invoice previously marked `CANCELLED`; charge IDs are deduplicated.
 - Access is derived from subscription entitlements; payment events alone do not grant permanent access.
 - Fixed-term subscription expiry, buyer reminders, abandoned Stars checkout cleanup, invite revocation and removal of joined members are implemented in the lifecycle worker. Failed Telegram operations remain retryable while the access grant is unrevoked. PostgreSQL lease coordination prevents concurrent lifecycle passes across API replicas.
 - AuditLog schema is present, but application write calls are not implemented yet; audit history remains a known product gap.
