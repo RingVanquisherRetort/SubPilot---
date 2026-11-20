@@ -21,7 +21,8 @@ if (!token) {
 
   await bot.api.setMyCommands([
     { command: "start", description: "Открыть главное меню SubPilot" },
-    { command: "help", description: "Помощь по интерфейсу" }
+    { command: "help", description: "Помощь по интерфейсу" },
+    { command: "testnotifications", description: "Отправить тестовые уведомления себе" }
   ]);
 
   console.info("SubPilot control bot is starting...");
