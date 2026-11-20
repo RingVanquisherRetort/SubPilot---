@@ -221,10 +221,43 @@ model ProjectBot {
   updateSequenceEpoch Int       @default(0)
   lastUpdateAt        DateTime?
   project             Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  webhookUpdates      TelegramWebhookUpdate[]
+  chatMemberCursors   TelegramChatMemberCursor[]
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
   @@index([projectId, status])
+}
+
+model TelegramWebhookUpdate {
+  id            String     @id @default(cuid())
+  projectBotId  String
+  updateId      Int
+  sequenceEpoch Int
+  updateType    String
+  attempts      Int        @default(1)
+  lastError     String?
+  receivedAt    DateTime   @default(now())
+  processedAt   DateTime?
+  projectBot    ProjectBot @relation(fields: [projectBotId], references: [id], onDelete: Cascade)
+
+  @@unique([projectBotId, sequenceEpoch, updateId])
+  @@index([projectBotId, processedAt, receivedAt])
+}
+
+model TelegramChatMemberCursor {
+  id             String     @id @default(cuid())
+  projectBotId   String
+  telegramChatId BigInt
+  telegramUserId BigInt
+  lastUpdateId   Int
+  sequenceEpoch  Int
+  projectBot     ProjectBot @relation(fields: [projectBotId], references: [id], onDelete: Cascade)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@unique([projectBotId, telegramChatId, telegramUserId])
+  @@index([projectBotId, sequenceEpoch, lastUpdateId])
 }
 
 model ConnectedChat {
@@ -235,6 +268,8 @@ model ConnectedChat {
   title          String?
   username       String?
   isActive       Boolean           @default(true)
+  lastBotStatusUpdateId Int?
+  lastBotStatusSequenceEpoch Int?
   project        Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
   planLinks      CreatorPlanChat[]
   accessGrants   SubscriptionAccessGrant[]
