@@ -402,6 +402,166 @@ export function createControlBot(token: string): Bot {
     }
   });
 
+  bot.command("members", async (ctx) => {
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace } = await getActiveWorkspace(user);
+      const members = await prisma.workspaceMember.findMany({
+        where: { workspaceId: workspace.id },
+        include: { user: true },
+        orderBy: { createdAt: "asc" }
+      });
+
+      const lines = members.map((member, index) => {
+        const name = [member.user.firstName, member.user.lastName].filter(Boolean).join(" ")
+          || (member.user.username ? `@${member.user.username}` : "Пользователь");
+        const username = member.user.username ? `@${member.user.username}` : "без username";
+        return `${index + 1}. ${name}\n${username} · ${member.role.toLowerCase()}\nTelegram ID: ${member.user.telegramId.toString()}`;
+      });
+
+      await ctx.reply(
+        `Участники пространства «${workspace.name}»:\n\n` +
+        lines.join("\n\n") +
+        "\n\nПригласить участника: /invite"
+      );
+    } catch (error) {
+      console.error("Control bot /members failed:", error);
+      await ctx.reply("Не удалось загрузить участников.");
+    }
+  });
+
+  bot.command("removemember", async (ctx) => {
+    const telegramIdInput = String(ctx.match ?? "").trim();
+
+    if (!/^\d{1,20}$/.test(telegramIdInput)) {
+      await ctx.reply("Формат: /removemember TELEGRAM_ID\nПосмотреть ID можно командой /members.");
+      return;
+    }
+
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace, role: actorRole } = await getActiveWorkspace(user);
+
+      if (!ADMIN_ROLES.includes(actorRole as typeof ADMIN_ROLES[number])) {
+        await ctx.reply("Удалять участников могут только владелец или администратор пространства.");
+        return;
+      }
+
+      const target = await prisma.workspaceMember.findFirst({
+        where: {
+          workspaceId: workspace.id,
+          user: { telegramId: BigInt(telegramIdInput) }
+        },
+        include: { user: true }
+      });
+
+      if (!target) {
+        await ctx.reply("Такой участник не найден в активном пространстве.");
+        return;
+      }
+
+      if (target.userId === user.id || target.role === "OWNER") {
+        await ctx.reply("Нельзя удалить владельца пространства или самого себя этой командой.");
+        return;
+      }
+
+      if (actorRole !== "OWNER" && target.role === "ADMIN") {
+        await ctx.reply("Администратор не может удалять других администраторов.");
+        return;
+      }
+
+      await prisma.workspaceMember.delete({ where: { id: target.id } });
+
+      if (target.user.activeWorkspaceId === workspace.id) {
+        await prisma.user.update({
+          where: { id: target.userId },
+          data: { activeWorkspaceId: null }
+        });
+      }
+
+      await ctx.reply(
+        `Участник ${target.user.username ? `@${target.user.username}` : target.user.telegramId.toString()} удалён из «${workspace.name}».`
+      );
+    } catch (error) {
+      console.error("Control bot /removemember failed:", error);
+      await ctx.reply("Не удалось удалить участника.");
+    }
+  });
+
+  bot.command("invites", async (ctx) => {
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace, role } = await getActiveWorkspace(user);
+
+      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
+        await ctx.reply("Просматривать приглашения могут только владелец и администратор.");
+        return;
+      }
+
+      const invites = await prisma.workspaceInvite.findMany({
+        where: {
+          workspaceId: workspace.id,
+          usedAt: null,
+          expiresAt: { gt: new Date() }
+        },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+        select: { id: true, role: true, expiresAt: true, createdAt: true }
+      });
+
+      if (invites.length === 0) {
+        await ctx.reply("Активных приглашений нет. Создать новое: /invite");
+        return;
+      }
+
+      const lines = invites.map((invite, index) =>
+        `${index + 1}. ${invite.role.toLowerCase()}\nID: ${invite.id}\nИстекает: ${invite.expiresAt.toLocaleString("ru-RU", { timeZone: "UTC" })} UTC`
+      );
+
+      await ctx.reply("Активные приглашения:\n\n" + lines.join("\n\n"));
+    } catch (error) {
+      console.error("Control bot /invites failed:", error);
+      await ctx.reply("Не удалось загрузить приглашения.");
+    }
+  });
+
+  bot.command("revokeinvite", async (ctx) => {
+    const inviteId = String(ctx.match ?? "").trim();
+
+    if (!inviteId) {
+      await ctx.reply("Формат: /revokeinvite INVITE_ID\nСписок: /invites");
+      return;
+    }
+
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace, role } = await getActiveWorkspace(user);
+
+      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
+        await ctx.reply("Отзывать приглашения могут только владелец и администратор.");
+        return;
+      }
+
+      const revoked = await prisma.workspaceInvite.updateMany({
+        where: {
+          id: inviteId,
+          workspaceId: workspace.id,
+          usedAt: null
+        },
+        data: { usedAt: new Date() }
+      });
+
+      await ctx.reply(
+        revoked.count === 1
+          ? "Приглашение отозвано."
+          : "Активное приглашение с таким ID не найдено."
+      );
+    } catch (error) {
+      console.error("Control bot /revokeinvite failed:", error);
+      await ctx.reply("Не удалось отозвать приглашение.");
+    }
+  });
+
   bot.command("workspaces", async (ctx) => {
     try {
       const user = await upsertTelegramUser(ctx);
@@ -536,6 +696,44 @@ export function createControlBot(token: string): Bot {
     } catch (error) {
       console.error("Control bot /archiveproject failed:", error);
       await ctx.reply("Не удалось архивировать проект.");
+    }
+  });
+
+  bot.command("restoreproject", async (ctx) => {
+    const projectId = String(ctx.match ?? "").trim();
+
+    if (!projectId) {
+      await ctx.reply("Формат: /restoreproject PROJECT_ID");
+      return;
+    }
+
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace, role } = await getActiveWorkspace(user);
+
+      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
+        await ctx.reply("Восстанавливать проекты может только владелец или администратор.");
+        return;
+      }
+
+      const project = await prisma.project.findFirst({
+        where: { id: projectId, workspaceId: workspace.id }
+      });
+
+      if (!project) {
+        await ctx.reply("Проект не найден в активном пространстве.");
+        return;
+      }
+
+      await prisma.project.update({
+        where: { id: project.id },
+        data: { status: "ACTIVE" }
+      });
+
+      await ctx.reply(`Проект «${project.name}» восстановлен.`);
+    } catch (error) {
+      console.error("Control bot /restoreproject failed:", error);
+      await ctx.reply("Не удалось восстановить проект.");
     }
   });
 
@@ -680,10 +878,15 @@ export function createControlBot(token: string): Bot {
       "/projects — проекты активного пространства\n" +
       "/createagency Название — создать агентство\n" +
       "/invite [ROLE] — одноразовая ссылка для участника\n" +
+      "/members — участники пространства\n" +
+      "/removemember ID — удалить участника\n" +
+      "/invites — активные приглашения\n" +
+      "/revokeinvite ID — отозвать приглашение\n" +
       "/workspaces — список пространств\n" +
       "/switchworkspace ID — переключить пространство\n" +
       "/renameproject ID Название — переименовать проект\n" +
       "/archiveproject ID — архивировать проект\n" +
+      "/restoreproject ID — восстановить проект\n" +
       "/connectbot ID — подключить отдельного бота\n" +
       "/cancel — отменить текущую операцию"
     );
