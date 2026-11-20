@@ -91,6 +91,13 @@ enum WorkspaceBillingStatus {
   EXPIRED
 }
 
+enum CreatorMerchantType {
+  INDIVIDUAL
+  SELF_EMPLOYED
+  INDIVIDUAL_ENTREPRENEUR
+  LEGAL_ENTITY
+}
+
 enum PlatformCommissionEntryType {
   SALE_FEE
   REFUND_ADJUSTMENT
@@ -174,6 +181,7 @@ model Project {
   name               String
   slug               String
   countryCode        String                      @default("RU")
+  merchantType       CreatorMerchantType         @default(INDIVIDUAL)
   status             ProjectStatus               @default(ACTIVE)
   defaultCurrency    String                      @default("RUB")
   workspace          Workspace                   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
