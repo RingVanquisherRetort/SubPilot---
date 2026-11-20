@@ -9,7 +9,47 @@ import {
 } from "./owner-notifications.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const PENDING_PAYMENT_TTL_MS = 24 * 60 * 60 * 1000;
 const BATCH_SIZE = 100;
+
+async function cancelStalePendingPayments(now: Date): Promise<void> {
+  const cutoff = new Date(now.getTime() - PENDING_PAYMENT_TTL_MS);
+  const stalePayments = await prisma.payment.findMany({
+    where: {
+      provider: "TELEGRAM_STARS",
+      status: "PENDING",
+      createdAt: { lte: cutoff }
+    },
+    select: { id: true, subscriptionId: true },
+    orderBy: { createdAt: "asc" },
+    take: BATCH_SIZE
+  });
+
+  for (const payment of stalePayments) {
+    await prisma.$transaction(async (tx) => {
+      const cancelled = await tx.payment.updateMany({
+        where: {
+          id: payment.id,
+          provider: "TELEGRAM_STARS",
+          status: "PENDING",
+          createdAt: { lte: cutoff }
+        },
+        data: { status: "CANCELLED" }
+      });
+      if (cancelled.count !== 1 || !payment.subscriptionId) return;
+
+      const remainingPendingPayments = await tx.payment.count({
+        where: { subscriptionId: payment.subscriptionId, status: "PENDING" }
+      });
+      if (remainingPendingPayments === 0) {
+        await tx.subscription.updateMany({
+          where: { id: payment.subscriptionId, status: "PENDING" },
+          data: { status: "CANCELLED", cancelledAt: now }
+        });
+      }
+    });
+  }
+}
 
 function createRenewalKeyboard(): InlineKeyboard {
   return new InlineKeyboard().text("Продлить подписку", "buyer:plans");
@@ -368,6 +408,7 @@ async function expireSubscriptions(now: Date): Promise<void> {
 }
 
 export async function runSubscriptionLifecycle(now = new Date()): Promise<void> {
+  await cancelStalePendingPayments(now);
   await retryPendingAccessDeliveries(now);
   await sendRenewalReminders(now);
   await expireSubscriptions(now);
