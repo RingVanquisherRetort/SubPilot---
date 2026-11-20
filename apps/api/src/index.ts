@@ -36,6 +36,7 @@ app.get("/ready", async (_request, reply) => {
 
 app.post<{ Params: { botId: string } }>("/webhooks/telegram/:botId", async (request, reply) => {
   const { botId } = request.params;
+  let attemptedUpdate: { projectBotId: string; updateId: number; updateType: string } | undefined;
 
   if (!/^\d{5,20}$/.test(botId)) {
     return reply.code(400).send({ error: "Invalid bot identifier" });
@@ -74,7 +75,7 @@ app.post<{ Params: { botId: string } }>("/webhooks/telegram/:botId", async (requ
       return reply.code(410).send({ error: "Bot disabled" });
     }
 
-    if (!request.body || typeof request.body !== "object") {
+    if (!request.body || typeof request.body !== "object" || Array.isArray(request.body)) {
       return reply.code(400).send({ error: "Invalid Telegram update" });
     }
 
@@ -83,6 +84,11 @@ app.post<{ Params: { botId: string } }>("/webhooks/telegram/:botId", async (requ
     if (!Number.isSafeInteger(update.update_id) || update.update_id < 0) {
       return reply.code(400).send({ error: "Invalid Telegram update identifier" });
     }
+    attemptedUpdate = {
+      projectBotId: projectBot.id,
+      updateId: update.update_id,
+      updateType: Object.keys(update).find((key) => key !== "update_id") ?? "unknown"
+    };
 
     const updateId = BigInt(update.update_id);
     const processed = await prisma.$transaction(async (tx) => {
@@ -154,22 +160,14 @@ app.post<{ Params: { botId: string } }>("/webhooks/telegram/:botId", async (requ
         }
       });
 
-      try {
-        await handleProjectBotUpdate(
-          botToken,
-          projectBot.projectId,
-          projectBot.id,
-          update,
-          update.update_id,
-          sequenceEpoch
-        );
-      } catch (error) {
-        await tx.telegramWebhookUpdate.update({
-          where: { id: webhookRecord.id },
-          data: { lastError: error instanceof Error ? error.name : "UnknownError" }
-        });
-        throw error;
-      }
+      await handleProjectBotUpdate(
+        botToken,
+        projectBot.projectId,
+        projectBot.id,
+        update,
+        update.update_id,
+        sequenceEpoch
+      );
 
       await tx.telegramWebhookUpdate.update({
         where: { id: webhookRecord.id },
@@ -180,6 +178,50 @@ app.post<{ Params: { botId: string } }>("/webhooks/telegram/:botId", async (requ
 
     return reply.code(200).send({ ok: true, duplicate: !processed });
   } catch (error) {
+    if (attemptedUpdate) {
+      try {
+        const state = await prisma.projectBot.findUnique({
+          where: { id: attemptedUpdate.projectBotId },
+          select: { updateSequenceEpoch: true, lastUpdateAt: true }
+        });
+        if (state) {
+          const sequenceEpoch = resolveTelegramUpdateSequenceEpoch(
+            state.updateSequenceEpoch,
+            state.lastUpdateAt,
+            new Date()
+          );
+          const unique = {
+            projectBotId_sequenceEpoch_updateId: {
+              projectBotId: attemptedUpdate.projectBotId,
+              sequenceEpoch,
+              updateId: attemptedUpdate.updateId
+            }
+          };
+          const prior = await prisma.telegramWebhookUpdate.findUnique({
+            where: unique,
+            select: { id: true, processedAt: true }
+          });
+          if (!prior?.processedAt) {
+            await prisma.telegramWebhookUpdate.upsert({
+              where: unique,
+              create: {
+                projectBotId: attemptedUpdate.projectBotId,
+                sequenceEpoch,
+                updateId: attemptedUpdate.updateId,
+                updateType: attemptedUpdate.updateType,
+                lastError: error instanceof Error ? error.name : "UnknownError"
+              },
+              update: {
+                attempts: { increment: 1 },
+                lastError: error instanceof Error ? error.name : "UnknownError"
+              }
+            });
+          }
+        }
+      } catch {
+        // Keep the webhook retry response even when failure bookkeeping is unavailable.
+      }
+    }
     // Never log the request body, bot token or Telegram webhook secret.
     request.log.error(
       { errorName: error instanceof Error ? error.name : "UnknownError" },
