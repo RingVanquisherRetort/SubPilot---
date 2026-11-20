@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { Bot, type Context } from "grammy";
 import { prisma } from "@subpilot/database";
-import { encryptSecret } from "@subpilot/security";
+import { decryptSecret, encryptSecret } from "@subpilot/security";
 
 const MANAGER_ROLES = ["OWNER", "ADMIN", "MANAGER"] as const;
 const ADMIN_ROLES = ["OWNER", "ADMIN"] as const;
@@ -1031,6 +1031,182 @@ export function createControlBot(token: string): Bot {
     }
   });
 
+  bot.command("payments", async (ctx) => {
+    const projectId = String(ctx.match ?? "").trim();
+
+    if (!projectId) {
+      await ctx.reply("Формат: /payments PROJECT_ID");
+      return;
+    }
+
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
+
+      if (!project) {
+        await ctx.reply("Проект не найден или у вас нет доступа.");
+        return;
+      }
+
+      const payments = await prisma.payment.findMany({
+        where: { projectId: project.id },
+        include: {
+          customer: true,
+          subscription: { include: { plan: true } }
+        },
+        orderBy: { createdAt: "desc" },
+        take: 20
+      });
+
+      if (payments.length === 0) {
+        await ctx.reply("В этом проекте пока нет платежей.");
+        return;
+      }
+
+      const lines = payments.map((payment, index) => {
+        const customer = payment.customer.username
+          ? `@${payment.customer.username}`
+          : payment.customer.telegramUserId.toString();
+        const plan = payment.subscription?.plan.title ?? "без тарифа";
+        return `${index + 1}. ${plan} — ${payment.amount.toString()} ${payment.currency}\n` +
+          `Статус: ${payment.status.toLowerCase()} · ${customer}\n` +
+          `ID: ${payment.id}`;
+      });
+
+      await ctx.reply(`Последние платежи проекта «${project.name}»:\n\n` + lines.join("\n\n"));
+    } catch (error) {
+      console.error("Control bot /payments failed:", error);
+      await ctx.reply("Не удалось загрузить историю платежей.");
+    }
+  });
+
+  bot.command("refundpayment", async (ctx) => {
+    const paymentId = String(ctx.match ?? "").trim();
+
+    if (!paymentId) {
+      await ctx.reply("Формат: /refundpayment PAYMENT_ID\nСписок платежей: /payments PROJECT_ID");
+      return;
+    }
+
+    if (ctx.chat.type !== "private") {
+      await ctx.reply("Возвраты можно оформлять только в личном чате с SubPilot.");
+      return;
+    }
+
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace, role } = await getActiveWorkspace(user);
+
+      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
+        await ctx.reply("Возвратами могут управлять только владелец или администратор пространства.");
+        return;
+      }
+
+      const payment = await prisma.payment.findFirst({
+        where: {
+          id: paymentId,
+          project: { workspaceId: workspace.id }
+        },
+        include: {
+          customer: true,
+          subscription: true,
+          project: {
+            include: {
+              bots: {
+                where: { status: "ACTIVE" },
+                orderBy: { createdAt: "desc" },
+                take: 1
+              }
+            }
+          }
+        }
+      });
+
+      if (!payment) {
+        await ctx.reply("Платёж не найден в активном пространстве.");
+        return;
+      }
+
+      if (payment.provider !== "TELEGRAM_STARS" || payment.status !== "SUCCEEDED" || !payment.providerPaymentId) {
+        await ctx.reply("Можно вернуть только подтверждённый платёж Telegram Stars.");
+        return;
+      }
+
+      const projectBot = payment.project.bots[0];
+      if (!projectBot) {
+        await ctx.reply("Не найден активный бот проекта. Возврат не отправлен.");
+        return;
+      }
+
+      const refundBot = new Bot(decryptSecret(projectBot.tokenEncrypted));
+      const refunded = await refundBot.api.refundStarPayment(
+        Number(payment.customer.telegramUserId),
+        payment.providerPaymentId
+      );
+
+      if (!refunded) {
+        await ctx.reply("Telegram не подтвердил возврат. Статус платежа не изменён.");
+        return;
+      }
+
+      const grants = payment.subscriptionId
+        ? await prisma.subscriptionAccessGrant.findMany({
+            where: { subscriptionId: payment.subscriptionId },
+            include: { connectedChat: true }
+          })
+        : [];
+
+      for (const grant of grants) {
+        await refundBot.api.revokeChatInviteLink(
+          grant.connectedChat.telegramChatId.toString(),
+          grant.inviteLink
+        ).catch(() => undefined);
+
+        if (grant.joinedAt) {
+          await refundBot.api.banChatMember(
+            grant.connectedChat.telegramChatId.toString(),
+            Number(payment.customer.telegramUserId)
+          ).catch((error) => {
+            console.error(
+              "Could not remove refunded subscriber from Telegram chat:",
+              error instanceof Error ? error.name : "UnknownError"
+            );
+          });
+        }
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.payment.update({
+          where: { id: payment.id },
+          data: { status: "REFUNDED", refundedAt: new Date() }
+        });
+
+        if (payment.subscriptionId) {
+          await tx.subscription.update({
+            where: { id: payment.subscriptionId },
+            data: { status: "CANCELLED", cancelledAt: new Date() }
+          });
+
+          await tx.subscriptionAccessGrant.updateMany({
+            where: { subscriptionId: payment.subscriptionId, revokedAt: null },
+            data: { revokedAt: new Date() }
+          });
+        }
+      });
+
+      await ctx.reply(
+        "Возврат Telegram Stars подтверждён.\n" +
+        "Подписка отменена, ссылки приглашения отозваны. Участник удалён из доступных площадок, если уже вступил."
+      );
+    } catch (error) {
+      console.error(
+        "Control bot /refundpayment failed:",
+        error instanceof Error ? error.name : "UnknownError"
+      );
+      await ctx.reply("Не удалось завершить возврат или синхронизировать его с SubPilot. Проверьте статус операции в Telegram.");
+    }
+  });
+
   bot.command("archiveplan", async (ctx) => {
     const planId = String(ctx.match ?? "").trim();
 
@@ -1307,6 +1483,8 @@ export function createControlBot(token: string): Bot {
       "/restoreproject ID — восстановить проект\n" +
       "/createplan ID | Название | Цена | Дней — создать тариф\n" +
       "/plans ID — посмотреть тарифы\n" +
+      "/payments ID — история платежей проекта\n" +
+      "/refundpayment ID — вернуть платёж Stars\n" +
       "/chats ID — список каналов и групп проекта\n" +
       "/linkchat PLAN_ID CHAT_ID — привязать площадку к тарифу\n" +
       "/unlinkchat PLAN_ID CHAT_ID — отвязать площадку\n" +
