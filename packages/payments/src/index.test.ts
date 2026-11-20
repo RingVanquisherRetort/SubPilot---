@@ -148,7 +148,7 @@ test("introductory commission excludes sales at or after the trial end", () => {
   });
 
   assert.equal(result.eligible, false);
-  assert.equal(result.commissionAmount, "140");
+  assert.equal(result.commissionAmount, "0");
   assert.equal(result.reason, "OUTSIDE_INTRODUCTORY_PERIOD");
 });
 
