@@ -381,6 +381,8 @@ export function createControlBot(token: string): Bot {
       .text("📣 Каналы и группы", `ui:chats:${projectId}`)
       .text("💳 Платежи", `ui:payments:${projectId}`)
       .row()
+      .text("👤 Подписчики", `ui:customers:${projectId}:0`)
+      .row()
       .text("⬅️ К проектам", "ui:projects");
     await ctx.editMessageText(
       `📁 ${project.name}\n\nБоты: ${botCount}\nАктивные площадки: ${chatCount}\nАктивные тарифы: ${planCount}\n\nВыберите раздел:`,
@@ -443,6 +445,143 @@ export function createControlBot(token: string): Bot {
     await ctx.reply(
       "Введите данные тарифа в одном сообщении в формате:\nНазвание | Цена в Stars | Дней\n\nПример: VIP на месяц | 499 | 30\nУкажите 0 дней для бессрочного доступа.",
       { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
+    );
+  });
+
+  bot.callbackQuery(/^ui:customers:([^:]+):(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const projectId = ctx.match[1];
+    const page = Number(ctx.match[2]);
+    if (!projectId || !Number.isSafeInteger(page) || page < 0) return;
+
+    const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
+    if (!project) {
+      await ctx.editMessageText("Проект не найден или у вас нет доступа.", { reply_markup: backHomeKeyboard() });
+      return;
+    }
+
+    const pageSize = 8;
+    const [customers, total] = await Promise.all([
+      prisma.projectCustomer.findMany({
+        where: { projectId },
+        include: {
+          _count: { select: { subscriptions: true, payments: true } },
+          subscriptions: {
+            where: { status: "ACTIVE" },
+            select: { id: true, endsAt: true }
+          }
+        },
+        orderBy: { updatedAt: "desc" },
+        skip: page * pageSize,
+        take: pageSize
+      }),
+      prisma.projectCustomer.count({ where: { projectId } })
+    ]);
+
+    const keyboard = new InlineKeyboard();
+    for (const customer of customers) {
+      const name = [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
+        (customer.username ? `@${customer.username}` : `ID ${customer.telegramUserId.toString()}`);
+      const label = name.length > 32 ? `${name.slice(0, 29)}…` : name;
+      keyboard.text(
+        `${label} · ${customer.subscriptions.length} акт.`,
+        `ui:customer:${projectId}:${customer.id}`
+      ).row();
+    }
+
+    if (page > 0) keyboard.text("⬅️ Назад", `ui:customers:${projectId}:${page - 1}`);
+    if ((page + 1) * pageSize < total) keyboard.text("Вперёд ➡️", `ui:customers:${projectId}:${page + 1}`);
+    keyboard.row().text("⬅️ К проекту", `ui:project:${projectId}`);
+
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    await ctx.editMessageText(
+      customers.length
+        ? `Подписчики проекта «${project.name}»\nСтраница ${page + 1} из ${pageCount} · Всего клиентов: ${total}\n\nВыберите клиента:`
+        : `В проекте «${project.name}» пока нет клиентов.`,
+      { reply_markup: keyboard }
+    );
+  });
+
+  bot.callbackQuery(/^ui:customer:([^:]+):([^:]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const projectId = ctx.match[1];
+    const customerId = ctx.match[2];
+    if (!projectId || !customerId) return;
+
+    const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
+    if (!project) {
+      await ctx.editMessageText("Проект не найден или у вас нет доступа.", { reply_markup: backHomeKeyboard() });
+      return;
+    }
+
+    const customer = await prisma.projectCustomer.findFirst({
+      where: { id: customerId, projectId },
+      include: {
+        subscriptions: {
+          include: { plan: true },
+          orderBy: { createdAt: "desc" },
+          take: 8
+        },
+        payments: {
+          include: { subscription: { include: { plan: true } } },
+          orderBy: { createdAt: "desc" },
+          take: 8
+        }
+      }
+    });
+
+    if (!customer) {
+      await ctx.editMessageText("Клиент не найден.", {
+        reply_markup: new InlineKeyboard().text("⬅️ К подписчикам", `ui:customers:${projectId}:0`)
+      });
+      return;
+    }
+
+    const name = [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
+      (customer.username ? `@${customer.username}` : "Без имени");
+    const activeCount = customer.subscriptions.filter((subscription) => subscription.status === "ACTIVE").length;
+    const statusLabels: Record<string, string> = {
+      PENDING: "Ожидает оплаты",
+      ACTIVE: "Активна",
+      EXPIRED: "Истекла",
+      CANCELLED: "Отменена",
+      PAST_DUE: "Просрочена"
+    };
+    const paymentLabels: Record<string, string> = {
+      CREATED: "Создан",
+      PENDING: "Ожидает",
+      SUCCEEDED: "Успешно",
+      FAILED: "Ошибка",
+      CANCELLED: "Отменён",
+      REFUNDED: "Возвращён"
+    };
+    const dateLabel = (value: Date | null): string =>
+      value ? value.toLocaleDateString("ru-RU") : "без срока";
+
+    const subscriptionLines = customer.subscriptions.map((subscription, index) =>
+      `${index + 1}. ${subscription.plan.title} — ${statusLabels[subscription.status] ?? subscription.status}\n   До: ${dateLabel(subscription.endsAt)}`
+    );
+    const paymentLines = customer.payments.map((payment, index) =>
+      `${index + 1}. ${payment.subscription?.plan.title ?? "Платёж"} — ${payment.amount.toString()} ${payment.currency}\n   ${paymentLabels[payment.status] ?? payment.status} · ${payment.createdAt.toLocaleDateString("ru-RU")}`
+    );
+
+    const keyboard = new InlineKeyboard()
+      .text("💳 Все платежи проекта", `ui:payments:${projectId}`)
+      .row()
+      .text("⬅️ К подписчикам", `ui:customers:${projectId}:0`)
+      .text("К проекту", `ui:project:${projectId}`);
+
+    await ctx.editMessageText(
+      `👤 ${name}\n` +
+      `Telegram ID: ${customer.telegramUserId.toString()}\n` +
+      `${customer.username ? `Username: @${customer.username}\n` : ""}` +
+      `Активных подписок: ${activeCount}\n` +
+      `Клиент с: ${customer.createdAt.toLocaleDateString("ru-RU")}\n\n` +
+      `Подписки:\n${subscriptionLines.join("\n") || "Пока нет подписок"}\n\n` +
+      `Последние платежи:\n${paymentLines.join("\n") || "Платежей пока нет"}`,
+      { reply_markup: keyboard }
     );
   });
 
