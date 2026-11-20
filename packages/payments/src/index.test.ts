@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   PaymentProviderRegistry,
+  evaluatePaymentEligibility,
   normalizeDecimalAmount,
   type PaymentProviderAdapter
 } from "./index.js";
@@ -53,4 +54,67 @@ test("rejects duplicate adapters and missing providers", () => {
     () => registry.get("YOOKASSA"),
     /not configured/
   );
+});
+
+
+test("Telegram channel access only accepts Stars in the Telegram bot or Mini App", () => {
+  const stars = evaluatePaymentEligibility({
+    provider: "TELEGRAM_STARS",
+    productType: "TELEGRAM_CHANNEL_ACCESS",
+    surface: "TELEGRAM_BOT",
+    telegramTpaRelated: true
+  });
+  const card = evaluatePaymentEligibility({
+    provider: "YOOKASSA",
+    productType: "TELEGRAM_CHANNEL_ACCESS",
+    surface: "TELEGRAM_BOT",
+    telegramTpaRelated: true
+  });
+  const external = evaluatePaymentEligibility({
+    provider: "YOOKASSA",
+    productType: "TELEGRAM_CHANNEL_ACCESS",
+    surface: "INDEPENDENT_WEB",
+    telegramTpaRelated: true
+  });
+
+  assert.equal(stars.allowed, true);
+  assert.equal(card.allowed, false);
+  assert.equal(card.requiredProvider, "TELEGRAM_STARS");
+  assert.equal(external.allowed, false);
+  assert.equal(external.code, "MOVE_CHECKOUT_TO_TELEGRAM");
+});
+
+test("digital goods tied to a Telegram bot cannot use an external PSP", () => {
+  const decision = evaluatePaymentEligibility({
+    provider: "PRODAMUS",
+    productType: "DIGITAL_GOODS_OR_SERVICES",
+    surface: "INDEPENDENT_WEB",
+    telegramTpaRelated: true
+  });
+
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.requiredProvider, "TELEGRAM_STARS");
+});
+
+test("an unrelated independent website sale is evaluated separately", () => {
+  const decision = evaluatePaymentEligibility({
+    provider: "YOOKASSA",
+    productType: "DIGITAL_GOODS_OR_SERVICES",
+    surface: "INDEPENDENT_WEB",
+    telegramTpaRelated: false
+  });
+
+  assert.equal(decision.allowed, true);
+});
+
+test("Stars are not accepted for physical goods or services", () => {
+  const decision = evaluatePaymentEligibility({
+    provider: "TELEGRAM_STARS",
+    productType: "PHYSICAL_GOODS_OR_SERVICES",
+    surface: "TELEGRAM_BOT",
+    telegramTpaRelated: false
+  });
+
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.code, "STARS_NOT_VALID_FOR_PHYSICAL_GOODS");
 });
