@@ -2684,14 +2684,22 @@ export function createControlBot(token: string): Bot {
           throw new Error("Telegram did not confirm webhook configuration.");
         }
 
-        await candidateBot.api.setMyCommands([
-          { command: "start", description: "Открыть меню подписок" },
-          { command: "plans", description: "Посмотреть тарифы" },
-          { command: "buy", description: "Оформить выбранный тариф" },
-          { command: "access", description: "Получить ссылки для вступления" },
-          { command: "terms", description: "Условия покупки" },
-          { command: "paysupport", description: "Поддержка по оплате и возвратам" }
-        ]);
+        try {
+          await candidateBot.api.setMyCommands([
+            { command: "start", description: "Открыть меню подписок" },
+            { command: "plans", description: "Посмотреть тарифы" },
+            { command: "buy", description: "Оформить выбранный тариф" },
+            { command: "access", description: "Получить ссылки для вступления" },
+            { command: "terms", description: "Условия покупки" },
+            { command: "paysupport", description: "Поддержка по оплате и возвратам" }
+          ]);
+        } catch (error) {
+          // Command hints are optional. A valid webhook must still activate the project bot.
+          console.warn(
+            "Project bot webhook is configured, but Telegram command hints could not be updated:",
+            error instanceof Error ? error.name : "UnknownError"
+          );
+        }
 
         await prisma.projectBot.update({
           where: { id: savedProjectBotId },
