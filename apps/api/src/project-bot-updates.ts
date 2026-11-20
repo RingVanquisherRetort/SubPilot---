@@ -336,7 +336,6 @@ async function processSuccessfulStarsPayment(
       ? new Date(currentEnd.getTime() + subscription.plan.durationDays * 24 * 60 * 60 * 1000)
       : null);
 
-  let activatedByThisUpdate = false;
   await prisma.$transaction(async (tx) => {
     const updated = await tx.payment.updateMany({
       where: {
@@ -352,7 +351,6 @@ async function processSuccessfulStarsPayment(
     });
 
     if (updated.count === 1) {
-      activatedByThisUpdate = true;
       await tx.subscription.update({
         where: { id: subscription.id },
         data: {
@@ -393,7 +391,13 @@ async function processSuccessfulStarsPayment(
     return;
   }
 
-  if (activatedByThisUpdate && subscription.status !== "ACTIVE") {
+  const isInitialActivation =
+    subscription.status !== "ACTIVE" ||
+    (subscription.startsAt !== null &&
+      payment.paidAt !== null &&
+      subscription.startsAt.getTime() === payment.paidAt.getTime());
+
+  if (isInitialActivation) {
     const buyerName = [payment.customer.firstName, payment.customer.lastName]
       .filter(Boolean)
       .join(" ") || (payment.customer.username ? `@${payment.customer.username}` : "Покупатель Telegram");
