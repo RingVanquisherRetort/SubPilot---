@@ -1,0 +1,9 @@
+CREATE TYPE "CreatorMerchantType" AS ENUM (
+  'INDIVIDUAL',
+  'SELF_EMPLOYED',
+  'INDIVIDUAL_ENTREPRENEUR',
+  'LEGAL_ENTITY'
+);
+
+ALTER TABLE "Project"
+ADD COLUMN "merchantType" "CreatorMerchantType" NOT NULL DEFAULT 'INDIVIDUAL';
