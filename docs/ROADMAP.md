@@ -17,6 +17,7 @@
 - [x] Persist each user's active workspace.
 - [x] Enforce manager/admin permissions for project operations.
 - [x] Project creation, rename and archive/restore.
+- [x] Store a project-level creator merchant category (individual, self-employed, individual entrepreneur or legal entity) and expose it in the payment-method settings.
 - [x] Add one active project bot by token; verify with Telegram getMe and enforce one active bot per project.
 - [x] Encrypt bot tokens and validate signed webhook secrets.
 - [x] Receive my_chat_member updates and register channels/groups.
