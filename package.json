@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.12.0", "pnpm": ">=10.0.0" },
+  "engines": {
+    "node": ">=22.12.0",
+    "pnpm": ">=10.0.0"
+  },
   "scripts": {
     "dev": "concurrently --kill-others-on-fail --names API,BOT --prefix-colors blue,green \"pnpm --filter @subpilot/api dev\" \"pnpm --filter @subpilot/control-bot dev\"",
     "dev:api": "pnpm --filter @subpilot/api dev",
@@ -12,7 +15,8 @@
     "infra:down": "docker compose down",
     "db:generate": "pnpm --filter @subpilot/database db:generate",
     "db:migrate": "pnpm --filter @subpilot/database db:migrate",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test packages/payments/src/index.test.ts"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
