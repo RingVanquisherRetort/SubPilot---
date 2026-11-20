@@ -1156,6 +1156,8 @@ export function createControlBot(token: string): Bot {
           })
         : [];
 
+      const removalFailures: string[] = [];
+
       for (const grant of grants) {
         await refundBot.api.revokeChatInviteLink(
           grant.connectedChat.telegramChatId.toString(),
@@ -1163,15 +1165,20 @@ export function createControlBot(token: string): Bot {
         ).catch(() => undefined);
 
         if (grant.joinedAt) {
-          await refundBot.api.banChatMember(
-            grant.connectedChat.telegramChatId.toString(),
-            Number(payment.customer.telegramUserId)
-          ).catch((error) => {
+          try {
+            await refundBot.api.banChatMember(
+              grant.connectedChat.telegramChatId.toString(),
+              Number(payment.customer.telegramUserId)
+            );
+          } catch (error) {
+            removalFailures.push(
+              grant.connectedChat.title ?? grant.connectedChat.username ?? grant.connectedChat.telegramChatId.toString()
+            );
             console.error(
               "Could not remove refunded subscriber from Telegram chat:",
               error instanceof Error ? error.name : "UnknownError"
             );
-          });
+          }
         }
       }
 
@@ -1196,7 +1203,10 @@ export function createControlBot(token: string): Bot {
 
       await ctx.reply(
         "Возврат Telegram Stars подтверждён.\n" +
-        "Подписка отменена, ссылки приглашения отозваны. Участник удалён из доступных площадок, если уже вступил."
+        "Подписка отменена, ссылки приглашения отозваны." +
+        (removalFailures.length > 0
+          ? `\n\nБот не смог удалить участника из следующих площадок: ${removalFailures.join(", ")}. Удалите его вручную или выдайте боту право блокировать участников.`
+          : "\nУчастник удалён из площадок, в которых он успел вступить.")
       );
     } catch (error) {
       console.error(
