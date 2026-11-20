@@ -658,8 +658,9 @@ async function processRefundedStarsPayment(
   ctx: Context
 ): Promise<void> {
   const message = ctx.message;
+  const chat = ctx.chat;
   if (!message || !("refunded_payment" in message)) return;
-  if (ctx.chat.type !== "private") {
+  if (!chat || chat.type !== "private") {
     console.error("Telegram sent a Stars refund update outside a private buyer chat.");
     return;
   }
@@ -686,7 +687,7 @@ async function processRefundedStarsPayment(
     providerPaymentId: payment.providerPaymentId,
     customerTelegramUserId: payment.customer.telegramUserId.toString(),
     originProjectBotId
-  }, receipt, ctx.chat.id, projectBotId);
+  }, receipt, chat.id, projectBotId);
 
   if (!matches) {
     console.error("Telegram Stars refund update failed payment, buyer, bot, amount or charge validation.");
