@@ -217,6 +217,7 @@ model ProjectBot {
   status            BotStatus @default(PENDING)
   isPrimary         Boolean   @default(true)
   lastVerifiedAt    DateTime?
+  lastUpdateId      BigInt?
   updateSequenceEpoch Int      @default(0)
   lastUpdateId      Int?
   lastUpdateAt      DateTime?
