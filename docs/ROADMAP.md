@@ -52,6 +52,7 @@
 ## Stage 4 — Payments
 
 - [x] Define a shared provider adapter contract and registry in packages/payments.
+- [x] Add a conservative provider catalog with creator merchant-type/country research hints and per-product Telegram policy evaluation.
 - [x] Add a product/surface-aware Telegram payment eligibility policy and enforce it in the creator Stars checkout.
 - [x] Implement one-time Telegram Stars checkout for in-Telegram digital access.
 - [x] Verify pre-checkout data and require Telegram successful_payment before activation.
@@ -62,7 +63,7 @@
 - [ ] Add recurring Stars subscriptions (Telegram currently constrains recurring bot invoices to a 30-day period).
 - [ ] Keep creator payments isolated from SubPilot platform billing.
 
-Initial provider candidates for research: YooKassa, YooMoney, Prodamus, Robokassa, CloudPayments and Crypto Pay. Each requires a separate eligibility and integration assessment. These providers remain disabled for Telegram channel/group access; a future adapter must pass the product-policy gate, merchant review and provider-contract checks before it can be enabled.
+Initial research candidates for creators who are individuals: YooMoney, Crypto Pay and manual confirmation. Nemiling's public matrix lists these for physical persons, but this is reference information only. SubPilot adapters and provider approvals remain pending. YooKassa, Prodamus, Robokassa and CloudPayments are retained as candidates for merchant types listed by the reference matrix (for example, self-employed, individual entrepreneurs or legal entities). None of these external methods can be used to sell Telegram channel/group access or other digital goods/services offered or fulfilled by a Telegram bot/Mini App; Stars remain required. See docs/decisions/creator-payment-model.md.
 
 ## Stage 5 — Monetization features
 
@@ -76,16 +77,11 @@ Initial provider candidates for research: YooKassa, YooMoney, Prodamus, Robokass
 
 ## Stage 6 — SubPilot billing
 
-- [x] Define the seven-day, 14% introductory offer as an explicitly selected, temporary workspace-level offer.
-- [x] Add decimal-safe commission calculation with a strict seven-day eligibility window and refund-aware net sales.
-- [ ] Persist offer activation and immutable rate/period snapshots in WorkspaceBilling.
-- [ ] Add an idempotent platform commission ledger linked to creator payments and refund adjustments.
-- [ ] Define and disclose the XTR-to-settlement-currency conversion and collection policy before invoicing Stars-derived fees.
-- [ ] Add separate platform commission invoices and payment reconciliation; never debit creator Stars.
-- [ ] Add the offer selection, terms acceptance, remaining-time and accrued-fee UI to the control bot/workspace.
-- [ ] Platform plan catalogue and feature limits.
-- [ ] Workspace billing lifecycle.
-- [ ] Separate platform payment adapters and invoices/receipts as required.
+- [x] Keep the seven-day/14% concept and calculator isolated as a research experiment; it is not connected to the default creator payment flow.
+- [ ] Build the fixed-price platform plan catalogue and workspace feature limits (primary launch revenue model).
+- [ ] Implement workspace billing lifecycle, payment status transitions and grace periods.
+- [ ] Add separate platform billing adapters, invoices/receipts and reconciliation as required.
+- [ ] Reconsider the 14% offer only after a separate legal, provider, currency and commercial review; do not debit creator Stars.
 - [ ] Upgrade/downgrade, grace period and payment-failure handling.
 
 ## Stage 7 — Agency and analytics
