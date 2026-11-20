@@ -344,13 +344,14 @@ model Payment {
 
 model PaymentWebhookEvent {
   id              String                    @id @default(cuid())
-  connectionId    String
+  connectionId    String?
+  dedupeKey       String?                   @unique
   providerEventId String
   eventType       String
   payload         Json
   receivedAt      DateTime                  @default(now())
   processedAt     DateTime?
-  connection      PaymentProviderConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  connection      PaymentProviderConnection? @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@unique([connectionId, providerEventId])
   @@index([connectionId, receivedAt])
