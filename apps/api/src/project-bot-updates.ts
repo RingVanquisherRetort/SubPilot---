@@ -3,6 +3,7 @@ import { Bot, InlineKeyboard, type Context } from "grammy";
 import { prisma } from "@subpilot/database";
 import {
   evaluatePaymentEligibility,
+  isTelegramInviteAlreadyRevoked,
   matchesTelegramStarsRefundReceipt,
   recalculateSubscriptionPeriod
 } from "@subpilot/payments";
@@ -1449,10 +1450,16 @@ export async function handleProjectBotUpdate(
         await projectBot.api.revokeChatInviteLink(ctx.chat.id, inviteLink);
         inviteRevoked = true;
       } catch (error) {
-        console.error(
-          "Could not revoke an invite link used by the wrong Telegram user:",
-          error instanceof Error ? error.name : "UnknownError"
-        );
+        if (isTelegramInviteAlreadyRevoked(error)) {
+          // A one-member link may already be expired after the unintended user consumed it.
+          // Treat Telegram's explicit expired-hash response as safe revocation and issue a fresh link.
+          inviteRevoked = true;
+        } else {
+          console.error(
+            "Could not revoke an invite link used by the wrong Telegram user:",
+            error instanceof Error ? error.name : "UnknownError"
+          );
+        }
       }
 
       let unintendedUserRemoved = false;
