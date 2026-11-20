@@ -860,6 +860,177 @@ export function createControlBot(token: string): Bot {
     }
   });
 
+  bot.command("chats", async (ctx) => {
+    const projectId = String(ctx.match ?? "").trim();
+
+    if (!projectId) {
+      await ctx.reply("Формат: /chats PROJECT_ID");
+      return;
+    }
+
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
+
+      if (!project) {
+        await ctx.reply("Проект не найден или у вас нет доступа.");
+        return;
+      }
+
+      const chats = await prisma.connectedChat.findMany({
+        where: { projectId: project.id },
+        orderBy: [{ isActive: "desc" }, { createdAt: "asc" }]
+      });
+
+      if (chats.length === 0) {
+        await ctx.reply("К проекту пока не подключены каналы или группы.");
+        return;
+      }
+
+      const lines = chats.map((chat, index) =>
+        `${index + 1}. ${chat.title ?? chat.username ?? "Без названия"}\n` +
+        `${chat.type.toLowerCase()} · ${chat.isActive ? "активен" : "неактивен"}\nID: ${chat.id}`
+      );
+
+      await ctx.reply(
+        `Площадки проекта «${project.name}»:\n\n` +
+        lines.join("\n\n") +
+        "\n\nНазначение тарифу: /linkchat PLAN_ID CHAT_ID"
+      );
+    } catch (error) {
+      console.error("Control bot /chats failed:", error);
+      await ctx.reply("Не удалось загрузить список площадок.");
+    }
+  });
+
+  bot.command("linkchat", async (ctx) => {
+    const input = String(ctx.match ?? "").trim();
+    const splitAt = input.indexOf(" ");
+    const planId = splitAt > 0 ? input.slice(0, splitAt) : "";
+    const chatId = splitAt > 0 ? input.slice(splitAt + 1).trim() : "";
+
+    if (!planId || !chatId) {
+      await ctx.reply("Формат: /linkchat PLAN_ID CHAT_ID\nID площадок можно посмотреть командой /chats PROJECT_ID.");
+      return;
+    }
+
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const plan = await prisma.creatorPlan.findFirst({
+        where: {
+          id: planId,
+          project: {
+            workspace: {
+              members: {
+                some: { userId: user.id, role: { in: [...MANAGER_ROLES] } }
+              }
+            }
+          }
+        },
+        select: { id: true, title: true, projectId: true }
+      });
+
+      if (!plan) {
+        await ctx.reply("Тариф не найден или у вас нет прав управления.");
+        return;
+      }
+
+      const chat = await prisma.connectedChat.findFirst({
+        where: { id: chatId, projectId: plan.projectId, isActive: true },
+        select: { id: true, title: true, username: true }
+      });
+
+      if (!chat) {
+        await ctx.reply("Активная площадка с таким ID не найдена в проекте этого тарифа.");
+        return;
+      }
+
+      await prisma.creatorPlanChat.upsert({
+        where: {
+          creatorPlanId_connectedChatId: {
+            creatorPlanId: plan.id,
+            connectedChatId: chat.id
+          }
+        },
+        update: {},
+        create: {
+          creatorPlanId: plan.id,
+          connectedChatId: chat.id
+        }
+      });
+
+      await ctx.reply(
+        `Площадка «${chat.title ?? chat.username ?? chat.id}» привязана к тарифу «${plan.title}».`
+      );
+    } catch (error) {
+      console.error("Control bot /linkchat failed:", error);
+      await ctx.reply("Не удалось привязать площадку к тарифу.");
+    }
+  });
+
+  bot.command("unlinkchat", async (ctx) => {
+    const input = String(ctx.match ?? "").trim();
+    const splitAt = input.indexOf(" ");
+    const planId = splitAt > 0 ? input.slice(0, splitAt) : "";
+    const chatId = splitAt > 0 ? input.slice(splitAt + 1).trim() : "";
+
+    if (!planId || !chatId) {
+      await ctx.reply("Формат: /unlinkchat PLAN_ID CHAT_ID");
+      return;
+    }
+
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const plan = await prisma.creatorPlan.findFirst({
+        where: {
+          id: planId,
+          project: {
+            workspace: {
+              members: {
+                some: { userId: user.id, role: { in: [...MANAGER_ROLES] } }
+              }
+            }
+          }
+        },
+        select: {
+          id: true,
+          title: true,
+          chats: { select: { connectedChatId: true } }
+        }
+      });
+
+      if (!plan) {
+        await ctx.reply("Тариф не найден или у вас нет прав управления.");
+        return;
+      }
+
+      const isLinked = plan.chats.some((link) => link.connectedChatId === chatId);
+      if (!isLinked) {
+        await ctx.reply("Эта площадка не привязана к выбранному тарифу.");
+        return;
+      }
+
+      if (plan.chats.length <= 1) {
+        await ctx.reply("У тарифа должна оставаться хотя бы одна площадка. Сначала привяжите другую через /linkchat.");
+        return;
+      }
+
+      await prisma.creatorPlanChat.delete({
+        where: {
+          creatorPlanId_connectedChatId: {
+            creatorPlanId: plan.id,
+            connectedChatId: chatId
+          }
+        }
+      });
+
+      await ctx.reply(`Площадка отвязана от тарифа «${plan.title}».`);
+    } catch (error) {
+      console.error("Control bot /unlinkchat failed:", error);
+      await ctx.reply("Не удалось отвязать площадку.");
+    }
+  });
+
   bot.command("archiveplan", async (ctx) => {
     const planId = String(ctx.match ?? "").trim();
 
@@ -1130,6 +1301,9 @@ export function createControlBot(token: string): Bot {
       "/restoreproject ID — восстановить проект\n" +
       "/createplan ID | Название | Цена | Дней — создать тариф\n" +
       "/plans ID — посмотреть тарифы\n" +
+      "/chats ID — список каналов и групп проекта\n" +
+      "/linkchat PLAN_ID CHAT_ID — привязать площадку к тарифу\n" +
+      "/unlinkchat PLAN_ID CHAT_ID — отвязать площадку\n" +
       "/archiveplan ID — архивировать тариф\n" +
       "/restoreplan ID — восстановить тариф\n" +
       "/connectbot ID — подключить отдельного бота\n" +
