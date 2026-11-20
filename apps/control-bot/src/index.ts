@@ -34,6 +34,10 @@ if (!token) {
     { command: "renameproject", description: "Rename a project" },
     { command: "archiveproject", description: "Archive a project" },
     { command: "restoreproject", description: "Restore an archived project" },
+    { command: "createplan", description: "Create a creator subscription plan" },
+    { command: "plans", description: "List project subscription plans" },
+    { command: "archiveplan", description: "Archive a subscription plan" },
+    { command: "restoreplan", description: "Restore a subscription plan" },
     { command: "connectbot", description: "Connect a bot to a project" },
     { command: "cancel", description: "Cancel the current operation" },
     { command: "help", description: "Show available commands" }
