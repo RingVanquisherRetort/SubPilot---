@@ -9,6 +9,7 @@ import {
 import { enqueueProjectOwnerNotification } from "./owner-notifications.js";
 import { hasRequiredSubscriptionChatRights } from "./telegram-chat-access.js";
 import { isPaymentFromProjectBot } from "./telegram-payment-origin.js";
+import { hasInvoiceDispatchStarted } from "./telegram-invoice-state.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
@@ -179,8 +180,7 @@ async function createPurchaseInvoice(
       return {
         payment: reusablePayment,
         subscription,
-        createdPayment: false,
-        invoiceAlreadySent: typeof metadata.invoiceMessageId === "number"
+        invoiceAlreadySent: hasInvoiceDispatchStarted(metadata)
       };
     }
 
@@ -210,7 +210,7 @@ async function createPurchaseInvoice(
       }
     });
 
-    return { payment, subscription, createdPayment: true, invoiceAlreadySent: false };
+    return { payment, subscription, invoiceAlreadySent: false };
   });
 
   if (pending.invoiceAlreadySent) {
@@ -238,8 +238,24 @@ async function createPurchaseInvoice(
     return;
   }
 
+  const dispatchStartedAt = new Date().toISOString();
+  const dispatchClaim = await prisma.payment.updateMany({
+    where: { id: pending.payment.id, status: "PENDING" },
+    data: {
+      metadata: {
+        ...invoiceMetadata,
+        invoiceDispatchStartedAt: dispatchStartedAt
+      }
+    }
+  });
+  if (dispatchClaim.count !== 1) {
+    await ctx.reply("Статус счёта уже изменился. Не создавайте новую покупку; проверьте поддержку по оплате через /paysupport.");
+    return;
+  }
+
+  let invoiceMessage: Awaited<ReturnType<typeof ctx.api.sendInvoice>>;
   try {
-    const invoiceMessage = await ctx.api.sendInvoice(
+    invoiceMessage = await ctx.api.sendInvoice(
       ctx.chat.id,
       invoiceTitle.slice(0, 32),
       invoiceDescription.slice(0, 255),
@@ -247,45 +263,49 @@ async function createPurchaseInvoice(
       "XTR",
       [{ label: invoiceTitle.slice(0, 32), amount: invoiceAmountStars }]
     );
+  } catch (error) {
+    // Telegram may have received the request even when the client did not receive a definitive response.
+    // Keep the payment pending and suppress retries until its normal 24-hour expiry rather than risk two invoices.
+    console.error(
+      "Project bot invoice dispatch has an ambiguous result:",
+      error instanceof Error ? error.name : "UnknownError"
+    );
+    await ctx.reply(
+      "Telegram не дал однозначного ответа по выставлению счёта. Он мог быть отправлен, поэтому повторный счёт не создан. " +
+      "Проверьте предыдущие сообщения от бота. Если счёта нет, обратитесь в поддержку через /paysupport; " +
+      "не начинайте новую покупку до проверки."
+    );
+    return;
+  }
 
-    await prisma.payment.updateMany({
+  try {
+    const recorded = await prisma.payment.updateMany({
       where: { id: pending.payment.id, status: "PENDING" },
       data: {
         metadata: {
           ...invoiceMetadata,
+          invoiceDispatchStartedAt: dispatchStartedAt,
           invoiceMessageId: invoiceMessage.message_id,
           invoiceSentAt: new Date().toISOString()
         }
       }
     });
-  } catch (error) {
-    if (pending.createdPayment) {
-      await prisma.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`subscription:${projectId}:${customer.id}:${plan.id}`}, 0))`;
-
-        const failed = await tx.payment.updateMany({
-          where: { id: pending.payment.id, status: "PENDING" },
-          data: { status: "FAILED" }
-        });
-        if (failed.count !== 1) return;
-
-        const remainingPendingPayments = await tx.payment.count({
-          where: { subscriptionId: pending.subscription.id, status: "PENDING" }
-        });
-        if (remainingPendingPayments === 0) {
-          await tx.subscription.updateMany({
-            where: { id: pending.subscription.id, status: "PENDING" },
-            data: { status: "CANCELLED", cancelledAt: new Date() }
-          });
-        }
-      });
+    if (recorded.count !== 1) {
+      await ctx.reply(
+        "Счёт отправлен, но его статус изменился до сохранения. Не запрашивайте новый счёт; " +
+        "проверьте сообщение с оплатой или обратитесь в /paysupport."
+      );
     }
-
+  } catch (error) {
     console.error(
-      "Project bot could not create Telegram Stars invoice:",
+      "Telegram invoice was sent but its message reference could not be persisted:",
       error instanceof Error ? error.name : "UnknownError"
     );
-    await ctx.reply("Не удалось выставить счёт. Попробуйте ещё раз позже.");
+    await ctx.reply(
+      "Счёт отправлен, но SubPilot не смог сохранить его ссылку в журнале. Не запрашивайте новый счёт. " +
+      "Используйте уже отправленное сообщение для оплаты или обратитесь в /paysupport."
+    );
+  }
   }
 }
 
