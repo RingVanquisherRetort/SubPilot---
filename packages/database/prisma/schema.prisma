@@ -100,6 +100,7 @@ model User {
   languageCode      String?
   activeWorkspaceId String?
   memberships       WorkspaceMember[]
+  createdInvites     WorkspaceInvite[] @relation("WorkspaceInviteCreator")
   createdWorkspaces Workspace[]       @relation("WorkspaceCreator")
   auditEvents       AuditLog[]
   createdAt         DateTime          @default(now())
@@ -114,6 +115,7 @@ model Workspace {
   createdById String
   createdBy   User              @relation("WorkspaceCreator", fields: [createdById], references: [id], onDelete: Restrict)
   members     WorkspaceMember[]
+  invites     WorkspaceInvite[]
   projects    Project[]
   billing     WorkspaceBilling?
   auditLogs   AuditLog[]
@@ -132,6 +134,22 @@ model WorkspaceMember {
 
   @@unique([workspaceId, userId])
   @@index([userId, role])
+}
+
+model WorkspaceInvite {
+  id              String        @id @default(cuid())
+  workspaceId     String
+  invitedByUserId String
+  tokenHash       String        @unique
+  role            WorkspaceRole @default(MANAGER)
+  expiresAt       DateTime
+  usedAt          DateTime?
+  workspace       Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy       User           @relation("WorkspaceInviteCreator", fields: [invitedByUserId], references: [id], onDelete: Cascade)
+  createdAt       DateTime      @default(now())
+
+  @@index([workspaceId, expiresAt, usedAt])
+  @@index([invitedByUserId, createdAt])
 }
 
 model Project {
