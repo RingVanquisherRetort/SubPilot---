@@ -25,7 +25,7 @@ SubPilot gives each creator a project workspace and a dedicated Telegram bot. Ag
 
 1. Install Node.js 22.12+ and pnpm 10+.
 2. Copy `.env.example` to `.env`.
-3. Set `CONTROL_BOT_TOKEN` from @BotFather.
+3. Set `CONTROL_BOT_TOKEN` from @BotFather in both the central-bot and API environments (the API uses it to deliver owner notifications).
 4. Generate `SECRETS_ENCRYPTION_KEY` with `openssl rand -base64 32`.
 5. Set `PUBLIC_API_URL` to the public HTTPS origin of the API. Telegram webhooks cannot reach localhost.
 6. Start PostgreSQL and Redis with `pnpm infra:up`.
@@ -40,7 +40,7 @@ The API exposes `GET /health` and `GET /ready`. Project bot updates are received
 
 Open the central bot with `/start` once. After that, use the inline button dashboard: projects, workspaces, agency creation, team members and invitations, project bots, tariff management, channels/groups and payment history. Tariff cards support editing the title, Stars price and duration, archiving/restoring, and linking/unlinking project channels and groups. SubPilot sends the project author and agency owner notifications about newly activated subscriptions, tariff expiry reminders (three days and one day before expiry), and subscription expiry. It does not expose a customer directory or individual customer cards. A tariff must retain at least one active destination. Text is requested only for values that need to be entered, such as a project name, bot token or tariff details.
 
-The Telegram command menu is intentionally reduced to `/start` and `/help`. The underlying commands remain available for administration and troubleshooting, but normal operation is button-first.
+The Telegram command menu includes `/start`, `/help` and the personal `/testnotifications` smoke test. Other administrative commands remain available as fallbacks, but normal operation is button-first.
 
 The following commands remain available as an advanced fallback:
 
@@ -57,6 +57,7 @@ The following commands remain available as an advanced fallback:
 - `/plans PROJECT_ID` — list plans.
 - `/payments PROJECT_ID` — view recent payments.
 - `/refundpayment PAYMENT_ID` — issue a Telegram Stars refund and cancel the entitlement.
+- `/testnotifications` — send four sample lifecycle notifications to your own private chat with the central bot.
 
 The control bot deletes the BotFather token message on a best-effort basis. If the message remains visible, revoke the token in BotFather and issue a new one. Project-bot webhook activation requires `PUBLIC_API_URL` and a reachable HTTPS API.
 
