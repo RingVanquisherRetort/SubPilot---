@@ -30,8 +30,8 @@ SubPilot gives each creator a project workspace and a dedicated Telegram bot. Ag
 5. Set `PUBLIC_API_URL` to the public HTTPS origin of the API. Telegram webhooks cannot reach localhost.
 6. Start PostgreSQL and Redis with `pnpm infra:up`.
 7. Install dependencies with `pnpm install`.
-8. Generate Prisma Client with `pnpm db:generate`.
-9. Apply the development schema with `pnpm db:migrate`.
+8. Apply the initial migration with `pnpm db:migrate:deploy`.
+9. Generate Prisma Client with `pnpm db:generate`.
 10. Start the API and central bot with `pnpm dev`.
 
 The API exposes `GET /health` and `GET /ready`. Project bot updates are received at `POST /webhooks/telegram/:botId` and authenticated with Telegram's secret-token header.
@@ -57,7 +57,7 @@ The following commands remain available as an advanced fallback:
 - `/plans PROJECT_ID` — list plans.
 - `/payments PROJECT_ID` — view recent payments.
 - `/refundpayment PAYMENT_ID` — issue a Telegram Stars refund and cancel the entitlement.
-- `/testnotifications` — send four sample lifecycle notifications to your own private chat with the central bot.
+- `/testnotifications` — send four sample lifecycle notifications to your own private chat with the central bot. This smoke test does not contact project owners or subscribers.
 
 The control bot deletes the BotFather token message on a best-effort basis. If the message remains visible, revoke the token in BotFather and issue a new one. Project-bot webhook activation requires `PUBLIC_API_URL` and a reachable HTTPS API.
 
@@ -112,4 +112,4 @@ Do not run the baseline against a populated database as a fresh migration. If th
 
 ## Current status
 
-Foundation, workspace management, project-bot webhooks, creator plan management and a first Telegram Stars one-time purchase flow are implemented in the development branch. External provider integrations, recurring billing, subscription expiry automation and several monetization features remain on the roadmap.
+Foundation, workspace management, project-bot webhooks, creator plan management, the first Telegram Stars one-time purchase flow, subscription lifecycle processing and owner notifications are implemented in the development branch. External provider integrations, recurring billing and several monetization features remain on the roadmap. Live Telegram delivery and deployment to a configured server still require environment setup and smoke testing.
