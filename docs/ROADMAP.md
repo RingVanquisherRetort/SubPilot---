@@ -11,8 +11,11 @@
 
 ## Stage 2 — Workspace and project management
 
-- Workspace selector and agency membership.
-- Invite teammates and enforce workspace roles.
+- [x] Workspace selector and agency membership.
+- [x] Create agency workspace from the central bot.
+- [x] Invite teammates with role-scoped, one-use Telegram deep links that expire after seven days.
+- [x] Persist each user's active workspace.
+- [x] Enforce manager/admin permissions for project operations.
 - Project creation/editing/archive.
 - Add a project bot by token; verify with Telegram getMe.
 - Encrypt bot tokens and register unique webhook secrets.
