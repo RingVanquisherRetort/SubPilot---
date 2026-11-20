@@ -37,8 +37,14 @@ async function sendRenewalReminders(now: Date): Promise<void> {
       status: "ACTIVE",
       endsAt: { gt: now, lte: threeDayLimit },
       OR: [
-        { reminder3dAt: null },
-        { endsAt: { lte: oneDayLimit }, reminder1dAt: null }
+        {
+          endsAt: { gt: oneDayLimit, lte: threeDayLimit },
+          reminder3dAt: null
+        },
+        {
+          endsAt: { gt: now, lte: oneDayLimit },
+          reminder1dAt: null
+        }
       ]
     },
     include: {
