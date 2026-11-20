@@ -460,7 +460,7 @@ export function createControlBot(token: string): Bot {
       .row().text("⬅️ К проекту", `ui:project:${projectId}`);
     await ctx.editMessageText(
       plans.length
-        ? `Активные тарифы «${project.name}»:\\nВыберите тариф для управления:`
+        ? `Активные тарифы «${project.name}»:\nВыберите тариф для управления:`
         : `В проекте «${project.name}» пока нет активных тарифов.`,
       { reply_markup: keyboard }
     );
@@ -485,7 +485,7 @@ export function createControlBot(token: string): Bot {
     keyboard.text("⬅️ Активные тарифы", `ui:plans:${projectId}`).row()
       .text("К проекту", `ui:project:${projectId}`);
     await ctx.editMessageText(
-      plans.length ? `Архив тарифов «${project.name}»:\\nВыберите тариф для восстановления:` : "Архив пуст.",
+      plans.length ? `Архив тарифов «${project.name}»:\nВыберите тариф для восстановления:` : "Архив пуст.",
       { reply_markup: keyboard }
     );
   });
@@ -529,13 +529,13 @@ export function createControlBot(token: string): Bot {
       .text("К проекту", `ui:project:${projectId}`);
 
     await ctx.editMessageText(
-      `💎 ${plan.title}\\n\\n` +
-      `Цена: ${plan.price.toString()} ⭐\\n` +
-      `Срок: ${duration}\\n` +
-      `Статус: ${plan.status === "ACTIVE" ? "Активен" : "В архиве"}\\n` +
-      `Площадок: ${plan._count.chats}\\n` +
-      `Подписок всего: ${plan._count.subscriptions}\\n\\n` +
-      `Каналы и группы:\\n${chatNames.join("\\n") || "Не привязаны"}\\n\\n` +
+      `💎 ${plan.title}\n\n` +
+      `Цена: ${plan.price.toString()} ⭐\n` +
+      `Срок: ${duration}\n` +
+      `Статус: ${plan.status === "ACTIVE" ? "Активен" : "В архиве"}\n` +
+      `Площадок: ${plan._count.chats}\n` +
+      `Подписок всего: ${plan._count.subscriptions}\n\n` +
+      `Каналы и группы:\n${chatNames.join("\n") || "Не привязаны"}\n\n` +
       `ID: ${plan.id}`,
       { reply_markup: keyboard }
     );
@@ -578,7 +578,7 @@ export function createControlBot(token: string): Bot {
     keyboard.text("⬅️ К тарифу", `p:v:${plan.projectId}:${planId}`);
     await ctx.editMessageText(
       chats.length
-        ? "Каналы и группы тарифа. Нажмите на площадку, чтобы привязать или отвязать её:\\n\\n✅ — доступ включён в тариф\\n➕ — нажмите, чтобы добавить"
+        ? "Каналы и группы тарифа. Нажмите на площадку, чтобы привязать или отвязать её:\n\n✅ — доступ включён в тариф\n➕ — нажмите, чтобы добавить"
         : "В проекте нет активных каналов или групп. Сначала добавьте бота проекта администратором в нужную площадку.",
       { reply_markup: keyboard }
     );
@@ -662,7 +662,7 @@ export function createControlBot(token: string): Bot {
     }
     keyboard.text("⬅️ К тарифу", `p:v:${plan.projectId}:${planId}`);
     await ctx.editMessageText(
-      "Площадки тарифа обновлены. Нажмите на площадку, чтобы изменить выбор:\\n\\n✅ — доступ включён в тариф\\n➕ — нажмите, чтобы добавить",
+      "Площадки тарифа обновлены. Нажмите на площадку, чтобы изменить выбор:\n\n✅ — доступ включён в тариф\n➕ — нажмите, чтобы добавить",
       { reply_markup: keyboard }
     );
   });
@@ -684,7 +684,7 @@ export function createControlBot(token: string): Bot {
     }
     pendingTextActions.set(ctx.from.id, { kind: "edit_plan", projectId, planId });
     await ctx.reply(
-      `Изменяем тариф «${plan.title}». Отправьте новые данные в формате:\\nНазвание | Цена в Stars | Дней\\n\\nТекущие данные: ${plan.title} | ${plan.price.toString()} | ${plan.durationDays ?? 0}`,
+      `Изменяем тариф «${plan.title}». Отправьте новые данные в формате:\nНазвание | Цена в Stars | Дней\n\nТекущие данные: ${plan.title} | ${plan.price.toString()} | ${plan.durationDays ?? 0}`,
       { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
     );
   });
