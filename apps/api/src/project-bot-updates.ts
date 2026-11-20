@@ -337,6 +337,23 @@ async function processSuccessfulStarsPayment(
           endsAt
         }
       });
+
+      await tx.paymentWebhookEvent.create({
+        data: {
+          connectionId: null,
+          dedupeKey: `telegram-stars:${receipt.telegram_payment_charge_id}`,
+          providerEventId: receipt.telegram_payment_charge_id,
+          eventType: "telegram.stars.payment.succeeded",
+          payload: {
+            invoicePayload: receipt.invoice_payload,
+            currency: receipt.currency,
+            totalAmount: receipt.total_amount,
+            telegramPaymentChargeId: receipt.telegram_payment_charge_id,
+            providerPaymentChargeId: receipt.provider_payment_charge_id
+          },
+          processedAt: now
+        }
+      });
     }
   });
 
