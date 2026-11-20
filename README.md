@@ -79,6 +79,26 @@ The API starts a lifecycle worker after the database and HTTP server are ready. 
 
 **Important current limitations:** Telegram Stars recurring billing, external provider adapters, donations, paid messages and consultation billing are still in development. The lifecycle worker and button flows need integration testing against a configured PostgreSQL database and real Telegram bots before production use. Do not treat the current checkout as production-ready until database migrations, bot runtime, payment tests and access-expiry handling have been tested in a configured environment.
 
+## Database migrations
+
+A full initial Prisma baseline is stored in `packages/database/prisma/migrations/0_init`.
+
+For a new, empty PostgreSQL database, configure `DATABASE_URL` and run:
+
+```bash
+pnpm infra:up
+pnpm db:migrate:deploy
+pnpm db:generate
+```
+
+For a database that already contains the exact schema represented by `0_init`, take a backup and inspect the schema first, then mark the baseline as applied instead of trying to create the tables again:
+
+```bash
+pnpm --filter @subpilot/database exec prisma migrate resolve --applied 0_init --config prisma.config.ts
+```
+
+Do not run the baseline against a populated database as a fresh migration. If the existing database differs from the baseline, reconcile it with a reviewed migration before deploying. In production, use `pnpm db:migrate:deploy`; use `pnpm db:migrate` only in development when creating new migrations.
+
 ## Repository layout
 
 - `apps/api` — HTTP API and project-bot webhook handler.
