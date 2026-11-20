@@ -10,6 +10,7 @@
   "dependencies": {
     "@subpilot/database": "workspace:*",
     "dotenv": "^17.2.3",
-    "grammy": "^1.46.0"
+    "grammy": "^1.46.0",
+    "@subpilot/security": "workspace:*"
   }
 }
