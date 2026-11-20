@@ -28,7 +28,8 @@ export type PaymentEligibilityCode =
   | "TELEGRAM_STARS_REQUIRED"
   | "MOVE_CHECKOUT_TO_TELEGRAM"
   | "STARS_NOT_VALID_FOR_PHYSICAL_GOODS"
-  | "EXTERNAL_PROVIDER_NOT_FOR_TELEGRAM_DIGITAL_GOODS";
+  | "EXTERNAL_PROVIDER_NOT_FOR_TELEGRAM_DIGITAL_GOODS"
+  | "MANUAL_CONFIRMATION_REQUIRES_INDEPENDENT_WEB";
 
 export interface PaymentEligibilityDecision {
   allowed: boolean;
@@ -65,6 +66,14 @@ export function evaluatePaymentEligibility(
       };
     }
     return { allowed: true, code: "ALLOWED", message: "Telegram Stars are eligible for Telegram channel/group access." };
+  }
+
+  if (provider === "MANUAL" && (surface !== "INDEPENDENT_WEB" || telegramTpaRelated)) {
+    return {
+      allowed: false,
+      code: "MANUAL_CONFIRMATION_REQUIRES_INDEPENDENT_WEB",
+      message: "Manual transfer and proof review are not an in-Telegram payment provider. Keep this method to a separately reviewed independent-web checkout that is not offered, promoted or fulfilled through a Telegram bot or Mini App. Provider, tax and local-law checks still apply."
+    };
   }
 
   if (productType === "DIGITAL_GOODS_OR_SERVICES") {
