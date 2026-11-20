@@ -180,6 +180,79 @@ export function createControlBot(token: string): Bot {
     );
   });
 
+  bot.callbackQuery("ui:team", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const { workspace, role } = await getActiveWorkspace(user);
+    const members = await prisma.workspaceMember.findMany({
+      where: { workspaceId: workspace.id },
+      include: { user: true },
+      orderBy: { createdAt: "asc" },
+      take: 30
+    });
+    const lines = members.map((member, index) => {
+      const name = [member.user.firstName, member.user.lastName].filter(Boolean).join(" ") ||
+        (member.user.username ? `@${member.user.username}` : "Пользователь");
+      return `${index + 1}. ${name} · ${member.role.toLowerCase()}`;
+    });
+    const keyboard = new InlineKeyboard();
+    if (role === "OWNER" || role === "ADMIN") {
+      keyboard.text("➕ Пригласить участника", "ui:invite").row();
+    }
+    keyboard.text("⬅️ В главное меню", "ui:home");
+    await ctx.editMessageText(
+      `Команда пространства «${workspace.name}»:\n\n${lines.join("\n") || "Пока только вы."}`,
+      { reply_markup: keyboard }
+    );
+  });
+
+  bot.callbackQuery("ui:invite", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const { role } = await getActiveWorkspace(user);
+    if (role !== "OWNER" && role !== "ADMIN") {
+      await ctx.reply("Приглашать участников могут только владелец или администратор.");
+      return;
+    }
+    const keyboard = new InlineKeyboard()
+      .text("Менеджер", "ui:invite:MANAGER")
+      .text("Наблюдатель", "ui:invite:VIEWER")
+      .row();
+    if (role === "OWNER") keyboard.text("Администратор", "ui:invite:ADMIN").row();
+    keyboard.text("Отмена", "ui:team");
+    await ctx.reply("Выберите роль нового участника:", { reply_markup: keyboard });
+  });
+
+  bot.callbackQuery(/^ui:invite:(ADMIN|MANAGER|VIEWER)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const requestedRole = ctx.match[1] as "ADMIN" | "MANAGER" | "VIEWER";
+    const user = await upsertTelegramUser(ctx);
+    const { workspace, role: actorRole } = await getActiveWorkspace(user);
+    if ((requestedRole === "ADMIN" && actorRole !== "OWNER") ||
+        !["OWNER", "ADMIN"].includes(actorRole)) {
+      await ctx.reply("У вас нет прав назначить эту роль.");
+      return;
+    }
+    const token = randomBytes(32).toString("base64url");
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    await prisma.workspaceInvite.create({
+      data: {
+        workspaceId: workspace.id,
+        invitedByUserId: user.id,
+        tokenHash,
+        role: requestedRole,
+        expiresAt
+      }
+    });
+    const botInfo = await ctx.api.getMe();
+    const inviteLink = `https://t.me/${botInfo.username}?start=join_${token}`;
+    await ctx.reply(
+      `Приглашение в «${workspace.name}» создано. Роль: ${requestedRole.toLowerCase()}. Ссылка действует 7 дней и используется один раз:\n\n${inviteLink}`,
+      { reply_markup: new InlineKeyboard().text("К команде", "ui:team").row().text("В главное меню", "ui:home") }
+    );
+  });
+
   bot.callbackQuery("ui:help", async (ctx) => {
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(
