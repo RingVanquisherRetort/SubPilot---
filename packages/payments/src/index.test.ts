@@ -110,6 +110,44 @@ test("an unrelated independent website sale is evaluated separately", () => {
   assert.equal(decision.allowed, true);
 });
 
+test("manual confirmation is blocked inside Telegram even for physical goods", () => {
+  const decision = evaluatePaymentEligibility({
+    provider: "MANUAL",
+    productType: "PHYSICAL_GOODS_OR_SERVICES",
+    surface: "TELEGRAM_BOT",
+    telegramTpaRelated: false
+  });
+
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.code, "MANUAL_CONFIRMATION_REQUIRES_INDEPENDENT_WEB");
+});
+
+test("manual confirmation is blocked for Telegram Mini App related products", () => {
+  const decision = evaluatePaymentEligibility({
+    provider: "MANUAL",
+    productType: "DIGITAL_GOODS_OR_SERVICES",
+    surface: "TELEGRAM_MINI_APP",
+    telegramTpaRelated: true
+  });
+
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.code, "MANUAL_CONFIRMATION_REQUIRES_INDEPENDENT_WEB");
+});
+
+test("manual confirmation passes only the policy gate for independent web sales", () => {
+  for (const productType of ["DIGITAL_GOODS_OR_SERVICES", "PHYSICAL_GOODS_OR_SERVICES"] as const) {
+    const decision = evaluatePaymentEligibility({
+      provider: "MANUAL",
+      productType,
+      surface: "INDEPENDENT_WEB",
+      telegramTpaRelated: false
+    });
+
+    assert.equal(decision.allowed, true);
+    assert.equal(decision.code, "ALLOWED");
+  }
+});
+
 test("Stars are not accepted for physical goods or services", () => {
   const decision = evaluatePaymentEligibility({
     provider: "TELEGRAM_STARS",
