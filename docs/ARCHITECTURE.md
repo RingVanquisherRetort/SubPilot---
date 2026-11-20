@@ -30,9 +30,20 @@ The central SubPilot bot is the default control panel. A workspace can contain m
 
 ### Creator payments
 
-A project owner connects eligible payment-provider credentials to their project. The provider adapter creates a payment attempt and verifies the provider's webhook before an entitlement is activated. Each provider connection is scoped to one project.
+A project owner creates a creator plan and connects eligible payment-provider credentials to their project. The provider adapter creates a payment attempt and normalizes provider notifications before an entitlement is activated. Each provider connection is scoped to one project.
 
-The platform must not mark a payment successful based only on a browser redirect or a client-side message. Webhook signatures, provider status, amount, currency and idempotency must be verified.
+The first implemented checkout is a one-time Telegram Stars flow:
+- New in-Telegram digital-access plans are priced in whole Telegram Stars and use currency `XTR`.
+- The buyer opens the project bot, lists plans with `/plans`, and starts checkout with `/buy PLAN_ID`.
+- SubPilot creates a pending subscription and payment record before sending the invoice.
+- A `pre_checkout_query` is accepted only when the payment is still pending and its project, buyer Telegram ID, currency and amount match the database record.
+- The subscription is activated only after a `successful_payment` update. The Telegram charge ID and an idempotent receipt event are persisted.
+- The project bot creates one-person, 24-hour invite links for the connected chats selected by the plan. `chat_member` updates record completed joins.
+- A workspace owner/admin can review payments and refund a successful Stars payment from the central bot. Refund also cancels the subscription, revokes outstanding invite links and removes joined subscribers from the linked chats.
+
+The shared provider package defines normalized checkout/event contracts and a registry for future integrations. The external adapters are not yet implemented.
+
+The platform must not mark a payment successful based only on a browser redirect or a client-side message. Provider status, project/customer scope, amount, currency and idempotency must be verified.
 
 Whether funds settle directly to a creator or through a platform/marketplace arrangement depends on the provider's supported merchant model and contract. Do not assume every provider supports sub-merchants or direct settlement.
 
@@ -51,17 +62,20 @@ Provider eligibility is resolved per country, merchant type, currency and produc
 - The **control bot** authenticates owners through Telegram and manages workspaces/projects.
 - Each **project bot** belongs to one project and uses its own BotFather token.
 - A project bot is verified with Telegram's getMe before activation.
-- Project bots receive updates through POST /webhooks/telegram/:botId. Telegram's X-Telegram-Bot-Api-Secret-Token header is SHA-256 hashed and compared in constant time with the stored hash before any update is processed.
+- Project bots receive `my_chat_member`, `message`, `pre_checkout_query` and `chat_member` updates through POST /webhooks/telegram/:botId. Telegram's X-Telegram-Bot-Api-Secret-Token header is SHA-256 hashed and compared in constant time with the stored hash before any update is processed.
 - The project bot token is encrypted at rest with AES-256-GCM. The webhook secret itself is never stored in plaintext; only its hash is stored. Plaintext secrets must never appear in logs or API responses.
 - On connection, the control bot validates the token with getMe and installs a webhook at PUBLIC_API_URL. This must be a publicly reachable HTTPS origin.
-- The project bot subscribes to my_chat_member updates. When it is added or removed, the API upserts the connected chat and marks it active only when the bot has administrator/creator status.
+- The project bot subscribes to `my_chat_member` updates. When it is added or removed, the API upserts the connected chat and marks it active only when the bot has administrator/creator status.
+- `pre_checkout_query` validates a Stars invoice against the pending payment record; `successful_payment` is the only event that activates a paid entitlement.
+- Invite links are generated per subscription/chat, expire after 24 hours and have a one-member limit. Their joins are tracked by `chat_member` updates.
 - Channel/group connection requires the project bot to be added with the permissions needed for the selected feature.
 
 ## Reliability and security requirements
 
-- All webhook handlers are idempotent.
-- Payment status changes are monotonic and recorded in the payment ledger.
+- All webhook handlers are idempotent. Telegram Stars receipts are deduplicated by the Telegram charge ID.
+- Payment status changes are monotonic and recorded in the payment ledger and webhook-event ledger.
 - Access is derived from subscription entitlements; payment events alone do not grant permanent access.
+- Fixed-term subscription expiry and automatic access revocation require the scheduled-job stage and are not yet enabled.
 - Important actions are written to the audit log.
 - Secrets are encrypted at rest and rotated through a controlled process.
 - Workspace/project ownership is checked in every API operation.
