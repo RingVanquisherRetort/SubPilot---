@@ -44,9 +44,9 @@ export const PAYMENT_PROVIDER_CATALOG: readonly PaymentProviderDescriptor[] = [
     title: "Telegram Stars",
     rolloutStatus: "AVAILABLE",
     setupMode: "TELEGRAM_NATIVE",
-    sellerTypesFromReference: ALL_MERCHANT_TYPES,
+    sellerTypesFromReference: ["INDIVIDUAL"],
     countriesFromReference: ["*"],
-    note: "Implemented for paid access to Telegram channels/groups through the project bot."
+    note: "Nemiling lists individuals for this method; implemented for paid access to Telegram channels/groups through the project bot."
   },
   {
     id: "YOOMONEY",
