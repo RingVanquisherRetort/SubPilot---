@@ -86,12 +86,12 @@ The gate is a Telegram product-policy check, not merchant approval. Provider eli
 - The project bot subscribes to `my_chat_member` updates. When it is added or removed, the API upserts the connected chat and marks it active only when the bot has administrator/creator status.
 - `pre_checkout_query` validates a Stars invoice against the pending payment record; `successful_payment` is the only event that activates a paid entitlement.
 - Invite links are generated per subscription/chat, expire after 24 hours and have a one-member limit. Their joins are tracked by `chat_member` updates.
-- The API lifecycle worker checks active subscriptions once per minute, retries pending/expired invite delivery (with a five-minute retry delay), sends one reminder around three days and one around one day before expiry, and expires due subscriptions.
+- The API lifecycle worker checks active subscriptions once per minute, cancels unpaid Telegram Stars invoices after 24 hours, retries pending/expired invite delivery (with a five-minute retry delay), sends one reminder around three days and one around one day before expiry, and expires due subscriptions.
 - When a buyer renews before expiry, the existing entitlement is extended from its current end date instead of creating overlapping subscriptions.
 - On expiry, unused invite links are revoked and joined subscribers are removed from the connected chats. Failed removals remain pending for a later worker retry.
 - Successful first activation queues a new-subscriber alert for the workspace creator and project creator. In a personal workspace these are normally the same user, so only one message is queued.
 - Three-day and one-day expiry reminders, plus the expiry event, are queued for the same recipients through the central control bot. Deliveries are idempotent per event/recipient and retry with backoff.
-- The current worker is process-local and assumes one API instance. Multiple replicas require distributed locking before deployment.
+- Each lifecycle pass acquires a PostgreSQL-backed lease with a five-minute expiry and one-minute heartbeat. Only one API replica can run the lifecycle pass at a time; a crashed worker releases naturally when its lease expires.
 - Channel/group connection requires the project bot to be added with the permissions needed for the selected feature.
 
 ## Reliability and security requirements
@@ -99,11 +99,11 @@ The gate is a Telegram product-policy check, not merchant approval. Provider eli
 - All webhook handlers are idempotent. Telegram Stars receipts are deduplicated by the Telegram charge ID.
 - Payment status changes are monotonic and recorded in the payment ledger and webhook-event ledger.
 - Access is derived from subscription entitlements; payment events alone do not grant permanent access.
-- Fixed-term subscription expiry, buyer reminders, invite revocation and removal of joined members are implemented in the in-process lifecycle worker. Failed Telegram operations remain retryable while the access grant is unrevoked; multiple API replicas still require distributed locking.
+- Fixed-term subscription expiry, buyer reminders, abandoned Stars checkout cleanup, invite revocation and removal of joined members are implemented in the lifecycle worker. Failed Telegram operations remain retryable while the access grant is unrevoked. PostgreSQL lease coordination prevents concurrent lifecycle passes across API replicas.
 - AuditLog schema is present, but application write calls are not implemented yet; audit history remains a known product gap.
 - Secrets are encrypted at rest and rotated through a controlled process.
 - Workspace/project ownership is checked in every API operation.
-- Subscription expiry and renewal reminders currently run in a single in-process API worker. Migration to Redis-backed queues and distributed locking is required before horizontal scaling.
+- Lifecycle work currently uses a database-backed polling worker rather than Redis. PostgreSQL leases coordinate API replicas; a durable queue may still be considered later if throughput or scheduling requirements outgrow this design.
 - Admin actions must be permission-checked; creator data is isolated by workspace/project scope.
 
 ## Internationalization
