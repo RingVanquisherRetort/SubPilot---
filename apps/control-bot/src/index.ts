@@ -24,6 +24,7 @@ if (!token) {
     { command: "newproject", description: "Create a project" },
     { command: "projects", description: "List projects in the active workspace" },
     { command: "createagency", description: "Create an agency workspace" },
+    { command: "invite", description: "Invite a workspace member" },
     { command: "workspaces", description: "List your workspaces" },
     { command: "switchworkspace", description: "Switch active workspace" },
     { command: "renameproject", description: "Rename a project" },
