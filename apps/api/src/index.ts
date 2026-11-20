@@ -10,8 +10,7 @@ import { resolveTelegramUpdateSequenceEpoch } from "./telegram-update-order.js";
 import {
   acquireTelegramWebhookLease,
   releaseTelegramWebhookLease,
-  renewTelegramWebhookLease,
-  TELEGRAM_WEBHOOK_LEASE_TTL_MS
+  renewTelegramWebhookLease
 } from "./telegram-webhook-lease.js";
 
 const TELEGRAM_WEBHOOK_LEASE_HEARTBEAT_MS = 60_000;
