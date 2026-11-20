@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Bot } from "grammy";
+import { Bot, type CommandContext, type Context } from "grammy";
 import { prisma } from "@subpilot/database";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
@@ -20,7 +20,7 @@ function getStarAmount(amount: { toString(): string }): number | null {
 async function createPurchaseInvoice(
   bot: Bot,
   projectId: string,
-  ctx: Parameters<Parameters<Bot["command"]>[1]>[0],
+  ctx: CommandContext<Context>,
   planId: string
 ): Promise<void> {
   if (ctx.chat.type !== "private" || !ctx.from) {
@@ -116,9 +116,8 @@ async function createPurchaseInvoice(
       plan.title.slice(0, 32),
       (plan.description ?? `Доступ к подписке «${plan.title}»`).slice(0, 255),
       pending.payment.id,
-      "",
-      "XTR",
-      [{ label: plan.title.slice(0, 32), amount: amountStars }]
+      [{ label: plan.title.slice(0, 32), amount: amountStars }],
+      "XTR"
     );
   } catch (error) {
     await prisma.$transaction([
@@ -141,16 +140,20 @@ async function createPurchaseInvoice(
 }
 
 async function validatePreCheckout(
-  ctx: Parameters<Bot["on"]>[1] extends (context: infer C) => unknown ? C : never,
+  query: {
+    invoice_payload: string;
+    from: { id: number };
+    currency: string;
+    total_amount: number;
+  },
   projectId: string
-): Promise<void> {
-  const query = ctx.preCheckoutQuery;
+): Promise<boolean> {
   const payment = await prisma.payment.findUnique({
     where: { id: query.invoice_payload },
     include: { customer: true }
   });
 
-  const isValid = Boolean(
+  return Boolean(
     payment &&
     payment.projectId === projectId &&
     payment.provider === "TELEGRAM_STARS" &&
@@ -159,11 +162,6 @@ async function validatePreCheckout(
     payment.customer.telegramUserId === BigInt(query.from.id) &&
     query.currency === "XTR" &&
     Number(payment.amount.toString()) === query.total_amount
-  );
-
-  await ctx.answerPreCheckoutQuery(
-    isValid,
-    isValid ? undefined : "Счёт устарел или не совпадает с данными заказа. Создайте новую покупку."
   );
 }
 
@@ -273,7 +271,7 @@ async function deliverSubscriptionAccess(
 async function processSuccessfulStarsPayment(
   bot: Bot,
   projectId: string,
-  ctx: Parameters<Bot["on"]>[1] extends (context: infer C) => unknown ? C : never
+  ctx: Context
 ): Promise<void> {
   const message = ctx.message;
   if (!message || !("successful_payment" in message)) return;
@@ -456,7 +454,11 @@ export async function handleProjectBotUpdate(
   });
 
   projectBot.on("pre_checkout_query", async (ctx) => {
-    await validatePreCheckout(ctx, projectId);
+    const isValid = await validatePreCheckout(ctx.preCheckoutQuery, projectId);
+    await ctx.answerPreCheckoutQuery(
+      isValid,
+      isValid ? undefined : "Счёт устарел или не совпадает с данными заказа. Создайте новую покупку."
+    );
   });
 
   projectBot.on("message:successful_payment", async (ctx) => {
