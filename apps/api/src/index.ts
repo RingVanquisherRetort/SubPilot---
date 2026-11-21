@@ -8,6 +8,7 @@ import { handleProjectBotUpdate } from "./project-bot-updates.js";
 import { startSubscriptionLifecycleWorker } from "./subscription-lifecycle.js";
 import { resolveTelegramUpdateSequenceEpoch } from "./telegram-update-order.js";
 import { PlatformPaymentLifecycleError, processYooKassaWebhook } from "./platform-payment-lifecycle.js";
+import { registerPlatformBillingWebRoutes } from "./platform-billing-web.js";
 import {
   acquireTelegramWebhookLease,
   releaseTelegramWebhookLease,
@@ -158,6 +159,8 @@ const app = Fastify({
   },
   bodyLimit: 1024 * 1024
 });
+
+registerPlatformBillingWebRoutes(app);
 
 app.get("/health", async () => ({
   status: "ok",
