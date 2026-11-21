@@ -61,6 +61,7 @@ test("project analytics keep currencies separate and audit history hides raw met
         planId: plan.id,
         status: "ACTIVE",
         grantType: "PAID",
+        createdAt: new Date(now.getTime() - 5 * 24 * 60 * 60_000),
         startsAt: new Date(now.getTime() - 5 * 24 * 60 * 60_000),
         endsAt: new Date(now.getTime() + 25 * 24 * 60 * 60_000)
       }
@@ -72,6 +73,7 @@ test("project analytics keep currencies separate and audit history hides raw met
         planId: plan.id,
         status: "ACTIVE",
         grantType: "TRIAL",
+        createdAt: new Date(now.getTime() - 2 * 24 * 60 * 60_000),
         startsAt: new Date(now.getTime() - 2 * 24 * 60 * 60_000),
         endsAt: new Date(now.getTime() + 12 * 24 * 60 * 60_000)
       }
@@ -83,6 +85,7 @@ test("project analytics keep currencies separate and audit history hides raw met
         planId: plan.id,
         status: "EXPIRED",
         grantType: "PAID",
+        createdAt: new Date(now.getTime() - 40 * 24 * 60 * 60_000),
         startsAt: new Date(now.getTime() - 40 * 24 * 60 * 60_000),
         endsAt: new Date(now.getTime() - 2 * 24 * 60 * 60_000)
       }
@@ -94,6 +97,7 @@ test("project analytics keep currencies separate and audit history hides raw met
         planId: plan.id,
         status: "CANCELLED",
         grantType: "MANUAL",
+        createdAt: new Date(now.getTime() - 4 * 24 * 60 * 60_000),
         startsAt: new Date(now.getTime() - 4 * 24 * 60 * 60_000),
         endsAt: new Date(now.getTime() - 1 * 24 * 60 * 60_000),
         cancelledAt: new Date(now.getTime() - 1 * 24 * 60 * 60_000)
