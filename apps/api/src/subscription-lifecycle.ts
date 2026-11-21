@@ -7,8 +7,11 @@ import {
 import { Bot, InlineKeyboard } from "grammy";
 import { prisma } from "@subpilot/database";
 import { decryptSecret } from "@subpilot/security";
-import { isTelegramInviteAlreadyRevoked } from "@subpilot/payments";
-import { deliverSubscriptionAccess } from "./project-bot-updates.js";
+import { isTelegramInviteAlreadyRevoked, MAX_ACCESS_DELIVERY_ATTEMPTS } from "@subpilot/payments";
+import {
+  deliverSubscriptionAccess,
+  recordSubscriptionAccessDeliveryFailure
+} from "./project-bot-updates.js";
 import { getSubscriptionGrantTelegramChatIds } from "./subscription-grant-persistence.js";
 import { buildExpiredSubscriptionNotice } from "./subscription-messages.js";
 import { runLifecyclePassWithLease } from "./subscription-lifecycle-runner.js";
@@ -108,10 +111,12 @@ async function retryPendingAccessDeliveries(
             some: {
               joinedAt: null,
               revokedAt: null,
-              updatedAt: { lte: new Date(now.getTime() - 5 * 60_000) },
+              deliveryAttempts: { lt: MAX_ACCESS_DELIVERY_ATTEMPTS },
+              deliveryNextAttemptAt: { lte: now },
               OR: [
                 { inviteLink: "" },
-                { expiresAt: { lte: now } }
+                { expiresAt: { lte: now } },
+                { deliveryLastError: { not: null } }
               ]
             }
           }
@@ -129,8 +134,21 @@ async function retryPendingAccessDeliveries(
         select: { metadata: true }
       },
       accessGrants: {
-        where: { revokedAt: null },
-        select: { connectedChat: { select: { telegramChatId: true } } }
+        where: {
+          joinedAt: null,
+          revokedAt: null,
+          deliveryAttempts: { lt: MAX_ACCESS_DELIVERY_ATTEMPTS },
+          deliveryNextAttemptAt: { lte: now },
+          OR: [
+            { inviteLink: "" },
+            { expiresAt: { lte: now } },
+            { deliveryLastError: { not: null } }
+          ]
+        },
+        select: {
+          id: true,
+          connectedChat: { select: { id: true, telegramChatId: true } }
+        }
       }
     },
     orderBy: { updatedAt: "asc" },
@@ -154,6 +172,14 @@ async function retryPendingAccessDeliveries(
     const bot = await getProjectBot(subscription.projectId, projectBotId);
     if (!isLeaseOwned()) return;
     if (!bot) {
+      for (const grant of subscription.accessGrants) {
+        if (!isLeaseOwned()) return;
+        await recordSubscriptionAccessDeliveryFailure(
+          subscription.id,
+          grant.connectedChat.id,
+          "SOURCE_BOT_UNAVAILABLE"
+        );
+      }
       await enqueueProjectOwnerNotification({
         projectId: subscription.projectId,
         dedupeKey: "subscription:" + subscription.id + ":access-delivery-bot-unavailable",
