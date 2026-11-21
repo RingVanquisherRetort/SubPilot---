@@ -86,8 +86,9 @@ Initial research candidates for creators who are individuals: YooMoney, Crypto P
   - [x] Define and validate versioned workspace quota configuration for projects, members, plans and connected chats.
   - [x] Add a pure evaluator for a complete workspace usage snapshot and requested quota increments.
   - [ ] Define the initial plan tiers, commercial prices and quota values.
-  - [ ] Assign a plan to each workspace and expose the current plan/usage in the control bot.
-  - [ ] Enforce quotas at resource-creation and linking boundaries.
+  - [ ] Populate/manage the platform plan catalogue and assign a plan to each workspace.
+  - [x] Add a read-only control-bot screen for assigned-plan status and live workspace/per-project usage.
+  - [ ] Enforce quotas atomically at resource-creation and linking boundaries.
   - [ ] Implement separate platform checkout, billing lifecycle and payment reconciliation.
 - [ ] Implement workspace billing lifecycle, payment status transitions and grace periods.
 - [ ] Add separate platform billing adapters, invoices/receipts and reconciliation as required.
