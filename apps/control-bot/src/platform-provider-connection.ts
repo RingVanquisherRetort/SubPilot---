@@ -69,9 +69,10 @@ export function parsePlatformProviderCredentials(raw: string): Record<string, st
     throw new Error("JSON должен содержать от 1 до 24 полей.");
   }
 
-  const credentials: Record<string, string> = {};
+  const credentials: Record<string, string> = Object.create(null) as Record<string, string>;
   for (const [key, value] of entries) {
-    if (!/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(key) ||
+    if (key === "__proto__" || key === "prototype" || key === "constructor" ||
+        !/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(key) ||
         typeof value !== "string" ||
         value.trim().length === 0 ||
         /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(value)) {
