@@ -100,6 +100,7 @@ Initial research candidates for creators who are individuals: YooMoney, Crypto P
   - [x] Add a dedicated platform acquiring-connection model and webhook-event ledger, separate from creator project connections and payment events.
   - [x] Add platform payment workspace/plan references, immutable plan terms snapshots, checkout references, expiry and refund retry fields.
   - [x] Add allowlisted operator commands to list, add, rotate and disable SubPilot-owned PSP connections; encrypt credentials and audit all mutations without storing secrets in audit metadata.
+  - [x] Add a provider-agnostic normalized-event guard for exact payment-reference, provider payment ID, amount and currency matching; route duplicate and out-of-order events safely.
   - [ ] Implement provider-agnostic platform checkout, verified payment events/idempotency, billing lifecycle and reconciliation.
   - [ ] Implement and sandbox-test the selected external PSP adapter before customer-facing activation.
 - [ ] Implement workspace billing lifecycle, payment status transitions and grace periods.
