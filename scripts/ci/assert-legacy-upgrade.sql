@@ -23,8 +23,8 @@ BEGIN
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM "Subscription"
-    WHERE "grantType"::text = 'PAID'
-  ) AND EXISTS (SELECT 1 FROM "Subscription") THEN
+    WHERE "id" = 'upgrade-subscription' AND "grantType"::text = 'PAID'
+  ) THEN
     RAISE EXCEPTION 'Legacy subscription grantType default was not applied';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE "migration_name" = '20261121210000_manual_subscription_grants' AND "finished_at" IS NOT NULL) THEN
