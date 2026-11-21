@@ -87,17 +87,20 @@ test("PostgreSQL workspace quotas serialize concurrent creation and archived-res
         })
       )
     ));
-    const activeProjects = projectAttempts
-      .filter((result): result is PromiseFulfilledResult<{ id: string }> => result.status === "fulfilled");
+    const successfulProjectAttempt = projectAttempts.find((result) => result.status === "fulfilled");
     const projectFailures = projectAttempts.filter((result) => result.status === "rejected");
-    assert.equal(activeProjects.length, 1, "only one concurrent project creation should fit");
+    assert.equal(projectAttempts.filter((result) => result.status === "fulfilled").length, 1,
+      "only one concurrent project creation should fit");
     assert.equal(projectFailures.length, 1);
     assert.ok(projectFailures[0]?.status === "rejected" && projectFailures[0].reason instanceof WorkspaceQuotaError);
     assert.equal(await prisma.project.count({
       where: { workspaceId: workspace.id, status: { not: "ARCHIVED" } }
     }), 1);
+    if (successfulProjectAttempt?.status !== "fulfilled") {
+      throw new Error("Expected one successful project creation.");
+    }
 
-    const projectId = activeProjects[0]!.value.id;
+    const projectId = successfulProjectAttempt.value.id;
     const archivedProject = await prisma.project.create({
       data: {
         workspaceId: workspace.id,
