@@ -95,7 +95,7 @@ export async function withWorkspaceQuotaTransaction<T>(
     await lockWorkspace(tx, workspaceId);
     await assertWorkspaceQuotaInTransaction(tx, workspaceId, resource, projectId);
     return operation(tx);
-  }, { isolationLevel: "Serializable" });
+  }, { isolationLevel: "ReadCommitted" });
 }
 
 export function formatWorkspaceQuotaError(error: unknown): string {
