@@ -96,7 +96,7 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
       }
       if (url.endsWith("/refunds/refund_" + suffix) || url.endsWith("/refunds/refund_partial_" + suffix)) {
         return new Response(JSON.stringify({
-          id: "refund_" + suffix,
+          id: url.split("/").pop(),
           payment_id: providerPaymentId,
           status: "succeeded",
           amount: { value: url.includes("refund_partial_") ? "49.50" : "99.00", currency: "RUB" }
