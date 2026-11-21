@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { shouldActivateConnectedChat } from "./connected-chat-quota.js";
+import {
+  shouldActivateConnectedChat,
+  type ConnectedChatQuotaBillingState
+} from "./connected-chat-quota.js";
 
 const features = (connectedChatsPerProject: number | null) => ({
   schemaVersion: 1,
@@ -12,7 +15,7 @@ const features = (connectedChatsPerProject: number | null) => ({
   }
 });
 
-const billing = (overrides: Record<string, unknown> = {}) => ({
+const billing = (overrides: Partial<ConnectedChatQuotaBillingState> = {}): ConnectedChatQuotaBillingState => ({
   status: "ACTIVE",
   platformPlanIsActive: true,
   features: features(2),
