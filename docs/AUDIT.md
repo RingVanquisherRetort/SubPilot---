@@ -80,7 +80,7 @@ These items have been inspected in source; the table does not claim that every s
 - `docs/AUDIT.md` and later documentation changes have their own CI runs; verify the latest branch head rather than reusing an earlier green run.
 - Code snapshot `7e824d0` completed CI run `44867867807`: clean PostgreSQL migrations, Prisma Client generation, TypeScript checks and 68 tests (68 pass, 0 fail, 0 skipped). The run includes the PostgreSQL lifecycle-lease ownership/expiry integration test. The audit-document-only commit is validated separately.
 - A green CI run validates the checks configured in `.github/workflows/ci.yml`; it does not prove live BotFather setup, actual Stars payment, Telegram chat permissions or end-to-end subscriber access behavior.
-- Workspace quota enforcement snapshot `374db6d0` completed CI run `44889669619`: clean PostgreSQL migrations, Prisma Client generation, TypeScript checks, and 98 tests passed (98 pass, 0 fail, 0 skipped). The run includes PostgreSQL concurrency tests for project, member/invite, creator-plan and connected-chat quotas; project restoration with nested plan/chat caps; creator-plan restoration; and Telegram chat activation/reactivation.
+- Workspace quota enforcement snapshot `b0e781d5` completed CI run `44889861256`: clean PostgreSQL migrations, Prisma Client generation, TypeScript checks, and 98 tests passed (98 pass, 0 fail, 0 skipped). The run includes PostgreSQL concurrency tests for project, member/invite, creator-plan and connected-chat quotas; project restoration with nested plan/chat caps; creator-plan restoration; Telegram chat activation/reactivation; and quota-error classification for invite feedback.
 - No production merge or deployment is authorized by this audit.
 
 ## 6. Audit order
