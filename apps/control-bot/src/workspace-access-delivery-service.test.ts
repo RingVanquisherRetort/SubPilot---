@@ -10,6 +10,8 @@ test("workspace access-delivery dead letters are scoped, auditable and manually 
     listWorkspaceFailedAccessDeliveries,
     retryWorkspaceFailedAccessDelivery
   } = await import("./workspace-access-delivery-service.js");
+  const { recordSubscriptionAccessDeliveryFailure } =
+    await import("../../api/src/project-bot-updates.js");
 
   const suffix = randomUUID().replace(/-/g, "").slice(0, 12);
   const telegramBase = BigInt(Date.now()) * 1_000_000n + BigInt(Math.floor(Math.random() * 100_000));
@@ -78,14 +80,27 @@ test("workspace access-delivery dead letters are scoped, auditable and manually 
         subscriptionId: subscription.id,
         connectedChatId: chat.id,
         inviteLink: "",
-        expiresAt: new Date(0),
-        deliveryAttempts: 10,
-        deliveryNextAttemptAt: new Date(),
-        deliveryLastError: "INVITE_CREATION_FAILED",
-        deliveryFailedAt: new Date()
+        expiresAt: new Date(0)
       }
     });
     grantId = grant.id;
+
+    const failureStartedAt = new Date();
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await recordSubscriptionAccessDeliveryFailure(
+        subscription.id,
+        chat.id,
+        "INVITE_CREATION_FAILED",
+        new Date(failureStartedAt.getTime() + attempt * 60_000)
+      );
+    }
+    const deadLetter = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id }
+    });
+    assert.equal(deadLetter.deliveryAttempts, 10);
+    assert.equal(deadLetter.deliveryLastError, "INVITE_CREATION_FAILED");
+    assert.ok(deadLetter.deliveryFailedAt);
+    assert.ok(deadLetter.deliveryNextAttemptAt.getTime() > Date.now() - 60 * 60_000);
 
     const listed = await listWorkspaceFailedAccessDeliveries(workspace.id);
     assert.equal(listed.length, 1);
