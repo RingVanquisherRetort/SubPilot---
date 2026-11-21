@@ -383,7 +383,7 @@ export async function recordSubscriptionAccessDeliveryFailure(
   const safeErrorCode = ACCESS_DELIVERY_ERROR_CODES.has(errorCode)
     ? errorCode
     : "INVITE_CREATION_FAILED";
-  await prisma.$transaction(async (tx) => {
+  const state = await prisma.$transaction(async (tx) => {
     await tx.$queryRawUnsafe(
       'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "subscriptionId" = $1 AND "connectedChatId" = $2 FOR UPDATE',
       subscriptionId,
@@ -394,7 +394,7 @@ export async function recordSubscriptionAccessDeliveryFailure(
       where: key,
       select: { deliveryAttempts: true }
     });
-    const state = getAccessDeliveryFailureState(
+    const next = getAccessDeliveryFailureState(
       current?.deliveryAttempts ?? 0,
       now,
       safeErrorCode
@@ -406,19 +406,57 @@ export async function recordSubscriptionAccessDeliveryFailure(
         connectedChatId,
         inviteLink: "",
         expiresAt: new Date(0),
-        deliveryAttempts: state.attempts,
-        deliveryNextAttemptAt: state.nextAttemptAt,
-        deliveryLastError: state.lastError,
-        deliveryFailedAt: state.failedAt
+        deliveryAttempts: next.attempts,
+        deliveryNextAttemptAt: next.nextAttemptAt,
+        deliveryLastError: next.lastError,
+        deliveryFailedAt: next.failedAt
       },
       update: {
-        deliveryAttempts: state.attempts,
-        deliveryNextAttemptAt: state.nextAttemptAt,
-        deliveryLastError: state.lastError,
-        deliveryFailedAt: state.failedAt
+        deliveryAttempts: next.attempts,
+        deliveryNextAttemptAt: next.nextAttemptAt,
+        deliveryLastError: next.lastError,
+        deliveryFailedAt: next.failedAt
       }
     });
+    return next;
   });
+
+  if (state.failedAt) {
+    try {
+      const [subscription, chat] = await Promise.all([
+        prisma.subscription.findUnique({
+          where: { id: subscriptionId },
+          select: {
+            projectId: true,
+            project: { select: { name: true } },
+            plan: { select: { title: true } }
+          }
+        }),
+        prisma.connectedChat.findUnique({
+          where: { id: connectedChatId },
+          select: { title: true, username: true, telegramChatId: true }
+        })
+      ]);
+      if (subscription && chat) {
+        const chatName = chat.title ?? chat.username ?? chat.telegramChatId.toString();
+        await enqueueProjectOwnerNotification({
+          projectId: subscription.projectId,
+          dedupeKey: `subscription:${subscriptionId}:access-delivery-dead-letter:${connectedChatId}:${state.failedAt.getTime()}`,
+          eventType: "access_delivery_dead_letter",
+          messageText:
+            "🚨 SubPilot остановил автоматическую выдачу доступа после 10 неудачных попыток.\n" +
+            `Проект: «${subscription.project.name}»\nТариф: «${subscription.plan.title}»\n` +
+            `Площадка: ${chatName}\nКод ошибки: ${state.lastError}\n` +
+            "Исправьте права исходного бота или подключение площадки, затем выполните /faileddeliveries и /retrydelivery ID в центральном боте."
+        });
+      }
+    } catch (error) {
+      console.error(
+        "Could not notify workspace owner about access delivery dead letter:",
+        error instanceof Error ? error.name : "UnknownError"
+      );
+    }
+  }
 }
 
 async function clearSubscriptionAccessDeliveryFailure(
