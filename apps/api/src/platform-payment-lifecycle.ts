@@ -83,12 +83,14 @@ function readFulfilledBillingPeriod(metadata: unknown): FulfilledBillingPeriod |
   return { startsAt, endsAt, planCode: item.planCode, billingPeriodDays: item.billingPeriodDays };
 }
 
+type WorkspaceBillingStatusForRefund = "TRIALING" | "ACTIVE" | "PAST_DUE" | "CANCELLED" | "EXPIRED";
+
 type PreviousBillingSnapshot =
   | { kind: "NONE" }
   | {
       kind: "PERIOD";
       platformPlanId: string;
-      status: "TRIALING" | "ACTIVE" | "PAST_DUE" | "CANCELLED" | "EXPIRED";
+      status: WorkspaceBillingStatusForRefund;
       currentPeriodStart: Date | null;
       currentPeriodEnd: Date;
     }
@@ -118,10 +120,10 @@ function readPreviousBillingSnapshot(metadata: unknown): PreviousBillingSnapshot
   return {
     kind: "PERIOD",
     platformPlanId: item.platformPlanId,
-    status: item.status as PreviousBillingSnapshot & never,
+    status: item.status as WorkspaceBillingStatusForRefund,
     currentPeriodStart,
     currentPeriodEnd
-  } as PreviousBillingSnapshot;
+  };
 }
 
 async function processVerifiedRefund(input: {
@@ -702,7 +704,7 @@ export async function requestPlatformPaymentRefund(
         Date.now() - payment.refundAttemptedAt.getTime() < 120_000) {
       throw new PlatformPaymentLifecycleError("REFUND_IN_PROGRESS");
     }
-    if (payment.provider !== "YOOKASSA" || !payment.providerConnectionId) {
+    if (payment.provider !== "YOOKASSA" || !payment.providerConnectionId || !payment.providerPaymentId) {
       throw new PlatformPaymentLifecycleError("PROVIDER_NOT_AVAILABLE");
     }
     const connection = await tx.platformPaymentProviderConnection.findUnique({
