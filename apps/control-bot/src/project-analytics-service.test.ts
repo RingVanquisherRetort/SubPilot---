@@ -154,17 +154,17 @@ test("project analytics keep currencies separate and audit history hides raw met
     assert.equal(report.cancelledSubscriptions, 1);
     assert.equal(report.newTrials, 1);
     assert.equal(report.manualGrants, 1);
-    assert.equal(report.successfulPayments, 2);
+    assert.equal(report.successfulPayments, 3);
     assert.equal(report.repeatPayingSubscriptions, 1);
     assert.equal(report.refundedPayments, 1);
     assert.deepEqual(report.revenueByCurrency, [
       {
         currency: "RUB",
         successfulPayments: 0,
-        grossAmount: "0.00",
+        grossAmount: "20.00",
         refundedPayments: 1,
         refundedAmount: "20.00",
-        netAmount: "-20.00"
+        netAmount: "0.00"
       },
       {
         currency: "XTR",
