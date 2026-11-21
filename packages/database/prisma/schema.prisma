@@ -51,6 +51,12 @@ enum SubscriptionStatus {
   PAST_DUE
 }
 
+enum SubscriptionGrantType {
+  PAID
+  MANUAL
+  TRIAL
+}
+
 enum PaymentProvider {
   TELEGRAM_STARS
   YOOKASSA
@@ -338,26 +344,28 @@ model ProjectCustomer {
 }
 
 model Subscription {
-  id          String             @id @default(cuid())
-  projectId   String
-  customerId  String
-  planId      String
-  status      SubscriptionStatus @default(PENDING)
-  startsAt    DateTime?
-  endsAt      DateTime?
-  cancelledAt DateTime?
+  id           String                @id @default(cuid())
+  projectId    String
+  customerId   String
+  planId       String
+  status       SubscriptionStatus    @default(PENDING)
+  grantType    SubscriptionGrantType @default(PAID)
+  startsAt     DateTime?
+  endsAt       DateTime?
+  cancelledAt  DateTime?
   reminder3dAt DateTime?
   reminder1dAt DateTime?
-  project     Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  customer    ProjectCustomer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  plan        CreatorPlan        @relation(fields: [planId], references: [id], onDelete: Restrict)
-  payments    Payment[]
+  project      Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  customer     ProjectCustomer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  plan         CreatorPlan          @relation(fields: [planId], references: [id], onDelete: Restrict)
+  payments     Payment[]
   accessGrants SubscriptionAccessGrant[]
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
 
   @@index([projectId, status, endsAt])
   @@index([customerId, status])
+  @@index([customerId, planId, grantType, createdAt])
 }
 
 model SubscriptionAccessGrant {
