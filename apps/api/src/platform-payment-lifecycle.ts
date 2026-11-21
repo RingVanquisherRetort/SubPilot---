@@ -395,6 +395,8 @@ export async function createPlatformPaymentCheckout(
     readCredentials(connection.credentialsEncrypted),
     dependencies.fetch ? { fetch: dependencies.fetch } : {}
   );
+  const redirectReturnUrl = new URL(returnUrl);
+  redirectReturnUrl.searchParams.set("payment_id", payment.id);
   const checkout = await adapter.createCheckout({
     paymentId: payment.id,
     amount: payment.amount.toString(),
@@ -402,7 +404,7 @@ export async function createPlatformPaymentCheckout(
     title: payment.planTitleSnapshot,
     description: payment.planTitleSnapshot.slice(0, 128),
     customerReference: payment.workspaceId,
-    returnUrl
+    returnUrl: redirectReturnUrl.toString()
   });
   if (!checkout.checkoutUrl || !checkout.providerPaymentId) {
     throw new Error("YooKassa did not return a redirect checkout.");
