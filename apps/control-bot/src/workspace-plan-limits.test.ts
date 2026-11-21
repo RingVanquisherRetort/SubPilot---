@@ -1,0 +1,111 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import {
+  evaluateWorkspaceLimit,
+  parseWorkspacePlanFeatureConfig,
+  type WorkspacePlanFeatureConfig
+} from "./workspace-plan-limits.js";
+
+const validConfig: WorkspacePlanFeatureConfig = {
+  schemaVersion: 1,
+  limits: {
+    projects: 3,
+    members: 1,
+    plansPerProject: 5,
+    connectedChatsPerProject: 2
+  }
+};
+
+test("parses a complete version-one workspace plan configuration", () => {
+  assert.deepEqual(parseWorkspacePlanFeatureConfig(validConfig), validConfig);
+});
+
+test("supports explicit unlimited limits", () => {
+  const config = parseWorkspacePlanFeatureConfig({
+    schemaVersion: 1,
+    limits: {
+      projects: null,
+      members: 1,
+      plansPerProject: null,
+      connectedChatsPerProject: 2
+    }
+  });
+
+  assert.equal(config.limits.projects, null);
+  assert.equal(config.limits.plansPerProject, null);
+});
+
+test("rejects missing, unknown and unsupported feature configuration", () => {
+  assert.throws(() => parseWorkspacePlanFeatureConfig(null), /JSON object/);
+  assert.throws(
+    () => parseWorkspacePlanFeatureConfig({ schemaVersion: 2, limits: validConfig.limits }),
+    /Unsupported/
+  );
+  assert.throws(
+    () => parseWorkspacePlanFeatureConfig({ schemaVersion: 1 }),
+    /limits object/
+  );
+  assert.throws(
+    () => parseWorkspacePlanFeatureConfig({
+      schemaVersion: 1,
+      limits: { ...validConfig.limits, project: 3 }
+    }),
+    /Unknown workspace plan limit/
+  );
+  assert.throws(
+    () => parseWorkspacePlanFeatureConfig({
+      schemaVersion: 1,
+      limits: { ...validConfig.limits, members: undefined }
+    }),
+    /Invalid workspace plan limit/
+  );
+});
+
+test("rejects negative, fractional, unsafe and string-valued limits", () => {
+  for (const invalid of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, "3"]) {
+    assert.throws(
+      () => parseWorkspacePlanFeatureConfig({
+        schemaVersion: 1,
+        limits: { ...validConfig.limits, projects: invalid }
+      }),
+      /Invalid workspace plan limit/
+    );
+  }
+});
+
+test("allows a request up to the configured limit and reports remaining capacity", () => {
+  assert.deepEqual(evaluateWorkspaceLimit(5, 3, 2), {
+    allowed: true,
+    limit: 5,
+    currentUsage: 3,
+    requested: 2,
+    remaining: 2
+  });
+});
+
+test("blocks a request that would exceed the configured limit", () => {
+  assert.deepEqual(evaluateWorkspaceLimit(5, 4, 2), {
+    allowed: false,
+    limit: 5,
+    currentUsage: 4,
+    requested: 2,
+    remaining: 1
+  });
+});
+
+test("treats null as unlimited and reports no finite remaining capacity", () => {
+  assert.deepEqual(evaluateWorkspaceLimit(null, 10_000, 1), {
+    allowed: true,
+    limit: null,
+    currentUsage: 10_000,
+    requested: 1,
+    remaining: null
+  });
+});
+
+test("rejects invalid usage and requested amounts", () => {
+  assert.throws(() => evaluateWorkspaceLimit(5, -1), /Current usage/);
+  assert.throws(() => evaluateWorkspaceLimit(5, 1.2), /Current usage/);
+  assert.throws(() => evaluateWorkspaceLimit(5, 1, 0), /Requested amount/);
+  assert.throws(() => evaluateWorkspaceLimit(5, 1, 1.5), /Requested amount/);
+});
