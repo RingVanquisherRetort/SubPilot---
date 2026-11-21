@@ -20,3 +20,14 @@ test("duplicate channel rows do not create duplicate grant targets", () => {
 
   assert.deepEqual(ids, ["chat-a", "chat-b"]);
 });
+
+
+test("access recovery includes destinations from every successful purchase snapshot", () => {
+  const ids = getSubscriptionGrantTelegramChatIds([
+    { connectedChat: { telegramChatId: -1000000000001n } },
+    { connectedChat: { telegramChatId: -1000000000002n } },
+    { connectedChat: { telegramChatId: -1000000000001n } }
+  ]);
+
+  assert.deepEqual(ids, ["-1000000000001", "-1000000000002"]);
+});
