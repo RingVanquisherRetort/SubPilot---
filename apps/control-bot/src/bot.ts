@@ -3004,14 +3004,30 @@ export function createControlBot(token: string): Bot {
     }
 
     try {
-      const plans = await prisma.platformPlan.findMany({
-        include: { _count: { select: { workspaceBillings: true } } },
-        orderBy: [{ isActive: "desc" }, { createdAt: "asc" }],
-        take: 100
-      });
+      const rawPage = String(ctx.match ?? "").trim();
+      const page = rawPage ? Number(rawPage) : 1;
+      if (!Number.isSafeInteger(page) || page < 1 || page > 10_000) {
+        await ctx.reply("Формат: /platformplans [номер страницы].");
+        return;
+      }
+      const pageSize = 10;
+      const [total, plans] = await Promise.all([
+        prisma.platformPlan.count(),
+        prisma.platformPlan.findMany({
+          include: { _count: { select: { workspaceBillings: true } } },
+          orderBy: [{ isActive: "desc" }, { createdAt: "asc" }],
+          skip: (page - 1) * pageSize,
+          take: pageSize
+        })
+      ]);
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
       if (plans.length === 0) {
-        await ctx.reply("Каталог тарифов SubPilot пока пуст. Добавить тариф: /platformplan CODE | Название | Цена | Валюта | Дней | Проекты | Участники | Тарифы/проект | Площадки/проект | Описание");
+        await ctx.reply(
+          total === 0
+            ? "Каталог тарифов SubPilot пока пуст. Добавить тариф: /platformplan CODE | Название | Цена | Валюта | Дней | Проекты | Участники | Тарифы/проект | Площадки/проект | Описание"
+            : `На странице ${page} тарифов нет. Последняя страница: ${totalPages}.`
+        );
         return;
       }
 
@@ -3033,7 +3049,15 @@ export function createControlBot(token: string): Bot {
         ].join("\n");
       });
 
-      await ctx.reply("Каталог тарифов SubPilot:\n\n" + lines.join("\n\n"));
+      const navigation = [
+        page > 1 ? `Назад: /platformplans ${page - 1}` : null,
+        page < totalPages ? `Далее: /platformplans ${page + 1}` : null
+      ].filter(Boolean).join(" · ");
+      await ctx.reply(
+        `Каталог тарифов SubPilot — ${page}/${totalPages} (всего: ${total})\n\n` +
+        lines.join("\n\n") +
+        (navigation ? "\n\n" + navigation : "")
+      );
     } catch (error) {
       console.error("Platform plan catalogue read failed:", error instanceof Error ? error.name : "UnknownError");
       await ctx.reply("Не удалось загрузить каталог тарифов.");
