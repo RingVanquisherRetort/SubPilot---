@@ -3,6 +3,7 @@ import { Bot, InlineKeyboard, type Context } from "grammy";
 import { prisma } from "@subpilot/database";
 import {
   evaluatePaymentEligibility,
+  getAccessDeliveryFailureState,
   isTelegramInviteAlreadyRevoked,
   matchesTelegramStarsRefundReceipt,
   recalculateSubscriptionPeriod
@@ -365,6 +366,76 @@ async function validatePreCheckout(
   );
 }
 
+const ACCESS_DELIVERY_ERROR_CODES = new Set([
+  "CONNECTED_CHAT_INACTIVE",
+  "INVITE_REVOKE_FAILED",
+  "SUBSCRIBER_UNBAN_FAILED",
+  "INVITE_CREATION_FAILED",
+  "SOURCE_BOT_UNAVAILABLE"
+]);
+
+export async function recordSubscriptionAccessDeliveryFailure(
+  subscriptionId: string,
+  connectedChatId: string,
+  errorCode: string,
+  now = new Date()
+): Promise<void> {
+  const safeErrorCode = ACCESS_DELIVERY_ERROR_CODES.has(errorCode)
+    ? errorCode
+    : "INVITE_CREATION_FAILED";
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRawUnsafe(
+      'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "subscriptionId" = $1 AND "connectedChatId" = $2 FOR UPDATE',
+      subscriptionId,
+      connectedChatId
+    );
+    const key = { subscriptionId_connectedChatId: { subscriptionId, connectedChatId } };
+    const current = await tx.subscriptionAccessGrant.findUnique({
+      where: key,
+      select: { deliveryAttempts: true }
+    });
+    const state = getAccessDeliveryFailureState(
+      current?.deliveryAttempts ?? 0,
+      now,
+      safeErrorCode
+    );
+    await tx.subscriptionAccessGrant.upsert({
+      where: key,
+      create: {
+        subscriptionId,
+        connectedChatId,
+        inviteLink: "",
+        expiresAt: new Date(0),
+        deliveryAttempts: state.attempts,
+        deliveryNextAttemptAt: state.nextAttemptAt,
+        deliveryLastError: state.lastError,
+        deliveryFailedAt: state.failedAt
+      },
+      update: {
+        deliveryAttempts: state.attempts,
+        deliveryNextAttemptAt: state.nextAttemptAt,
+        deliveryLastError: state.lastError,
+        deliveryFailedAt: state.failedAt
+      }
+    });
+  });
+}
+
+async function clearSubscriptionAccessDeliveryFailure(
+  subscriptionId: string,
+  connectedChatId: string
+): Promise<void> {
+  await prisma.subscriptionAccessGrant.updateMany({
+    where: { subscriptionId, connectedChatId, revokedAt: null },
+    data: {
+      deliveryAttempts: 0,
+      deliveryNextAttemptAt: new Date(),
+      deliveryLastError: null,
+      deliveryFailedAt: null
+    }
+  });
+}
+
 export async function deliverSubscriptionAccess(
   bot: Bot,
   subscriptionId: string,
@@ -409,6 +480,7 @@ export async function deliverSubscriptionAccess(
     if (!isLeaseOwned()) return results;
     const label = chat.title ?? chat.username ?? chat.telegramChatId.toString();
     if (!chat.isActive) {
+      await recordSubscriptionAccessDeliveryFailure(subscription.id, chat.id, "CONNECTED_CHAT_INACTIVE");
       results.failed.push(label);
       continue;
     }
@@ -448,6 +520,7 @@ export async function deliverSubscriptionAccess(
           if (!isLeaseOwned()) return results;
         } catch (error) {
           if (!isTelegramInviteAlreadyRevoked(error)) {
+            await recordSubscriptionAccessDeliveryFailure(subscription.id, chat.id, "INVITE_REVOKE_FAILED");
             console.error(
               "Could not revoke an unused invite link for an existing member:",
               error instanceof Error ? error.name : "UnknownError"
@@ -477,7 +550,11 @@ export async function deliverSubscriptionAccess(
           inviteLink: "",
           expiresAt: new Date(0),
           joinedAt: now,
-          revokedAt: null
+          revokedAt: null,
+          deliveryAttempts: 0,
+          deliveryNextAttemptAt: now,
+          deliveryLastError: null,
+          deliveryFailedAt: null
         }
       });
       results.alreadyJoined.push(label);
@@ -498,6 +575,7 @@ export async function deliverSubscriptionAccess(
           );
           if (!isLeaseOwned()) return results;
         } catch (error) {
+          await recordSubscriptionAccessDeliveryFailure(subscription.id, chat.id, "SUBSCRIBER_UNBAN_FAILED");
           console.error(
             "Could not unban an active subscriber before reusing an invite:",
             error instanceof Error ? error.name : "UnknownError"
@@ -506,6 +584,7 @@ export async function deliverSubscriptionAccess(
           continue;
         }
       }
+      await clearSubscriptionAccessDeliveryFailure(subscription.id, chat.id);
       results.links.push(label + ": " + existing.inviteLink);
       continue;
     }
@@ -597,12 +676,28 @@ export async function deliverSubscriptionAccess(
           inviteLink: invite.invite_link,
           expiresAt,
           joinedAt: null,
-          revokedAt: null
+          revokedAt: null,
+          deliveryAttempts: 0,
+          deliveryNextAttemptAt: new Date(),
+          deliveryLastError: null,
+          deliveryFailedAt: null
         }
       });
 
       results.links.push(label + ": " + invite.invite_link);
     } catch (error) {
+      if (isLeaseOwned()) {
+        await recordSubscriptionAccessDeliveryFailure(
+          subscription.id,
+          chat.id,
+          "INVITE_CREATION_FAILED"
+        ).catch((recordError: unknown) => {
+          console.error(
+            "Could not persist subscription access delivery failure:",
+            recordError instanceof Error ? recordError.name : "UnknownError"
+          );
+        });
+      }
       console.error(
         "Could not create subscription invite:",
         error instanceof Error ? error.name : "UnknownError"
