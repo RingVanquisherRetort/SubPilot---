@@ -1191,7 +1191,7 @@ export function createControlBot(token: string): Bot {
       );
     } catch (error) {
       console.error("Control bot /newproject failed:", error);
-      await ctx.reply("Не удалось создать проект. Попробуйте ещё раз позже.");
+      await ctx.reply(formatWorkspaceQuotaError(error));
     }
   });
 
@@ -1742,7 +1742,7 @@ export function createControlBot(token: string): Bot {
       );
     } catch (error) {
       console.error("Control bot /createplan failed:", error);
-      await ctx.reply("Не удалось создать тариф.");
+      await ctx.reply(formatWorkspaceQuotaError(error));
     }
   });
 
@@ -2574,7 +2574,7 @@ export function createControlBot(token: string): Bot {
           });
         } catch (error) {
           console.error("Button create project failed:", error instanceof Error ? error.name : "UnknownError");
-          await ctx.reply("Не удалось создать проект. Попробуйте ещё раз.", { reply_markup: homeKeyboard() });
+          await ctx.reply(formatWorkspaceQuotaError(error), { reply_markup: homeKeyboard() });
         }
         return;
       }
@@ -2660,7 +2660,7 @@ export function createControlBot(token: string): Bot {
           });
         } catch (error) {
           console.error("Button create plan failed:", error instanceof Error ? error.name : "UnknownError");
-          await ctx.reply("Не удалось создать тариф.", { reply_markup: homeKeyboard() });
+          await ctx.reply(formatWorkspaceQuotaError(error), { reply_markup: homeKeyboard() });
         }
         return;
       }
