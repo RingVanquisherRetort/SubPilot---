@@ -343,6 +343,7 @@ export function registerPlatformBillingWebRoutes(app: FastifyInstance): void {
           RETURN_URL_NOT_CONFIGURED: "Не настроен адрес возврата после оплаты.",
           IDEMPOTENCY_CONFLICT: "Ключ запроса уже использован для другого платежа.",
           PAYMENT_ALREADY_FINAL: "Этот платёж уже завершён.",
+          CHECKOUT_ALREADY_IN_PROGRESS: "У рабочего пространства уже есть незавершённый платёж. Завершите или дождитесь его обработки, прежде чем начинать новую оплату.",
           PLAN_CHANGE_REQUIRES_MANUAL_REVIEW: "Смена тарифа в оплаченный период требует ручной сверки.",
           PROVIDER_CONNECTION_NOT_FOUND: "Подключение провайдера не найдено.",
           INVALID_PROVIDER_CREDENTIALS: "Реквизиты провайдера недействительны."
