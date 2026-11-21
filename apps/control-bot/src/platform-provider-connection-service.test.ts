@@ -47,6 +47,22 @@ test("platform PSP credentials are encrypted, versioned, verified, audited and n
     assert.deepEqual(JSON.parse(decryptSecret(stored.credentialsEncrypted)), firstCredentials);
     assert.equal(stored.credentialVersion, 1);
 
+    await assert.rejects(
+      verifyPlatformProviderConnection({
+        connectionId: created.id,
+        actorUserId: actor.id,
+        verifiers: new PaymentProviderCredentialVerifierRegistry()
+      }),
+      (error: unknown) =>
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ADAPTER_NOT_CONFIGURED"
+    );
+    const stillPending = await prisma.platformPaymentProviderConnection.findUniqueOrThrow({
+      where: { id: created.id }
+    });
+    assert.equal(stillPending.status, "PENDING");
+
     const firstVerifier = new PaymentProviderCredentialVerifierRegistry();
     firstVerifier.register({
       provider: "YOOKASSA",
