@@ -8,7 +8,8 @@ import { deliverSubscriptionAccess } from "./project-bot-updates.js";
 import { buildExpiredSubscriptionNotice } from "./subscription-messages.js";
 import {
   deliverPendingOwnerNotifications,
-  enqueueProjectOwnerNotification
+  enqueueProjectOwnerNotification,
+  enqueueProjectOwnerNotificationUsing
 } from "./owner-notifications.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -360,22 +361,24 @@ async function expireSubscriptions(
     if (!isLeaseOwned()) return;
     let newlyExpired = false;
     if (subscription.status === "ACTIVE") {
-      const expired = await prisma.subscription.updateMany({
-        where: { id: subscription.id, status: "ACTIVE", endsAt: { lte: now } },
-        data: { status: "EXPIRED" }
-      });
-      newlyExpired = expired.count === 1;
-    }
+      newlyExpired = await prisma.$transaction(async (tx) => {
+        const expired = await tx.subscription.updateMany({
+          where: { id: subscription.id, status: "ACTIVE", endsAt: { lte: now } },
+          data: { status: "EXPIRED" }
+        });
+        if (expired.count !== 1) return false;
 
-    if (newlyExpired) {
-      await enqueueProjectOwnerNotification({
-        projectId: subscription.projectId,
-        dedupeKey: `subscription:${subscription.id}:owner:expired`,
-        eventType: "subscription_expired",
-        messageText:
-          `🔔 Срок тарифа закончился\nПроект: «${subscription.project.name}»\n` +
-          `Тариф: «${subscription.plan.title}»\n` +
-          "SubPilot запустил автоматическое отключение доступа."
+        // Persist the state transition and its owner-notification outbox rows atomically.
+        await enqueueProjectOwnerNotificationUsing(tx, {
+          projectId: subscription.projectId,
+          dedupeKey: `subscription:${subscription.id}:owner:expired`,
+          eventType: "subscription_expired",
+          messageText:
+            `🔔 Срок тарифа закончился\nПроект: «${subscription.project.name}»\n` +
+            `Тариф: «${subscription.plan.title}»\n` +
+            "SubPilot запустил автоматическое отключение доступа."
+        });
+        return true;
       });
     }
 
