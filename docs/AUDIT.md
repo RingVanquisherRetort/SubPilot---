@@ -2,7 +2,7 @@
 
 **Audit branch:** `feat/subscription-lifecycle-ui`  
 **Repository:** `RingVanquisherRetort/SubPilot---`  
-**Audit snapshot:** `9679a697136d889a05dea62e62e9c21c87bcbd72`  
+**Code snapshot reviewed:** `7e824d0d03976855dcb32a3caf6efd77a3fe4afb` (the audit document is updated in a subsequent commit)  
 **Base branch:** `main` is intentionally untouched.  
 **Purpose:** close the previously requested implementation audit and repair existing behavior; this register is not a new feature roadmap.
 
@@ -48,9 +48,9 @@ These items have been inspected in source; the table does not claim that every s
 
 | ID | Priority | Finding | Required closure |
 |---|---|---|---|
-| AUD-001 | Partially resolved | The worker treats a false heartbeat or heartbeat error as loss of ownership, stops subsequent lifecycle phases and checks lease ownership between batch items and Telegram access-delivery actions. If ownership is lost after a new invite is created, the invite is revoked instead of being persisted. | Add a PostgreSQL-backed integration test for competing lifecycle-worker lease owners and expiry. Current tests cover the guard state but not the full worker lease race. |
+| AUD-001 | Partially resolved | The worker treats a false heartbeat or heartbeat error as loss of ownership and stops subsequent lifecycle phases. Lease ownership is checked between batch items and Telegram access-delivery actions. A new PostgreSQL integration test now verifies single-owner acquisition, renewal, takeover after expiry, and rejection of stale-owner renewal/release. It does not yet exercise the complete lifecycle worker against two live replicas. | Add a full worker-level competing-replica integration test, including a lease loss during an access-delivery phase. |
 | AUD-002 | Resolved | The expiry message distinguishes complete revocation from partial/failed revocation and does not claim access was stopped when it may remain. | Implemented in `apps/api/src/subscription-messages.ts`; regression tests cover both outcomes. |
-| AUD-003 | Medium | Owner-notification delivery stops after the configured attempt limit; failed records remain in the database, but there is no operator-facing exhausted-retry monitor/recovery path. | Provide a durable, observable failure state and an operator recovery path, or explicitly scope this out of the current release. |
+| AUD-003 | Partially resolved | Owner-notification delivery stops after 10 attempts and preserves the unsent record and last error. The central bot now has `/failednotifications` and `/retrynotification ID` commands scoped to the active workspace and restricted to owners/admins. The commands have passed CI typechecking; live bot-handler behavior and end-to-end retry delivery still need acceptance testing. | Exercise exhausted retry, error visibility, workspace isolation, role denial and successful requeue through the real central bot. |
 | AUD-004 | Partially resolved | The test suite now includes central-bot invite-acceptance helper tests, owner-notification policy tests, Telegram update-order tests, PostgreSQL invoice-dispatch and webhook-lease integration tests. It still lacks full handler tests for central-bot role-gated callbacks, project-bot checkout/refunds and the complete lifecycle worker. | Add focused handler-level tests for critical transitions, permissions, webhook replay and retry behavior. |
 
 | AUD-005 | Resolved | Stars pre-checkout and successful-payment handlers verify that the event came from the project bot recorded in invoice metadata, in addition to checking project, buyer, amount and currency. Legacy rows without the origin snapshot remain compatible. | Implemented in `apps/api/src/telegram-payment-origin.ts`; tests cover match, mismatch and legacy metadata. |
