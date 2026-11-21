@@ -1,6 +1,6 @@
 # SubPilot workspace billing checkout
 
-**Status:** external-acquiring product direction accepted; checkout implementation and launch surface still gated by provider/compliance validation  
+**Status:** external-acquiring product direction accepted; authenticated web checkout and full-refund lifecycle implemented behind a fail-closed launch gate; live merchant, legal and sandbox validation remain open  
 **Reviewed:** 2026-11-21  
 **Scope:** fixed-price SubPilot workspace subscriptions
 
@@ -39,13 +39,15 @@ Reference:
 
 The PlatformPlan catalogue is managed by explicitly allowlisted platform operators. Assigned plans are immutable, catalogue changes are audited, and plan assignment/deactivation operations share a row-lock protocol. Workspace quota enforcement is implemented.
 
-The platform billing schema is groundwork only:
-- WorkspaceBilling does not yet model a complete pending purchase, payment-failure/grace, cancellation-at-period-end and renewal lifecycle.
-- PlatformPayment does not yet store a first-class immutable plan/price snapshot, provider connection, external checkout reference, provider event identifiers and refund reconciliation state.
-- No external platform checkout handler, platform payment webhook processor, billing lifecycle worker or operational reconciliation interface is implemented.
-- No platform workspace-plan assignment flow is implemented.
+The current branch now contains an authenticated independent-web checkout and provider-verified one-time payment lifecycle for SubPilot workspace subscriptions:
+- `GET /billing` and `GET /billing/return` serve the checkout and return page. Telegram Login Widget assertions are verified server-side; a signed, short-lived, HttpOnly/Secure session cookie identifies the user.
+- Checkout endpoints require an authenticated OWNER/ADMIN of the selected workspace, an exact HTTPS Origin, JSON input, an active SubPilot-owned YooKassa connection selected server-side, an active plan and an idempotency key. Browser input cannot select a provider connection or set the eligibility classification.
+- Only an authenticated and reconciled provider webhook activates/extends WorkspaceBilling. The browser return page displays current server-side status and is never treated as proof of payment.
+- The payment record stores immutable plan/amount/currency/period snapshots and the previous billing-period snapshot needed for a potential refund reconciliation.
+- Full refunds can be requested by allowlisted platform operators with `/platformrefund PAYMENT_ID`. The request is idempotent and audited. Access changes only after an authenticated `refund.succeeded` webhook and period-level reconciliation; uncertain or overlapping periods remain in `/platformpaymentreviews`.
+- A full-refund event matching the most recent period restores the captured preceding paid/trial period or expires the refunded entitlement when no preceding period existed. A refund for an already-ended period or when a later non-overlapping period is active does not revoke that later access. Partial/mismatched refunds and non-contiguous period histories remain in manual review.
 
-Creating a catalogue plan does not assign it, collect money or unlock quotas.
+The implementation does **not** yet provide a complete automatic renewal/failure/grace/cancellation lifecycle or payment-provider recurring charge schedule. A customer can initiate a new one-time checkout to extend the same plan; a plan switch while the current period is unexpired is held for manual review. Creating a catalogue plan still does not automatically assign it to workspaces.
 
 ## Target external checkout architecture
 
@@ -84,18 +86,18 @@ Never activate access from a redirect, client callback, screenshot or unverified
 
 ## Provider selection and commercial terms
 
-The external provider for SubPilot's own workspace billing has not yet been selected. Do not infer that a provider listed in Nemiling's creator payment matrix is available to SubPilot as a merchant. Verify current onboarding eligibility, SaaS/digital-service category acceptance, recurring billing, webhooks, refunds, chargebacks, settlement, fees, currency, fiscal receipts and legal entity requirements against the provider's own contract and documentation.
+The code currently implements the YooKassa adapter for SubPilot-owned workspace billing. This does not mean the real merchant account is connected or approved. Do not infer that a provider listed in Nemiling's creator payment matrix is available to SubPilot as a merchant. Verify current onboarding eligibility, SaaS/digital-service category acceptance, recurring billing, webhooks, refunds, chargebacks, settlement, fees, currency, fiscal receipts and legal entity requirements against the provider's own contract and documentation. A test-store credential and the owner's authorization are still required for a real sandbox checkout/refund run.
 
 Commercial plan prices, currency, billing period, trial, grace period, cancellation rules, refund policy and upgrade/downgrade proration still require explicit approval. Do not seed live commercial tiers or automatically assign workspaces before those decisions are recorded.
 
 ## Implementation order
 
-1. Keep the existing creator Stars payment and subscription lifecycle stable.
-2. Complete the workspace plan catalogue, quotas and read-only billing UI (implemented).
-3. Implement provider-agnostic platform checkout/payment lifecycle and separate platform-provider connections.
-4. Implement and test the selected external provider adapter.
-5. Complete the documented compliance review for the actual sales surface and provider merchant account.
-6. Add workspace plan assignment, verified checkout activation, renewal, failure/grace, cancellation, refund and reconciliation flows.
-7. Run PostgreSQL integration tests, webhook replay/race tests and provider sandbox end-to-end tests before any production activation.
+1. Keep the existing creator Stars payment and subscription lifecycle stable (existing flow is unchanged).
+2. Workspace plan catalogue, quotas, read-only billing UI, authenticated web checkout, YooKassa payment/webhook lifecycle and operator full-refund flow are implemented on the feature branch.
+3. Complete the documented compliance review for the actual sales surface and provider merchant account. The web checkout is disabled by default and must stay disabled until this is done.
+4. Configure Telegram Login Widget, the exact HTTPS web origin/return URL, a strong session secret and the specific active SubPilot-owned YooKassa connection in the target environment.
+5. Run a real YooKassa test-shop payment, duplicate/out-of-order webhook, full refund and partial-refund/manual-review scenario using owner-authorized sandbox credentials.
+6. Design and implement recurring renewal, payment failure/grace, cancellation-at-period-end and any required provider scheduling as a separate lifecycle phase.
+7. Run end-to-end renewal/access-expiry tests, security review and production acceptance before any deployment or enabling customer-facing checkout.
 
 No merge to main or deployment is implied by this decision.
