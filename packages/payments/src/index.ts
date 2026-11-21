@@ -171,3 +171,10 @@ export type {
   ProviderCredentialVerificationInput,
   ProviderCredentialVerificationResult
 } from "./provider-verification.js";
+
+export {
+  YooKassaPaymentAdapter,
+  YooKassaCredentialVerifier,
+  YooKassaApiError
+} from "./yookassa-adapter.js";
+export type { YooKassaCredentials, YooKassaAdapterOptions } from "./yookassa-adapter.js";
