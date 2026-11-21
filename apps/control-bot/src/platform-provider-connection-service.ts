@@ -132,6 +132,7 @@ export async function rotatePlatformProviderCredentials(input: {
       where: { id: input.connectionId },
       data: {
         credentialsEncrypted,
+        credentialVersion: { increment: 1 },
         status: "PENDING",
         lastVerifiedAt: null,
         lastError: null
@@ -246,6 +247,7 @@ export async function verifyPlatformProviderConnection(input: {
       environment: true,
       credentialsEncrypted: true,
       status: true,
+      credentialVersion: true,
       updatedAt: true
     }
   });
@@ -295,6 +297,7 @@ export async function verifyPlatformProviderConnection(input: {
       where: {
         id: snapshot.id,
         status: snapshot.status,
+        credentialVersion: snapshot.credentialVersion,
         updatedAt: snapshot.updatedAt
       },
       data: {
