@@ -236,7 +236,7 @@ export function registerPlatformBillingWebRoutes(app: FastifyInstance): void {
     setNoStoreHeaders(reply);
     if (!config.enabled) return reply.code(503).send({ error: "Веб-оплата пока не включена." });
     if (!requireExpectedOrigin(request, config)) return reply.code(403).send({ error: "Недопустимый источник запроса." });
-    if (typeof request.headers["content-type"] !== "string" || !/^application\\/json(?:;|$)/i.test(request.headers["content-type"])) return reply.code(415).send({ error: "Требуется application/json." });
+    if (typeof request.headers["content-type"] !== "string" || request.headers["content-type"].split(";")[0]?.trim().toLowerCase() !== "application/json") return reply.code(415).send({ error: "Требуется application/json." });
     try {
       const identity = verifyTelegramLoginPayload(request.body, config.botToken);
       const session = createPlatformWebSession(identity.telegramId, config.sessionSecret);
