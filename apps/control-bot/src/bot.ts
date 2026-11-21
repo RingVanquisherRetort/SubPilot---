@@ -13,6 +13,11 @@ import {
 import { isPrivateControlChat } from "./private-control-context.js";
 import { isPlatformAdminTelegramId } from "./platform-admin.js";
 import { parsePlatformPlanUpsertInput } from "./platform-plan-catalog.js";
+import {
+  PlatformPlanCatalogError,
+  setPlatformPlanActive,
+  upsertPlatformPlan
+} from "./platform-plan-catalog-service.js";
 import { parseWorkspacePlanFeatureConfig } from "./workspace-plan-limits.js";
 import {
   formatWorkspaceBillingOverview,
@@ -3045,54 +3050,7 @@ export function createControlBot(token: string): Bot {
     try {
       const input = parsePlatformPlanUpsertInput(String(ctx.match ?? ""));
       const actor = await upsertTelegramUser(ctx);
-      // Rebuild as a plain JSON object so it satisfies Prisma's JSON input type.
-      const featureJson = {
-        schemaVersion: input.features.schemaVersion,
-        limits: {
-          projects: input.features.limits.projects,
-          members: input.features.limits.members,
-          plansPerProject: input.features.limits.plansPerProject,
-          connectedChatsPerProject: input.features.limits.connectedChatsPerProject
-        }
-      };
-      const plan = await prisma.platformPlan.upsert({
-        where: { code: input.code },
-        create: {
-          code: input.code,
-          title: input.title,
-          description: input.description,
-          price: input.price,
-          currency: input.currency,
-          billingPeriodDays: input.billingPeriodDays,
-          features: featureJson,
-          isActive: true
-        },
-        update: {
-          title: input.title,
-          description: input.description,
-          price: input.price,
-          currency: input.currency,
-          billingPeriodDays: input.billingPeriodDays,
-          features: featureJson
-        }
-      });
-
-      await prisma.auditLog.create({
-        data: {
-          actorUserId: actor.id,
-          action: "PLATFORM_PLAN_UPSERT",
-          resourceType: "PlatformPlan",
-          resourceId: plan.id,
-          metadata: {
-            code: plan.code,
-            title: plan.title,
-            price: plan.price.toString(),
-            currency: plan.currency,
-            billingPeriodDays: plan.billingPeriodDays,
-            features: featureJson
-          }
-        }
-      });
+      const plan = await upsertPlatformPlan(input, actor.id);
 
       await ctx.reply(
         `Тариф SubPilot «${plan.title}» (${plan.code}) сохранён.\n` +
@@ -3100,6 +3058,11 @@ export function createControlBot(token: string): Bot {
         "Лимиты сохранены в версии схемы 1. Уже назначенный статус активности не изменён."
       );
     } catch (error) {
+      if (error instanceof PlatformPlanCatalogError &&
+          error.code === "PLAN_HAS_ASSIGNED_WORKSPACES") {
+        await ctx.reply("Этот тариф уже назначен рабочим пространствам и защищён от изменения. Создайте новую версию с другим кодом.");
+        return;
+      }
       if (error instanceof Error && /^(Формат:|Код тарифа|Название тарифа|Цена должна|Валюта должна|Период оплаты|Лимит «|Описание тарифа)/.test(error.message)) {
         await ctx.reply(error.message);
         return;
@@ -3126,32 +3089,11 @@ export function createControlBot(token: string): Bot {
 
     try {
       const actor = await upsertTelegramUser(ctx);
-      const updated = await prisma.$transaction(async (tx) => {
-        const plan = await tx.platformPlan.findUnique({
-          where: { code },
-          include: { _count: { select: { workspaceBillings: true } } }
-        });
-        if (!plan) throw new Error("PLAN_NOT_FOUND");
-        const activate = requestedStatus === "active";
-        if (!activate && plan._count.workspaceBillings > 0) {
-          throw new Error("PLAN_HAS_ASSIGNED_WORKSPACES");
-        }
-        if (plan.isActive === activate) return plan;
-        const result = await tx.platformPlan.update({
-          where: { id: plan.id },
-          data: { isActive: activate }
-        });
-        await tx.auditLog.create({
-          data: {
-            actorUserId: actor.id,
-            action: activate ? "PLATFORM_PLAN_ACTIVATED" : "PLATFORM_PLAN_DEACTIVATED",
-            resourceType: "PlatformPlan",
-            resourceId: plan.id,
-            metadata: { code: plan.code, assignedWorkspaces: plan._count.workspaceBillings }
-          }
-        });
-        return result;
-      });
+      const updated = await setPlatformPlanActive(
+        code,
+        requestedStatus === "active",
+        actor.id
+      );
 
       await ctx.reply(
         updated.isActive
@@ -3159,9 +3101,9 @@ export function createControlBot(token: string): Bot {
           : `Тариф «${updated.title}» отключён. Назначенных рабочих пространств нет.`
       );
     } catch (error) {
-      if (error instanceof Error && error.message === "PLAN_NOT_FOUND") {
+      if (error instanceof PlatformPlanCatalogError && error.code === "PLAN_NOT_FOUND") {
         await ctx.reply("Тариф с таким кодом не найден.");
-      } else if (error instanceof Error && error.message === "PLAN_HAS_ASSIGNED_WORKSPACES") {
+      } else if (error instanceof PlatformPlanCatalogError && error.code === "PLAN_HAS_ASSIGNED_WORKSPACES") {
         await ctx.reply("Нельзя отключить тариф, пока он назначен хотя бы одному рабочему пространству. Сначала безопасно переведите пространства на другой тариф.");
       } else {
         console.error("Platform plan status update failed:", error instanceof Error ? error.name : "UnknownError");
