@@ -124,6 +124,65 @@ test("PostgreSQL workspace quotas serialize concurrent creation and archived-res
       WorkspaceQuotaError
     );
 
+    await prisma.platformPlan.update({
+      where: { id: platformPlan.id },
+      data: {
+        features: {
+          schemaVersion: 1,
+          limits: {
+            projects: 2,
+            members: 2,
+            plansPerProject: 1,
+            connectedChatsPerProject: 1
+          }
+        }
+      }
+    });
+    await prisma.creatorPlan.createMany({
+      data: [0, 1].map((index) => ({
+        projectId: archivedProject.id,
+        title: `Archived project plan ${index}`,
+        price: "100",
+        currency: "XTR",
+        durationDays: 30
+      }))
+    });
+    await prisma.connectedChat.createMany({
+      data: [0, 1].map((index) => ({
+        projectId: archivedProject.id,
+        telegramChatId: telegramBase + BigInt(30 + index),
+        type: "CHANNEL" as const,
+        title: `Archived project chat ${index}`,
+        isActive: true
+      }))
+    });
+
+    const restoreArchivedProject = () => withWorkspaceQuotaTransaction(
+      workspace.id,
+      "projects",
+      async (tx) => {
+        await assertWorkspaceQuotaInTransaction(tx, workspace.id, "plansPerProject", archivedProject.id);
+        await assertWorkspaceQuotaInTransaction(tx, workspace.id, "connectedChatsPerProject", archivedProject.id);
+        return tx.project.updateMany({
+          where: { id: archivedProject.id, status: "ARCHIVED" },
+          data: { status: "ACTIVE" }
+        });
+      }
+    );
+
+    await assert.rejects(restoreArchivedProject(), WorkspaceQuotaError);
+    await prisma.creatorPlan.updateMany({
+      where: { projectId: archivedProject.id, status: "ACTIVE" },
+      data: { status: "ARCHIVED" }
+    });
+    await assert.rejects(restoreArchivedProject(), WorkspaceQuotaError);
+    await prisma.connectedChat.updateMany({
+      where: { projectId: archivedProject.id, isActive: true },
+      data: { isActive: false }
+    });
+    const restoredArchivedProject = await restoreArchivedProject();
+    assert.equal(restoredArchivedProject.count, 1);
+
     const invites = await Promise.all([firstMember.id, secondMember.id].map((userId) =>
       prisma.workspaceInvite.create({
         data: {
