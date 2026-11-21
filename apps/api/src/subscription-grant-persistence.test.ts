@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getSubscriptionGrantChatIds } from "./subscription-grant-persistence.js";
+import { getSubscriptionGrantChatIds, getSubscriptionGrantTelegramChatIds } from "./subscription-grant-persistence.js";
 
 test("paid entitlement retains inactive purchased destinations for later delivery retry", () => {
   const ids = getSubscriptionGrantChatIds([
