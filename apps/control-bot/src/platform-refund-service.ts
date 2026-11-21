@@ -31,6 +31,7 @@ export class PlatformRefundError extends Error {
     | "PROVIDER_CONNECTION_NOT_FOUND"
     | "INVALID_PROVIDER_CREDENTIALS"
     | "PROVIDER_REQUEST_FAILED"
+    | "REFUND_REQUIRES_MANUAL_REVIEW"
   ) {
     super(code);
     this.name = "PlatformRefundError";
@@ -67,12 +68,17 @@ export async function requestPlatformPaymentRefund(
         payment.status === "PENDING") {
       throw new PlatformRefundError("PAYMENT_NOT_REFUNDABLE");
     }
-    if (payment.status === "REFUNDING" && payment.refundAttemptedAt &&
-        Date.now() - payment.refundAttemptedAt.getTime() < 120_000) {
-      throw new PlatformRefundError("REFUND_IN_PROGRESS");
+    if (payment.status === "REFUNDING") {
+      throw new PlatformRefundError(payment.refundLastError
+        ? "REFUND_REQUIRES_MANUAL_REVIEW"
+        : "REFUND_IN_PROGRESS");
     }
-    if (payment.status !== "SUCCEEDED" && payment.status !== "REFUNDING") {
+    if (payment.status !== "SUCCEEDED") {
       throw new PlatformRefundError("PAYMENT_NOT_REFUNDABLE");
+    }
+    const priorRefundRequest = metadataObject(payment.metadata).refundRequest;
+    if (isRecord(priorRefundRequest) && priorRefundRequest.providerStatus === "canceled") {
+      throw new PlatformRefundError("REFUND_REQUIRES_MANUAL_REVIEW");
     }
     if (payment.provider !== "YOOKASSA" || !payment.providerConnectionId ||
         !payment.providerPaymentId) {
