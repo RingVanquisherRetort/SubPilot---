@@ -19,7 +19,8 @@ export class PlatformPaymentLifecycleError extends Error {
     | "PLAN_NOT_AVAILABLE" | "PROVIDER_NOT_AVAILABLE" | "RETURN_URL_NOT_CONFIGURED"
     | "IDEMPOTENCY_CONFLICT" | "PAYMENT_ALREADY_FINAL"
     | "PLAN_CHANGE_REQUIRES_MANUAL_REVIEW" | "PROVIDER_CONNECTION_NOT_FOUND"
-    | "INVALID_PROVIDER_CREDENTIALS"
+    | "INVALID_PROVIDER_CREDENTIALS" | "PAYMENT_NOT_FOUND"
+    | "REFUND_NOT_ALLOWED" | "REFUND_IN_PROGRESS" | "REFUND_PROVIDER_UNAVAILABLE"
   ) {
     super(code);
     this.name = "PlatformPaymentLifecycleError";
@@ -63,6 +64,204 @@ async function setManualReview(tx: Transaction, eventId: string, reason: string)
     data: { lastError: reason }
   });
 }
+interface FulfilledBillingPeriod {
+  startsAt: Date;
+  endsAt: Date;
+  planCode: string;
+  billingPeriodDays: number;
+}
+
+function readFulfilledBillingPeriod(metadata: unknown): FulfilledBillingPeriod | null {
+  const item = objectMetadata(objectMetadata(metadata).fulfilledBillingPeriod);
+  if (typeof item.startsAt !== "string" || typeof item.endsAt !== "string" ||
+      typeof item.planCode !== "string" || typeof item.billingPeriodDays !== "number") return null;
+  const startsAt = new Date(item.startsAt);
+  const endsAt = new Date(item.endsAt);
+  if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime()) ||
+      endsAt.getTime() <= startsAt.getTime() ||
+      !Number.isSafeInteger(item.billingPeriodDays) || item.billingPeriodDays < 1) return null;
+  return { startsAt, endsAt, planCode: item.planCode, billingPeriodDays: item.billingPeriodDays };
+}
+
+type PreviousBillingSnapshot =
+  | { kind: "NONE" }
+  | {
+      kind: "PERIOD";
+      platformPlanId: string;
+      status: "TRIALING" | "ACTIVE" | "PAST_DUE" | "CANCELLED" | "EXPIRED";
+      currentPeriodStart: Date | null;
+      currentPeriodEnd: Date;
+    }
+  | { kind: "INVALID" };
+
+function readPreviousBillingSnapshot(metadata: unknown): PreviousBillingSnapshot {
+  const purchaseContext = objectMetadata(objectMetadata(metadata).purchaseContext);
+  if (!Object.prototype.hasOwnProperty.call(purchaseContext, "previousBillingPeriod")) {
+    return { kind: "INVALID" };
+  }
+  const value = purchaseContext.previousBillingPeriod;
+  if (value === null) return { kind: "NONE" };
+  const item = objectMetadata(value);
+  const allowedStatuses = ["TRIALING", "ACTIVE", "PAST_DUE", "CANCELLED", "EXPIRED"];
+  if (typeof item.platformPlanId !== "string" ||
+      typeof item.status !== "string" || !allowedStatuses.includes(item.status) ||
+      typeof item.currentPeriodEnd !== "string") return { kind: "INVALID" };
+  const currentPeriodEnd = new Date(item.currentPeriodEnd);
+  const currentPeriodStart = item.currentPeriodStart === null
+    ? null
+    : typeof item.currentPeriodStart === "string" ? new Date(item.currentPeriodStart) : null;
+  if (Number.isNaN(currentPeriodEnd.getTime()) ||
+      (item.currentPeriodStart !== null &&
+       (currentPeriodStart === null || Number.isNaN(currentPeriodStart.getTime())))) {
+    return { kind: "INVALID" };
+  }
+  return {
+    kind: "PERIOD",
+    platformPlanId: item.platformPlanId,
+    status: item.status as PreviousBillingSnapshot & never,
+    currentPeriodStart,
+    currentPeriodEnd
+  } as PreviousBillingSnapshot;
+}
+
+async function processVerifiedRefund(input: {
+  tx: Transaction;
+  eventRecordId: string;
+  payment: {
+    id: string;
+    workspaceId: string;
+    platformPlanId: string;
+    planCodeSnapshot: string;
+    billingPeriodDaysSnapshot: number;
+    metadata: unknown;
+    initiatedByTelegramId: bigint | null;
+    amount: { toString(): string };
+    currency: string;
+  };
+  event: NormalizedPaymentEvent;
+  providerPaymentId: string;
+}): Promise<"PROCESSED" | "MANUAL_REVIEW"> {
+  const { tx, eventRecordId, payment, event, providerPaymentId } = input;
+  if (payment.metadata === null || payment.metadata === undefined) {
+    await setManualReview(tx, eventRecordId, "REFUND_PERIOD_SNAPSHOT_MISSING");
+    return "MANUAL_REVIEW";
+  }
+  const period = readFulfilledBillingPeriod(payment.metadata);
+  if (!period || period.planCode !== payment.planCodeSnapshot ||
+      period.billingPeriodDays !== payment.billingPeriodDaysSnapshot) {
+    await setManualReview(tx, eventRecordId, "REFUND_PERIOD_SNAPSHOT_INVALID");
+    return "MANUAL_REVIEW";
+  }
+
+  await lockWorkspace(tx, payment.workspaceId);
+  const billing = await tx.workspaceBilling.findUnique({
+    where: { workspaceId: payment.workspaceId }
+  });
+  const now = new Date();
+  let billingAction: string;
+
+  const currentPeriodMatches = Boolean(
+    billing &&
+    billing.platformPlanId === payment.platformPlanId &&
+    billing.currentPeriodStart?.getTime() === period.startsAt.getTime() &&
+    billing.currentPeriodEnd?.getTime() === period.endsAt.getTime()
+  );
+
+  if (currentPeriodMatches && billing) {
+    const previous = readPreviousBillingSnapshot(payment.metadata);
+    if (previous.kind === "INVALID") {
+      await setManualReview(tx, eventRecordId, "REFUND_PREVIOUS_PERIOD_SNAPSHOT_INVALID");
+      return "MANUAL_REVIEW";
+    }
+    if (previous.kind === "PERIOD") {
+      if (previous.platformPlanId !== payment.platformPlanId ||
+          previous.currentPeriodEnd.getTime() !== period.startsAt.getTime() ||
+          previous.currentPeriodEnd.getTime() <= now.getTime()) {
+        await setManualReview(tx, eventRecordId, "REFUND_PREVIOUS_PERIOD_NOT_CONTIGUOUS");
+        return "MANUAL_REVIEW";
+      }
+      await tx.workspaceBilling.update({
+        where: { id: billing.id },
+        data: {
+          platformPlanId: previous.platformPlanId,
+          status: previous.status,
+          currentPeriodStart: previous.currentPeriodStart,
+          currentPeriodEnd: previous.currentPeriodEnd
+        }
+      });
+      billingAction = "RESTORED_PREVIOUS_PAID_OR_TRIAL_PERIOD";
+    } else {
+      await tx.workspaceBilling.update({
+        where: { id: billing.id },
+        data: {
+          status: "EXPIRED",
+          currentPeriodStart: null,
+          currentPeriodEnd: null
+        }
+      });
+      billingAction = "EXPIRED_REFUNDED_PERIOD";
+    }
+  } else if (period.endsAt.getTime() <= now.getTime()) {
+    // A refund for an already-ended period must not alter a later entitlement.
+    billingAction = "NO_ACCESS_CHANGE_PERIOD_ALREADY_ENDED";
+  } else if (billing?.currentPeriodStart &&
+             billing.currentPeriodStart.getTime() >= period.endsAt.getTime()) {
+    // A later, non-overlapping period is already active; do not revoke it.
+    billingAction = "NO_ACCESS_CHANGE_LATER_PERIOD_ACTIVE";
+  } else {
+    await setManualReview(tx, eventRecordId, "REFUND_PERIOD_DOES_NOT_MATCH_CURRENT_BILLING");
+    return "MANUAL_REVIEW";
+  }
+
+  const refundedAt = event.occurredAt ?? new Date();
+  const metadata = {
+    ...objectMetadata(payment.metadata),
+    refund: {
+      providerRefundId: event.providerEventId.startsWith("refund.succeeded:")
+        ? event.providerEventId.slice("refund.succeeded:".length)
+        : null,
+      providerEventId: event.providerEventId,
+      refundedAt: refundedAt.toISOString(),
+      billingAction
+    }
+  };
+  await tx.platformPayment.update({
+    where: { id: payment.id },
+    data: {
+      status: "REFUNDED",
+      providerPaymentId,
+      refundedAt,
+      refundLastError: null,
+      metadata: jsonValue(metadata)
+    }
+  });
+  const actor = payment.initiatedByTelegramId === null ? null :
+    await tx.user.findUnique({
+      where: { telegramId: payment.initiatedByTelegramId }, select: { id: true }
+    });
+  await tx.auditLog.create({
+    data: {
+      workspaceId: payment.workspaceId,
+      ...(actor ? { actorUserId: actor.id } : {}),
+      action: "PLATFORM_PAYMENT_REFUNDED",
+      resourceType: "PlatformPayment",
+      resourceId: payment.id,
+      metadata: {
+        provider: "YOOKASSA",
+        amount: payment.amount.toString(),
+        currency: payment.currency,
+        providerEventId: event.providerEventId,
+        billingAction
+      }
+    }
+  });
+  await tx.platformPaymentWebhookEvent.update({
+    where: { id: eventRecordId },
+    data: { processedAt: new Date(), lastError: null }
+  });
+  return "PROCESSED";
+}
+
 async function processVerifiedEvent(input: {
   connectionId: string;
   event: NormalizedPaymentEvent;
@@ -98,12 +297,6 @@ async function processVerifiedEvent(input: {
     });
     if (locked.processedAt) return "DUPLICATE";
 
-    // Refund entitlement accounting is period-specific. Quarantine the event
-    // until an operator reconciles the refunded period and later payments.
-    if (input.event.status === "REFUNDED") {
-      await setManualReview(tx, record.id, "REFUND_REQUIRES_MANUAL_REVIEW");
-      return "MANUAL_REVIEW";
-    }
     if (!input.event.paymentReference) {
       await setManualReview(tx, record.id, "PAYMENT_REFERENCE_MISSING");
       return "MANUAL_REVIEW";
@@ -118,6 +311,12 @@ async function processVerifiedEvent(input: {
     });
     if (!payment) {
       await setManualReview(tx, record.id, "LOCAL_PAYMENT_NOT_FOUND");
+      return "MANUAL_REVIEW";
+    }
+
+    if (input.event.status === "REFUNDED" &&
+        payment.status !== "SUCCEEDED" && payment.status !== "REFUNDING") {
+      await setManualReview(tx, record.id, "REFUND_FOR_NON_SETTLED_PAYMENT");
       return "MANUAL_REVIEW";
     }
 
@@ -144,6 +343,16 @@ async function processVerifiedEvent(input: {
     if (decision.kind === "MANUAL_REVIEW") {
       await setManualReview(tx, record.id, "REVIEW_" + decision.reason);
       return "MANUAL_REVIEW";
+    }
+
+    if (decision.nextStatus === "REFUNDED") {
+      return processVerifiedRefund({
+        tx,
+        eventRecordId: record.id,
+        payment,
+        event: input.event,
+        providerPaymentId: decision.providerPaymentId
+      });
     }
 
     let billingId: string | null = payment.workspaceBillingId;
@@ -338,7 +547,20 @@ export async function createPlatformPaymentCheckout(
           initiatedByTelegramId: actorTelegramId,
           amount,
           currency,
-          status: "CREATED"
+          status: "CREATED",
+          metadata: jsonValue({
+            purchaseContext: {
+              previousBillingPeriod: billing?.currentPeriodEnd &&
+                billing.currentPeriodEnd.getTime() > Date.now()
+                ? {
+                    platformPlanId: billing.platformPlanId,
+                    status: billing.status,
+                    currentPeriodStart: billing.currentPeriodStart?.toISOString() ?? null,
+                    currentPeriodEnd: billing.currentPeriodEnd.toISOString()
+                  }
+                : null
+            }
+          })
         }
       });
       await tx.auditLog.create({
@@ -442,6 +664,152 @@ export async function createPlatformPaymentCheckout(
     status: "PENDING",
     expiresAt: updated.expiresAt
   };
+}
+
+
+export interface RequestPlatformPaymentRefundInput {
+  paymentId: string;
+  actorTelegramId: string;
+  actorUserId: string;
+}
+
+export async function requestPlatformPaymentRefund(
+  input: RequestPlatformPaymentRefundInput,
+  dependencies: { fetch?: FetchImplementation } = {}
+): Promise<{ paymentId: string; providerRefundId: string; providerStatus: string; attempt: number }> {
+  if (!/^\\d{1,20}$/.test(input.actorTelegramId) ||
+      !(process.env.PLATFORM_ADMIN_TELEGRAM_IDS ?? "").split(",").map((value) => value.trim())
+        .filter(Boolean).includes(input.actorTelegramId)) {
+    throw new PlatformPaymentLifecycleError("INVALID_ACTOR");
+  }
+
+  const claimed = await prisma.$transaction(async (tx) => {
+    await tx.$queryRawUnsafe(
+      'SELECT "id" FROM "PlatformPayment" WHERE "id" = $1 FOR UPDATE',
+      input.paymentId
+    );
+    const payment = await tx.platformPayment.findUnique({
+      where: { id: input.paymentId }
+    });
+    if (!payment) throw new PlatformPaymentLifecycleError("PAYMENT_NOT_FOUND");
+    if (payment.status === "REFUNDED" || payment.status === "FAILED" || payment.status === "CANCELLED") {
+      throw new PlatformPaymentLifecycleError("PAYMENT_ALREADY_FINAL");
+    }
+    if (payment.status !== "SUCCEEDED" && payment.status !== "REFUNDING") {
+      throw new PlatformPaymentLifecycleError("REFUND_NOT_ALLOWED");
+    }
+    if (payment.status === "REFUNDING" && payment.refundAttemptedAt &&
+        Date.now() - payment.refundAttemptedAt.getTime() < 120_000) {
+      throw new PlatformPaymentLifecycleError("REFUND_IN_PROGRESS");
+    }
+    if (payment.provider !== "YOOKASSA" || !payment.providerConnectionId) {
+      throw new PlatformPaymentLifecycleError("PROVIDER_NOT_AVAILABLE");
+    }
+    const connection = await tx.platformPaymentProviderConnection.findUnique({
+      where: { id: payment.providerConnectionId }
+    });
+    if (!connection || connection.provider !== "YOOKASSA") {
+      throw new PlatformPaymentLifecycleError("PROVIDER_CONNECTION_NOT_FOUND");
+    }
+    const updated = await tx.platformPayment.update({
+      where: { id: payment.id },
+      data: {
+        status: "REFUNDING",
+        refundAttemptedAt: new Date(),
+        refundAttempts: { increment: 1 },
+        refundLastError: null
+      }
+    });
+    await tx.auditLog.create({
+      data: {
+        workspaceId: payment.workspaceId,
+        actorUserId: input.actorUserId,
+        action: "PLATFORM_REFUND_REQUESTED",
+        resourceType: "PlatformPayment",
+        resourceId: payment.id,
+        metadata: {
+          provider: "YOOKASSA",
+          amount: payment.amount.toString(),
+          currency: payment.currency,
+          attempt: updated.refundAttempts
+        }
+      }
+    });
+    return { payment: updated, connection };
+  });
+
+  const adapter = new YooKassaPaymentAdapter(
+    readCredentials(claimed.connection.credentialsEncrypted),
+    dependencies.fetch ? { fetch: dependencies.fetch } : {}
+  );
+  try {
+    const result = await adapter.createRefund({
+      providerPaymentId: claimed.payment.providerPaymentId ?? "",
+      amount: claimed.payment.amount.toString(),
+      currency: claimed.payment.currency,
+      idempotencyKey: "subpilot-platform-refund-" + claimed.payment.id,
+      description: "SubPilot workspace subscription refund"
+    });
+    const metadata = {
+      ...objectMetadata(claimed.payment.metadata),
+      refundRequest: {
+        providerRefundId: result.providerRefundId,
+        providerStatus: result.status,
+        requestedAt: new Date().toISOString()
+      }
+    };
+    await prisma.platformPayment.update({
+      where: { id: claimed.payment.id },
+      data: {
+        ...(result.status === "canceled" ? { status: "SUCCEEDED" } : {}),
+        refundLastError: result.status === "canceled" ? "PROVIDER_REFUND_CANCELED" : null,
+        metadata: jsonValue(metadata)
+      }
+    });
+    await prisma.auditLog.create({
+      data: {
+        workspaceId: claimed.payment.workspaceId,
+        actorUserId: input.actorUserId,
+        action: result.status === "canceled"
+          ? "PLATFORM_REFUND_REJECTED_BY_PROVIDER"
+          : "PLATFORM_REFUND_ACCEPTED_BY_PROVIDER",
+        resourceType: "PlatformPayment",
+        resourceId: claimed.payment.id,
+        metadata: {
+          provider: "YOOKASSA",
+          providerRefundId: result.providerRefundId,
+          providerStatus: result.status,
+          attempt: claimed.payment.refundAttempts
+        }
+      }
+    });
+    return {
+      paymentId: claimed.payment.id,
+      providerRefundId: result.providerRefundId,
+      providerStatus: result.status,
+      attempt: claimed.payment.refundAttempts
+    };
+  } catch (error) {
+    await prisma.platformPayment.updateMany({
+      where: { id: claimed.payment.id, status: "REFUNDING" },
+      data: { refundLastError: "PROVIDER_REQUEST_FAILED" }
+    }).catch(() => undefined);
+    await prisma.auditLog.create({
+      data: {
+        workspaceId: claimed.payment.workspaceId,
+        actorUserId: input.actorUserId,
+        action: "PLATFORM_REFUND_REQUEST_FAILED",
+        resourceType: "PlatformPayment",
+        resourceId: claimed.payment.id,
+        metadata: {
+          provider: "YOOKASSA",
+          attempt: claimed.payment.refundAttempts,
+          errorName: error instanceof Error ? error.name : "UnknownError"
+        }
+      }
+    }).catch(() => undefined);
+    throw new PlatformPaymentLifecycleError("REFUND_PROVIDER_UNAVAILABLE");
+  }
 }
 
 export interface ProcessYooKassaWebhookInput {
