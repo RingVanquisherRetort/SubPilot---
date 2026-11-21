@@ -11,7 +11,7 @@ import { enqueueProjectOwnerNotification } from "./owner-notifications.js";
 import { hasRequiredSubscriptionChatRights } from "./telegram-chat-access.js";
 import { isPaymentFromProjectBot } from "./telegram-payment-origin.js";
 import { getInvoiceDispatchState } from "./telegram-invoice-state.js";
-import { getSubscriptionGrantChatIds } from "./subscription-grant-persistence.js";
+import { getSubscriptionGrantChatIds, getSubscriptionGrantTelegramChatIds } from "./subscription-grant-persistence.js";
 import { shouldQueueNewSubscriberNotification } from "./payment-event-notification.js";
 import { shouldProcessTelegramUpdate } from "./telegram-update-order.js";
 
@@ -1252,11 +1252,9 @@ export async function handleProjectBotUpdate(
       },
       include: {
         plan: { select: { title: true } },
-        payments: {
-          where: { status: "SUCCEEDED" },
-          orderBy: { paidAt: "desc" },
-          take: 1,
-          select: { metadata: true }
+        accessGrants: {
+          where: { revokedAt: null },
+          select: { connectedChat: { select: { telegramChatId: true } } }
         }
       },
       orderBy: { updatedAt: "desc" }
@@ -1269,14 +1267,9 @@ export async function handleProjectBotUpdate(
 
     const messages: string[] = [];
     for (const subscription of subscriptions) {
-      const metadata = subscription.payments[0]?.metadata &&
-        typeof subscription.payments[0].metadata === "object" &&
-        !Array.isArray(subscription.payments[0].metadata)
-        ? subscription.payments[0].metadata as Record<string, unknown>
-        : {};
-      const chatIds = Array.isArray(metadata.chatIds)
-        ? metadata.chatIds.filter((value): value is string => typeof value === "string")
-        : undefined;
+      // A renewed subscription can contain grants from multiple immutable
+      // purchase snapshots. Let buyers recover every non-revoked destination.
+      const chatIds = getSubscriptionGrantTelegramChatIds(subscription.accessGrants);
       const access = await deliverSubscriptionAccess(projectBot, subscription.id, chatIds);
       if (access.links.length > 0) {
         messages.push("«" + subscription.plan.title + "»\n" + access.links.join("\n"));
