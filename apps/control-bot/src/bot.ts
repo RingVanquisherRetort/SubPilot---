@@ -1667,10 +1667,16 @@ export function createControlBot(token: string): Bot {
       const restored = await withWorkspaceQuotaTransaction(
         workspace.id,
         "projects",
-        (tx) => tx.project.updateMany({
-          where: { id: project.id, workspaceId: workspace.id, status: "ARCHIVED" },
-          data: { status: "ACTIVE" }
-        })
+        async (tx) => {
+          // Restoring a project also makes its existing active creator plans and
+          // connected chats available again, so validate those per-project caps.
+          await assertWorkspaceQuotaInTransaction(tx, workspace.id, "plansPerProject", project.id);
+          await assertWorkspaceQuotaInTransaction(tx, workspace.id, "connectedChatsPerProject", project.id);
+          return tx.project.updateMany({
+            where: { id: project.id, workspaceId: workspace.id, status: "ARCHIVED" },
+            data: { status: "ACTIVE" }
+          });
+        }
       );
       if (restored.count !== 1) {
         await ctx.reply("Проект уже восстановлен или больше недоступен.");
