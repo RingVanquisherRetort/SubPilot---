@@ -254,8 +254,8 @@ export interface CreatePlatformPaymentCheckoutInput {
 }
 export interface PlatformPaymentCheckoutResult {
   paymentId: string;
-  checkoutUrl: string;
-  status: "PENDING";
+  checkoutUrl: string | null;
+  status: "PENDING" | "SUCCEEDED";
   expiresAt: Date | null;
 }
 
@@ -371,7 +371,15 @@ export async function createPlatformPaymentCheckout(
     payment = existing;
   }
 
-  if (["SUCCEEDED", "REFUNDED", "FAILED", "CANCELLED"].includes(payment.status)) {
+  if (payment.status === "SUCCEEDED") {
+    return {
+      paymentId: payment.id,
+      checkoutUrl: null,
+      status: "SUCCEEDED",
+      expiresAt: payment.expiresAt
+    };
+  }
+  if (["REFUNDED", "FAILED", "CANCELLED"].includes(payment.status)) {
     throw new PlatformPaymentLifecycleError("PAYMENT_ALREADY_FINAL");
   }
   if (payment.status === "PENDING" && payment.checkoutUrl) {
@@ -418,8 +426,8 @@ export async function createPlatformPaymentCheckout(
   if (updated.status === "SUCCEEDED") {
     return {
       paymentId: updated.id,
-      checkoutUrl: "",
-      status: "PENDING",
+      checkoutUrl: null,
+      status: "SUCCEEDED",
       expiresAt: updated.expiresAt
     };
   }
