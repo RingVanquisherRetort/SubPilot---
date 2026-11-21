@@ -361,20 +361,25 @@ model Subscription {
 }
 
 model SubscriptionAccessGrant {
-  id                String        @id @default(cuid())
-  subscriptionId    String
-  connectedChatId   String
-  inviteLink        String
-  expiresAt         DateTime
-  joinedAt          DateTime?
-  revokedAt         DateTime?
-  subscription      Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
-  connectedChat     ConnectedChat @relation(fields: [connectedChatId], references: [id], onDelete: Cascade)
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
+  id                    String        @id @default(cuid())
+  subscriptionId        String
+  connectedChatId       String
+  inviteLink            String
+  expiresAt             DateTime
+  joinedAt              DateTime?
+  revokedAt             DateTime?
+  deliveryAttempts      Int           @default(0)
+  deliveryNextAttemptAt DateTime      @default(now())
+  deliveryLastError     String?
+  deliveryFailedAt      DateTime?
+  subscription          Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  connectedChat         ConnectedChat @relation(fields: [connectedChatId], references: [id], onDelete: Cascade)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
 
   @@unique([subscriptionId, connectedChatId])
   @@index([connectedChatId, joinedAt, expiresAt])
+  @@index([revokedAt, deliveryAttempts, deliveryNextAttemptAt])
 }
 
 model PaymentProviderConnection {
