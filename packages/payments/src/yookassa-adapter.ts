@@ -194,7 +194,10 @@ export class YooKassaPaymentAdapter implements PaymentProviderAdapter {
         return current.id === refundId && current.payment_id === paymentId &&
           current.status === "succeeded" && amountsMatch(parts.object.amount, current.amount);
       }
-    } catch { return false; }
+    } catch (error) {
+      if (error instanceof YooKassaApiError && error.status < 500 && error.status !== 429) return false;
+      throw new Error("YooKassa webhook verification is temporarily unavailable.");
+    }
     return false;
   }
 
@@ -227,8 +230,7 @@ export class YooKassaPaymentAdapter implements PaymentProviderAdapter {
       const amount = parts.object.amount;
       if (typeof refundId !== "string" || typeof paymentId !== "string" ||
           !isRecord(amount) || typeof amount.value !== "string" || typeof amount.currency !== "string") return [];
-      let payment: JsonObject;
-      try { payment = await this.getPayment(paymentId); } catch { return []; }
+      const payment = await this.getPayment(paymentId);
       const reference = paymentReference(payment.metadata);
       const occurredAt = parseDate(parts.object.created_at);
       return [{
