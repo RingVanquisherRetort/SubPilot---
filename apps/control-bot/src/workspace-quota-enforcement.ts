@@ -18,11 +18,11 @@ export class WorkspaceQuotaError extends Error {
 
 type QuotaTransaction = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
-async function lockWorkspace(tx: QuotaTransaction, workspaceId: string): Promise<void> {
+export async function lockWorkspace(tx: QuotaTransaction, workspaceId: string): Promise<void> {
   await tx.$queryRaw`SELECT "id" FROM "Workspace" WHERE "id" = ${workspaceId} FOR UPDATE`;
 }
 
-async function assertQuota(
+export async function assertWorkspaceQuotaInTransaction(
   tx: QuotaTransaction,
   workspaceId: string,
   resource: WorkspacePlanLimitKey,
@@ -93,7 +93,7 @@ export async function withWorkspaceQuotaTransaction<T>(
 ): Promise<T> {
   return prisma.$transaction(async (tx) => {
     await lockWorkspace(tx, workspaceId);
-    await assertQuota(tx, workspaceId, resource, projectId);
+    await assertWorkspaceQuotaInTransaction(tx, workspaceId, resource, projectId);
     return operation(tx);
   }, { isolationLevel: "Serializable" });
 }
