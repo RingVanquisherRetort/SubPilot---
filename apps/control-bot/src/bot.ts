@@ -3108,7 +3108,8 @@ export function createControlBot(token: string): Bot {
           INVALID_ACTOR: "Операция не разрешена для этого пользователя.",
           PAYMENT_NOT_FOUND: "Платёж не найден.",
           PAYMENT_NOT_REFUNDABLE: "Полный возврат доступен только для успешно оплаченного платежа.",
-          REFUND_IN_PROGRESS: "Запрос возврата уже обрабатывается. Повторите проверку позже.",
+          REFUND_IN_PROGRESS: "Запрос возврата уже обрабатывается. Дождитесь webhook от YooKassa.",
+          REFUND_REQUIRES_MANUAL_REVIEW: "Автоматический повтор запрещён: сначала сверить статус возврата в кабинете YooKassa. Новый запрос не отправлялся.",
           PROVIDER_CONNECTION_NOT_FOUND: "Подключение YooKassa для платежа не найдено.",
           INVALID_PROVIDER_CREDENTIALS: "Не удалось расшифровать реквизиты YooKassa.",
           PROVIDER_REQUEST_FAILED: "YooKassa не подтвердила создание возврата. Статус сохранён для повторной сверки; повторный запрос использует тот же ключ идемпотентности."
