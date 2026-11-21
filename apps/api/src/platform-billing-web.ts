@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "@subpilot/database";
 import { createPlatformPaymentCheckout, PlatformPaymentLifecycleError } from "./platform-payment-lifecycle.js";
@@ -196,7 +196,7 @@ document.getElementById("checkout").addEventListener("click",async()=>{
  }catch(error){showStatus(error.message||"Не удалось создать платёж.");}
  finally{button.disabled=false;}
 });
-if(${config.enabled ? "true" : "false"}){ /* Login widget callback is installed above. */ }
+loadBilling().catch(()=>{});
 </script>
 </body>
 </html>`;
@@ -228,7 +228,7 @@ export function registerPlatformBillingWebRoutes(app: FastifyInstance): void {
     setNoStoreHeaders(reply);
     if (!config.enabled) return reply.code(503).send({ error: "Веб-оплата пока не включена." });
     if (!requireExpectedOrigin(request, config)) return reply.code(403).send({ error: "Недопустимый источник запроса." });
-    if (!request.isJson()) return reply.code(415).send({ error: "Требуется application/json." });
+    if (typeof request.headers["content-type"] !== "string" || !/^application\\/json(?:;|$)/i.test(request.headers["content-type"])) return reply.code(415).send({ error: "Требуется application/json." });
     try {
       const identity = verifyTelegramLoginPayload(request.body, config.botToken);
       const session = createPlatformWebSession(identity.telegramId, config.sessionSecret);
