@@ -65,5 +65,9 @@ export function shouldActivateConnectedChat(
   }
 
   const chatLimit = limitObject.connectedChatsPerProject;
-  return chatLimit === null || input.currentActiveChats < chatLimit;
+  if (chatLimit === null) return true;
+  return typeof chatLimit === "number" &&
+    Number.isSafeInteger(chatLimit) &&
+    chatLimit >= 0 &&
+    input.currentActiveChats < chatLimit;
 }
