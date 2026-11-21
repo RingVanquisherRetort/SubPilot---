@@ -60,6 +60,10 @@ The following commands remain available as an advanced fallback:
 - `/testnotifications` — send four sample lifecycle notifications to your own private chat with the central bot. This smoke test does not contact project owners or subscribers.
 - `/failednotifications` and `/retrynotification ID` — inspect/requeue exhausted owner notifications in the active workspace.
 - `/faileddeliveries` and `/retrydelivery ACCESS_GRANT_ID` — inspect/requeue subscription access grants that reached the 10-attempt dead-letter threshold. Available to workspace owners/admins in a private chat; manual retries are audited.
+- `/grantaccess PROJECT_ID | TELEGRAM_USER_ID | PLAN_ID | DAYS` — manually grant access; DAYS is optional, `0` means lifetime, otherwise the plan duration is used by default.
+- `/trialaccess PROJECT_ID | TELEGRAM_USER_ID | PLAN_ID | DAYS` — issue a one-time trial for this customer/plan (uses the plan's `trialDays` when DAYS is omitted).
+- `/activesubscriptions PROJECT_ID` — list up to 20 active subscriptions and their IDs.
+- `/revokeaccess SUBSCRIPTION_ID` — request early revocation; the lifecycle worker handles chat access and preserves other active entitlements.
 
 The control bot deletes the BotFather token message on a best-effort basis. If the message remains visible, revoke the token in BotFather and issue a new one. Project-bot webhook activation requires `PUBLIC_API_URL` and a reachable HTTPS API.
 
