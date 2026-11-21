@@ -175,6 +175,34 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
     const billingAgain = await prisma.workspaceBilling.findUniqueOrThrow({ where: { workspaceId: workspace.id } });
     assert.equal(billingAgain.currentPeriodEnd?.getTime(), billing.currentPeriodEnd?.getTime());
 
+    const partialRefundNotification = {
+      type: "notification",
+      event: "refund.succeeded",
+      object: {
+        id: "refund_partial_" + suffix,
+        payment_id: providerPaymentId,
+        status: "succeeded",
+        amount: { value: "49.50", currency: "RUB" }
+      }
+    };
+    const partialRefundResult = await processYooKassaWebhook({
+      connectionId: connection.id,
+      headers: {},
+      rawBody: JSON.stringify(partialRefundNotification),
+      body: partialRefundNotification
+    }, { fetch: fakeFetch });
+    assert.deepEqual(partialRefundResult, {
+      authenticated: true,
+      processed: 0,
+      duplicates: 0,
+      manualReview: 1
+    });
+    const partialRefundEvent = await prisma.platformPaymentWebhookEvent.findFirstOrThrow({
+      where: { providerConnectionId: connection.id, providerEventId: "refund.succeeded:refund_partial_" + suffix }
+    });
+    assert.equal(partialRefundEvent.processedAt, null);
+    assert.equal(partialRefundEvent.lastError, "REJECT_AMOUNT_MISMATCH");
+
     await prisma.platformPayment.update({
       where: { id: paymentId }, data: { status: "REFUNDING" }
     });
@@ -213,33 +241,7 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
     assert.ok(refundEvent.processedAt);
     assert.equal(refundEvent.lastError, null);
 
-    const partialRefundNotification = {
-      type: "notification",
-      event: "refund.succeeded",
-      object: {
-        id: "refund_partial_" + suffix,
-        payment_id: providerPaymentId,
-        status: "succeeded",
-        amount: { value: "49.50", currency: "RUB" }
-      }
-    };
-    const partialRefundResult = await processYooKassaWebhook({
-      connectionId: connection.id,
-      headers: {},
-      rawBody: JSON.stringify(partialRefundNotification),
-      body: partialRefundNotification
-    }, { fetch: fakeFetch });
-    assert.deepEqual(partialRefundResult, {
-      authenticated: true,
-      processed: 0,
-      duplicates: 0,
-      manualReview: 1
-    });
-    const partialRefundEvent = await prisma.platformPaymentWebhookEvent.findFirstOrThrow({
-      where: { providerConnectionId: connection.id, providerEventId: "refund.succeeded:refund_partial_" + suffix }
-    });
-    assert.equal(partialRefundEvent.processedAt, null);
-    assert.equal(partialRefundEvent.lastError, "REJECT_AMOUNT_MISMATCH");
+
   } finally {
     if (connectionId) {
       await prisma.platformPaymentWebhookEvent.deleteMany({ where: { providerConnectionId: connectionId } });
