@@ -119,6 +119,30 @@ test("treats null as unlimited and reports no finite remaining capacity", () => 
   });
 });
 
+test("evaluates all workspace quota dimensions from one usage snapshot", () => {
+  const evaluation = evaluateWorkspacePlanUsage(
+    validConfig,
+    {
+      projects: 2,
+      members: 1,
+      plansPerProject: 4,
+      connectedChatsPerProject: 1
+    },
+    {
+      projects: 1,
+      plansPerProject: 1
+    }
+  );
+
+  assert.equal(evaluation.projects.allowed, true);
+  assert.equal(evaluation.projects.remaining, 1);
+  assert.equal(evaluation.members.allowed, false);
+  assert.equal(evaluation.members.remaining, 0);
+  assert.equal(evaluation.plansPerProject.allowed, true);
+  assert.equal(evaluation.connectedChatsPerProject.allowed, true);
+  assert.equal(evaluation.connectedChatsPerProject.requested, 1);
+});
+
 test("rejects invalid usage and requested amounts", () => {
   assert.throws(() => evaluateWorkspaceLimit(5, -1), /Current usage/);
   assert.throws(() => evaluateWorkspaceLimit(5, 1.2), /Current usage/);
