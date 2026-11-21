@@ -399,8 +399,11 @@ export async function createPlatformPaymentCheckout(
   if (!checkout.checkoutUrl || !checkout.providerPaymentId) {
     throw new Error("YooKassa did not return a redirect checkout.");
   }
-  const updated = await prisma.platformPayment.update({
-    where: { id: payment.id },
+  // A fast webhook can confirm the payment before the create-checkout
+  // request finishes persisting its redirect URL. Never regress SUCCEEDED
+  // back to PENDING when that race occurs.
+  await prisma.platformPayment.updateMany({
+    where: { id: payment.id, status: { in: ["CREATED", "PENDING"] } },
     data: {
       status: "PENDING",
       providerPaymentId: checkout.providerPaymentId,
@@ -409,9 +412,23 @@ export async function createPlatformPaymentCheckout(
       expiresAt: checkout.expiresAt ?? null
     }
   });
+  const updated = await prisma.platformPayment.findUniqueOrThrow({
+    where: { id: payment.id }
+  });
+  if (updated.status === "SUCCEEDED") {
+    return {
+      paymentId: updated.id,
+      checkoutUrl: "",
+      status: "PENDING",
+      expiresAt: updated.expiresAt
+    };
+  }
+  if (updated.status !== "PENDING" || !updated.checkoutUrl) {
+    throw new PlatformPaymentLifecycleError("PAYMENT_ALREADY_FINAL");
+  }
   return {
     paymentId: updated.id,
-    checkoutUrl: updated.checkoutUrl as string,
+    checkoutUrl: updated.checkoutUrl,
     status: "PENDING",
     expiresAt: updated.expiresAt
   };
