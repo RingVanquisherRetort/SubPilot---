@@ -16,7 +16,7 @@
     "db:generate": "pnpm --filter @subpilot/database db:generate",
     "db:migrate": "pnpm --filter @subpilot/database db:migrate",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx --test packages/payments/src/index.test.ts apps/api/src/*.test.ts apps/control-bot/src/*.test.ts",
+    "test": "tsx --test packages/payments/src/index.test.ts packages/payments/src/external-payment-reconciliation.test.ts apps/api/src/*.test.ts apps/control-bot/src/*.test.ts",
     "db:migrate:deploy": "pnpm --filter @subpilot/database db:migrate:deploy",
     "db:migrate:status": "pnpm --filter @subpilot/database db:migrate:status"
   },
