@@ -50,17 +50,15 @@ export async function upsertPlatformPlan(
       where: { code: input.code },
       select: { id: true }
     });
-    let existing = null;
     if (candidate) {
       await lockPlatformPlanInTransaction(tx, candidate.id);
-      existing = await tx.platformPlan.findUnique({
+      const existing = await tx.platformPlan.findUnique({
         where: { code: input.code },
         include: { _count: { select: { workspaceBillings: true } } }
       });
-    }
-
-    if (existing && existing._count.workspaceBillings > 0) {
-      throw new PlatformPlanCatalogError("PLAN_HAS_ASSIGNED_WORKSPACES");
+      if (existing && existing._count.workspaceBillings > 0) {
+        throw new PlatformPlanCatalogError("PLAN_HAS_ASSIGNED_WORKSPACES");
+      }
     }
 
     const features = toFeatureJson(input);
