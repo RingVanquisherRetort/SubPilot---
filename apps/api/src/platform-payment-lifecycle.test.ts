@@ -103,7 +103,8 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
     const checkout = await createPlatformPaymentCheckout(checkoutInput, { fetch: fakeFetch });
     paymentId = checkout.paymentId;
     assert.equal(checkout.status, "PENDING");
-    assert.match(checkout.checkoutUrl, /^https:\/\/yookassa\.ru\//);
+    assert.equal(typeof checkout.checkoutUrl, "string");
+    assert.match(checkout.checkoutUrl ?? "", /^https:\/\/yookassa\.ru\//);
     assert.equal(createCalls, 1);
 
     const retry = await createPlatformPaymentCheckout(checkoutInput, { fetch: fakeFetch });
