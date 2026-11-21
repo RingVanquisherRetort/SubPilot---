@@ -46,7 +46,9 @@ test("platform provider credential parser accepts only a flat string object", ()
     '{"secretKey":123}',
     '{"secretKey":null}',
     '{"nested":{"key":"value"}}',
-    '{"bad key":"value"}'
+    '{"bad key":"value"}',
+    '{"__proto__":"value"}',
+    '{"constructor":"value"}'
   ]) {
     assert.throws(() => parsePlatformProviderCredentials(input));
   }
