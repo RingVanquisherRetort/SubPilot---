@@ -61,3 +61,63 @@ jobs:
         env:
           DATABASE_URL: postgresql://subpilot:subpilot_dev_password@localhost:5432/subpilot?schema=public
         run: pnpm test
+
+  upgrade-validation:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: subpilot_upgrade
+          POSTGRES_USER: subpilot
+          POSTGRES_PASSWORD: subpilot_dev_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U subpilot -d subpilot_upgrade"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Recreate the original baseline schema
+        env:
+          DATABASE_URL: postgresql://subpilot:subpilot_dev_password@localhost:5432/subpilot_upgrade?schema=public
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/database/prisma/migrations/0_init/migration.sql
+          pnpm --filter @subpilot/database exec prisma migrate resolve --applied 0_init --config prisma.config.ts
+
+      - name: Seed representative legacy records
+        env:
+          DATABASE_URL: postgresql://subpilot:subpilot_dev_password@localhost:5432/subpilot_upgrade?schema=public
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/ci/seed-legacy-upgrade.sql
+
+      - name: Apply all forward migrations to the existing database
+        env:
+          DATABASE_URL: postgresql://subpilot:subpilot_dev_password@localhost:5432/subpilot_upgrade?schema=public
+        run: pnpm db:migrate:deploy
+
+      - name: Verify legacy data and migration backfills
+        env:
+          DATABASE_URL: postgresql://subpilot:subpilot_dev_password@localhost:5432/subpilot_upgrade?schema=public
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/ci/assert-legacy-upgrade.sql
+
+      - name: Verify migration history
+        env:
+          DATABASE_URL: postgresql://subpilot:subpilot_dev_password@localhost:5432/subpilot_upgrade?schema=public
+        run: pnpm db:migrate:status
