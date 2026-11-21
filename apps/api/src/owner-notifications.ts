@@ -24,9 +24,17 @@ function getControlBot(): Bot | null {
   return controlBot;
 }
 
-/** Queue an event for the workspace owner and project creator, deduplicating identical recipients. */
-export async function enqueueProjectOwnerNotification(event: OwnerNotificationEvent): Promise<void> {
-  const project = await prisma.project.findUnique({
+type OwnerNotificationDbClient = Pick<
+  typeof prisma,
+  "project" | "workspaceMember" | "ownerNotification"
+>;
+
+/** Queue an event using either the main client or an existing transaction client. */
+export async function enqueueProjectOwnerNotificationUsing(
+  db: OwnerNotificationDbClient,
+  event: OwnerNotificationEvent
+): Promise<void> {
+  const project = await db.project.findUnique({
     where: { id: event.projectId },
     select: {
       id: true,
@@ -39,7 +47,7 @@ export async function enqueueProjectOwnerNotification(event: OwnerNotificationEv
 
   const workspaceOwnerId = project.workspace.createdBy.id;
   const creatorIsWorkspaceMember = project.creatorUser
-    ? Boolean(await prisma.workspaceMember.findUnique({
+    ? Boolean(await db.workspaceMember.findUnique({
         where: {
           workspaceId_userId: {
             workspaceId: project.workspaceId,
@@ -55,7 +63,7 @@ export async function enqueueProjectOwnerNotification(event: OwnerNotificationEv
     creatorIsWorkspaceMember
   );
 
-  await prisma.ownerNotification.createMany({
+  await db.ownerNotification.createMany({
     data: recipientIds.map((recipientUserId) => ({
       projectId: project.id,
       recipientUserId,
@@ -65,6 +73,11 @@ export async function enqueueProjectOwnerNotification(event: OwnerNotificationEv
     })),
     skipDuplicates: true
   });
+}
+
+/** Queue an event for the workspace owner and active project creator. */
+export async function enqueueProjectOwnerNotification(event: OwnerNotificationEvent): Promise<void> {
+  await enqueueProjectOwnerNotificationUsing(prisma, event);
 }
 
 /** Deliver queued events through the central bot; failed deliveries retry with exponential backoff. */
