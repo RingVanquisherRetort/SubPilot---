@@ -359,9 +359,8 @@ async function expireSubscriptions(
 
   for (const subscription of due) {
     if (!isLeaseOwned()) return;
-    let newlyExpired = false;
     if (subscription.status === "ACTIVE") {
-      newlyExpired = await prisma.$transaction(async (tx) => {
+      await prisma.$transaction(async (tx) => {
         const expired = await tx.subscription.updateMany({
           where: { id: subscription.id, status: "ACTIVE", endsAt: { lte: now } },
           data: { status: "EXPIRED" }
