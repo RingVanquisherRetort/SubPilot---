@@ -337,7 +337,7 @@ async function expireSubscriptions(
       OR: [
         { status: "ACTIVE", endsAt: { lte: now } },
         {
-          status: "EXPIRED",
+          status: { in: ["EXPIRED", "CANCELLED"] },
           accessGrants: { some: { revokedAt: null } }
         }
       ]
@@ -414,8 +414,35 @@ async function expireSubscriptions(
     }
 
     const removalFailures: string[] = [];
+    let accessPreservedByAnotherSubscription = false;
     for (const grant of subscription.accessGrants) {
       if (!isLeaseOwned()) return;
+      const otherActiveGrant = await prisma.subscriptionAccessGrant.findFirst({
+        where: {
+          id: { not: grant.id },
+          connectedChatId: grant.connectedChatId,
+          revokedAt: null,
+          subscription: {
+            id: { not: subscription.id },
+            customerId: subscription.customerId,
+            status: "ACTIVE",
+            AND: [
+              { OR: [{ startsAt: null }, { startsAt: { lte: now } }] },
+              { OR: [{ endsAt: null }, { endsAt: { gt: now } }] }
+            ]
+          }
+        },
+        select: { id: true }
+      });
+      if (otherActiveGrant) {
+        accessPreservedByAnotherSubscription = true;
+        await prisma.subscriptionAccessGrant.updateMany({
+          where: { id: grant.id, revokedAt: null },
+          data: { revokedAt: now }
+        });
+        continue;
+      }
+
       const chatId = grant.connectedChat.telegramChatId.toString();
       let completed = true;
 
@@ -473,6 +500,14 @@ async function expireSubscriptions(
         Number(subscription.customer.telegramUserId),
         buildExpiredSubscriptionNotice(subscription.project.name, removalFailures),
         { reply_markup: createRenewalKeyboard() }
+      ).catch(() => undefined);
+    } else if (subscription.status === "CANCELLED" && removalFailures.length === 0) {
+      const notice = accessPreservedByAnotherSubscription
+        ? `Доступ по подписке «${subscription.plan.title}» в проекте «${subscription.project.name}» отменён администратором. Другие действующие подписки продолжают работать.`
+        : `Доступ по подписке «${subscription.plan.title}» в проекте «${subscription.project.name}» досрочно отключён администратором.`;
+      await bot.api.sendMessage(
+        Number(subscription.customer.telegramUserId),
+        notice
       ).catch(() => undefined);
     }
   }
