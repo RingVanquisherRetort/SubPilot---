@@ -16,6 +16,12 @@ import {
   getWorkspaceBillingOverview
 } from "./workspace-billing-service.js";
 import {
+  assertWorkspaceQuotaInTransaction,
+  formatWorkspaceQuotaError,
+  lockWorkspace,
+  withWorkspaceQuotaTransaction
+} from "./workspace-quota-enforcement.js";
+import {
   classifyTelegramRefundError,
   listPaymentProviderAvailability,
   recalculateSubscriptionPeriod,
@@ -1083,6 +1089,7 @@ export function createControlBot(token: string): Bot {
 
           if (claimed.count !== 1) return false;
 
+          await lockWorkspace(tx, invite.workspaceId);
           const existingMembership = await tx.workspaceMember.findUnique({
             where: {
               workspaceId_userId: {
@@ -1092,6 +1099,9 @@ export function createControlBot(token: string): Bot {
             },
             select: { id: true }
           });
+          if (!existingMembership) {
+            await assertWorkspaceQuotaInTransaction(tx, invite.workspaceId, "members");
+          }
           const membership = await tx.workspaceMember.upsert({
             where: {
               workspaceId_userId: {
@@ -1159,16 +1169,20 @@ export function createControlBot(token: string): Bot {
       }
 
       const slug = `${slugify(name)}-${randomUUID().slice(0, 6)}`;
-      const project = await prisma.project.create({
-        data: {
-          workspaceId: workspace.id,
-          creatorUserId: user.id,
-          name,
-          slug,
-          defaultCurrency: "RUB",
-          countryCode: "RU"
-        }
-      });
+      const project = await withWorkspaceQuotaTransaction(
+        workspace.id,
+        "projects",
+        (tx) => tx.project.create({
+          data: {
+            workspaceId: workspace.id,
+            creatorUserId: user.id,
+            name,
+            slug,
+            defaultCurrency: "RUB",
+            countryCode: "RU"
+          }
+        })
+      );
 
       await ctx.reply(
         `Проект «${project.name}» создан в пространстве «${workspace.name}».\n\n` +
@@ -1698,20 +1712,25 @@ export function createControlBot(token: string): Bot {
         return;
       }
 
-      const plan = await prisma.creatorPlan.create({
-        data: {
-          projectId: project.id,
-          title,
-          price: normalizedPrice,
-          currency: "XTR",
-          durationDays: durationDays === 0 ? null : durationDays,
-          isRecurring: false,
-          chats: {
-            create: activeChats.map((chat) => ({ connectedChatId: chat.id }))
-          }
-        },
-        include: { chats: true }
-      });
+      const plan = await withWorkspaceQuotaTransaction(
+        project.workspaceId,
+        "plansPerProject",
+        (tx) => tx.creatorPlan.create({
+          data: {
+            projectId: project.id,
+            title,
+            price: normalizedPrice,
+            currency: "XTR",
+            durationDays: durationDays === 0 ? null : durationDays,
+            isRecurring: false,
+            chats: {
+              create: activeChats.map((chat) => ({ connectedChatId: chat.id }))
+            }
+          },
+          include: { chats: true }
+        }),
+        project.id
+      );
 
       await ctx.reply(
         `Тариф «${plan.title}» создан.\n\n` +
@@ -2536,16 +2555,20 @@ export function createControlBot(token: string): Bot {
             return;
           }
           const slug = `${slugify(input)}-${randomUUID().slice(0, 6)}`;
-          const project = await prisma.project.create({
-            data: {
-              workspaceId: workspace.id,
-              creatorUserId: user.id,
-              name: input,
-              slug,
-              defaultCurrency: "RUB",
-              countryCode: "RU"
-            }
-          });
+          const project = await withWorkspaceQuotaTransaction(
+            workspace.id,
+            "projects",
+            (tx) => tx.project.create({
+              data: {
+                workspaceId: workspace.id,
+                creatorUserId: user.id,
+                name: input,
+                slug,
+                defaultCurrency: "RUB",
+                countryCode: "RU"
+              }
+            })
+          );
           await ctx.reply(`Проект «${project.name}» создан.`, {
             reply_markup: new InlineKeyboard().text("Открыть проект", `ui:project:${project.id}`).row().text("В главное меню", "ui:home")
           });
@@ -2616,17 +2639,22 @@ export function createControlBot(token: string): Bot {
             });
             return;
           }
-          const plan = await prisma.creatorPlan.create({
-            data: {
-              projectId: project.id,
-              title,
-              price,
-              currency: "XTR",
-              durationDays: durationDays === 0 ? null : durationDays,
-              isRecurring: false,
-              chats: { create: activeChats.map((chat) => ({ connectedChatId: chat.id })) }
-            }
-          });
+          const plan = await withWorkspaceQuotaTransaction(
+            project.workspaceId,
+            "plansPerProject",
+            (tx) => tx.creatorPlan.create({
+              data: {
+                projectId: project.id,
+                title,
+                price,
+                currency: "XTR",
+                durationDays: durationDays === 0 ? null : durationDays,
+                isRecurring: false,
+                chats: { create: activeChats.map((chat) => ({ connectedChatId: chat.id })) }
+              }
+            }),
+            project.id
+          );
           await ctx.reply(`Тариф «${plan.title}» создан за ${plan.price.toString()} ⭐.`, {
             reply_markup: new InlineKeyboard().text("Посмотреть тарифы", `ui:plans:${project.id}`).row().text("К проекту", `ui:project:${project.id}`)
           });
