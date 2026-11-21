@@ -520,6 +520,7 @@ export async function deliverSubscriptionAccess(
           if (!isLeaseOwned()) return results;
         } catch (error) {
           if (!isTelegramInviteAlreadyRevoked(error)) {
+            if (!isLeaseOwned()) return results;
             await recordSubscriptionAccessDeliveryFailure(subscription.id, chat.id, "INVITE_REVOKE_FAILED");
             console.error(
               "Could not revoke an unused invite link for an existing member:",
@@ -575,6 +576,7 @@ export async function deliverSubscriptionAccess(
           );
           if (!isLeaseOwned()) return results;
         } catch (error) {
+          if (!isLeaseOwned()) return results;
           await recordSubscriptionAccessDeliveryFailure(subscription.id, chat.id, "SUBSCRIBER_UNBAN_FAILED");
           console.error(
             "Could not unban an active subscriber before reusing an invite:",
