@@ -530,24 +530,25 @@ export async function createPlatformPaymentCheckout(
       }
 
       const now = new Date();
-      const activePending = await tx.platformPayment.findFirst({
+      const pendingCheckout = await tx.platformPayment.findFirst({
         where: {
           workspaceId: input.workspaceId,
-          status: { in: ["CREATED", "PENDING"] },
-          OR: [
-            { expiresAt: null, createdAt: { gt: new Date(now.getTime() - 30 * 60 * 1000) } },
-            { expiresAt: { gt: now } }
-          ]
+          status: { in: ["CREATED", "PENDING"] }
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }]
       });
-      if (activePending) {
-        const matches = activePending.platformPlanId === plan.id &&
-          activePending.providerConnectionId === connection.id &&
-          activePending.amount.toString() === amount &&
-          activePending.currency === currency;
-        if (!matches) throw new PlatformPaymentLifecycleError("CHECKOUT_ALREADY_IN_PROGRESS");
-        return activePending;
+      if (pendingCheckout) {
+        // Do not open a second charge while an earlier provider payment is
+        // non-terminal, even if its displayed expiry has passed. A delayed
+        // success webhook could still arrive; reconcile/cancel the old payment first.
+        const matches = pendingCheckout.platformPlanId === plan.id &&
+          pendingCheckout.providerConnectionId === connection.id &&
+          pendingCheckout.amount.toString() === amount &&
+          pendingCheckout.currency === currency;
+        if (!matches || (pendingCheckout.expiresAt && pendingCheckout.expiresAt.getTime() <= now.getTime())) {
+          throw new PlatformPaymentLifecycleError("CHECKOUT_ALREADY_IN_PROGRESS");
+        }
+        return pendingCheckout;
       }
 
       const billing = await tx.workspaceBilling.findUnique({ where: { workspaceId: input.workspaceId } });
