@@ -128,29 +128,68 @@ export function evaluateWorkspacePlanLimit(
   return evaluateWorkspaceLimit(config.limits[resource], currentUsage, requested);
 }
 
-export type WorkspacePlanUsage = Record<WorkspacePlanLimitKey, number>;
-export type WorkspacePlanRequests = Partial<Record<WorkspacePlanLimitKey, number>>;
-export type WorkspacePlanEvaluation = Record<WorkspacePlanLimitKey, WorkspaceLimitDecision>;
+export interface WorkspaceQuotaUsageSnapshot {
+  projects: number;
+  members: number;
+  project: {
+    plans: number;
+    connectedChats: number;
+  };
+}
+
+export interface WorkspaceQuotaRequests {
+  projects?: number;
+  members?: number;
+  projectPlans?: number;
+  projectConnectedChats?: number;
+}
+
+export interface WorkspaceQuotaEvaluation {
+  projects: WorkspaceLimitDecision;
+  members: WorkspaceLimitDecision;
+  project: {
+    plansPerProject: WorkspaceLimitDecision;
+    connectedChatsPerProject: WorkspaceLimitDecision;
+  };
+}
 
 /**
- * Evaluates every quota in one pass. Omitted requested increments default to
- * one resource, matching the common create-one operation.
+ * Evaluates workspace-wide limits and the two per-project limits separately.
+ * The project usage passed here must belong to the specific project being
+ * created/changed; plans and chats from different projects are never summed.
+ * Omitted requested increments default to one resource.
  */
-export function evaluateWorkspacePlanUsage(
+export function evaluateWorkspaceQuotaSnapshot(
   config: WorkspacePlanFeatureConfig,
-  currentUsage: WorkspacePlanUsage,
-  requested: WorkspacePlanRequests = {}
-): WorkspacePlanEvaluation {
-  const result = {} as WorkspacePlanEvaluation;
-
-  for (const resource of WORKSPACE_PLAN_LIMIT_KEYS) {
-    result[resource] = evaluateWorkspacePlanLimit(
+  currentUsage: WorkspaceQuotaUsageSnapshot,
+  requested: WorkspaceQuotaRequests = {}
+): WorkspaceQuotaEvaluation {
+  return {
+    projects: evaluateWorkspacePlanLimit(
       config,
-      resource,
-      currentUsage[resource],
-      requested[resource] ?? 1
-    );
-  }
-
-  return result;
+      "projects",
+      currentUsage.projects,
+      requested.projects ?? 1
+    ),
+    members: evaluateWorkspacePlanLimit(
+      config,
+      "members",
+      currentUsage.members,
+      requested.members ?? 1
+    ),
+    project: {
+      plansPerProject: evaluateWorkspacePlanLimit(
+        config,
+        "plansPerProject",
+        currentUsage.project.plans,
+        requested.projectPlans ?? 1
+      ),
+      connectedChatsPerProject: evaluateWorkspacePlanLimit(
+        config,
+        "connectedChatsPerProject",
+        currentUsage.project.connectedChats,
+        requested.projectConnectedChats ?? 1
+      )
+    }
+  };
 }
