@@ -883,10 +883,15 @@ export function createControlBot(token: string): Bot {
       await ctx.reply("Нет прав восстанавливать тариф.");
       return;
     }
-    const result = await prisma.creatorPlan.updateMany({
-      where: { id: planId, projectId, status: "ARCHIVED" },
-      data: { status: "ACTIVE" }
-    });
+    const result = await withWorkspaceQuotaTransaction(
+      project.workspaceId,
+      "plansPerProject",
+      (tx) => tx.creatorPlan.updateMany({
+        where: { id: planId, projectId, status: "ARCHIVED" },
+        data: { status: "ACTIVE" }
+      }),
+      projectId
+    );
     if (result.count !== 1) {
       await ctx.reply("Тариф не найден или уже активен.");
       return;
@@ -1648,15 +1653,28 @@ export function createControlBot(token: string): Bot {
         return;
       }
 
-      await prisma.project.update({
-        where: { id: project.id },
-        data: { status: "ACTIVE" }
-      });
+      if (project.status !== "ARCHIVED") {
+        await ctx.reply("Проект уже активен или не находится в архиве.");
+        return;
+      }
+
+      const restored = await withWorkspaceQuotaTransaction(
+        workspace.id,
+        "projects",
+        (tx) => tx.project.updateMany({
+          where: { id: project.id, workspaceId: workspace.id, status: "ARCHIVED" },
+          data: { status: "ACTIVE" }
+        })
+      );
+      if (restored.count !== 1) {
+        await ctx.reply("Проект уже восстановлен или больше недоступен.");
+        return;
+      }
 
       await ctx.reply(`Проект «${project.name}» восстановлен.`);
     } catch (error) {
       console.error("Control bot /restoreproject failed:", error);
-      await ctx.reply("Не удалось восстановить проект.");
+      await ctx.reply(formatWorkspaceQuotaError(error));
     }
   });
 
@@ -2404,6 +2422,7 @@ export function createControlBot(token: string): Bot {
       const plan = await prisma.creatorPlan.findFirst({
         where: {
           id: planId,
+          status: "ARCHIVED",
           project: {
             workspaceId: workspace.id,
             status: { not: "ARCHIVED" },
@@ -2413,7 +2432,8 @@ export function createControlBot(token: string): Bot {
               }
             }
           }
-        }
+        },
+        include: { project: { select: { workspaceId: true } } }
       });
 
       if (!plan) {
@@ -2464,15 +2484,24 @@ export function createControlBot(token: string): Bot {
         return;
       }
 
-      await prisma.creatorPlan.update({
-        where: { id: plan.id },
-        data: { status: "ACTIVE" }
-      });
+      const restored = await withWorkspaceQuotaTransaction(
+        plan.project.workspaceId,
+        "plansPerProject",
+        (tx) => tx.creatorPlan.updateMany({
+          where: { id: plan.id, projectId: plan.projectId, status: "ARCHIVED" },
+          data: { status: "ACTIVE" }
+        }),
+        plan.projectId
+      );
+      if (restored.count !== 1) {
+        await ctx.reply("Тариф уже восстановлен или больше недоступен.");
+        return;
+      }
 
       await ctx.reply(`Тариф «${plan.title}» восстановлен.`);
     } catch (error) {
       console.error("Control bot /restoreplan failed:", error);
-      await ctx.reply("Не удалось восстановить тариф.");
+      await ctx.reply(formatWorkspaceQuotaError(error));
     }
   });
 
