@@ -2028,6 +2028,7 @@ export function createControlBot(token: string): Bot {
           id: notificationId,
           sentAt: null,
           attempts: { gte: 10 },
+          lastError: { not: "RECIPIENT_NO_LONGER_WORKSPACE_MEMBER" },
           project: { workspaceId: workspace.id }
         },
         data: { attempts: 0, nextAttemptAt: new Date(), lastError: null }
