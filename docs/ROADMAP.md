@@ -97,6 +97,9 @@ Initial research candidates for creators who are individuals: YooMoney, Crypto P
   - [ ] Confirm a compliant sales surface for the digital SaaS subscription; Telegram's Bot Platform Terms require Stars for digital goods/services sold through a bot or Mini App.
   - [ ] Select and verify an external PSP for SubPilot as merchant (SaaS category, recurring billing, webhooks, refunds, settlement, receipts and onboarding).
   - [ ] Approve commercial terms (currency, billing period, trial, grace period, cancellation, refunds and proration).
+  - [x] Add a dedicated platform acquiring-connection model and webhook-event ledger, separate from creator project connections and payment events.
+  - [x] Add platform payment workspace/plan references, immutable plan terms snapshots, checkout references, expiry and refund retry fields.
+  - [ ] Add audited operator management for platform PSP connections and encrypted credential rotation.
   - [ ] Implement provider-agnostic platform checkout, verified payment events/idempotency, billing lifecycle and reconciliation.
   - [ ] Implement and sandbox-test the selected external PSP adapter before customer-facing activation.
 - [ ] Implement workspace billing lifecycle, payment status transitions and grace periods.
