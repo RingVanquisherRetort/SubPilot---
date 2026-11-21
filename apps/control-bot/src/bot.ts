@@ -3337,7 +3337,7 @@ export function createControlBot(token: string): Bot {
         const messages: Record<string, string> = {
           CONNECTION_NOT_FOUND: "Подключение не найдено.",
           CONNECTION_DISABLED: "Подключение отключено. Сначала замените реквизиты или создайте новое подключение.",
-          ADAPTER_NOT_CONFIGURED: "Для этого провайдера ещё нет реализованной проверки реквизитов. Подключение остаётся PENDING.",
+          ADAPTER_NOT_CONFIGURED: "Для этого провайдера ещё нет реализованной проверки реквизитов. Состояние подключения не изменено.",
           CONNECTION_CHANGED_DURING_VERIFICATION: "Реквизиты или состояние подключения изменились во время проверки. Запустите проверку заново."
         };
         await ctx.reply(messages[error.code] ?? "Не удалось проверить подключение.");
