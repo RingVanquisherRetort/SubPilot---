@@ -2422,7 +2422,7 @@ export function createControlBot(token: string): Bot {
       const plan = await prisma.creatorPlan.findFirst({
         where: {
           id: planId,
-          status: "ARCHIVED",
+          status: "ACTIVE",
           project: {
             workspaceId: workspace.id,
             status: { not: "ARCHIVED" },
@@ -2432,8 +2432,7 @@ export function createControlBot(token: string): Bot {
               }
             }
           }
-        },
-        include: { project: { select: { workspaceId: true } } }
+        }
       });
 
       if (!plan) {
@@ -2467,6 +2466,7 @@ export function createControlBot(token: string): Bot {
       const plan = await prisma.creatorPlan.findFirst({
         where: {
           id: planId,
+          status: "ARCHIVED",
           project: {
             workspaceId: workspace.id,
             status: { not: "ARCHIVED" },
@@ -2476,7 +2476,8 @@ export function createControlBot(token: string): Bot {
               }
             }
           }
-        }
+        },
+        include: { project: { select: { workspaceId: true } } }
       });
 
       if (!plan) {
