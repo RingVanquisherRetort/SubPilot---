@@ -54,7 +54,7 @@ export function verifyTelegramLoginPayload(
       }
       return [key, String(value)] as const;
     })
-    .sort(([left], [right]) => left.localeCompare(right));
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
   const dataCheckString = entries.map(([key, value]) => key + "=" + value).join("\n");
   const secretKey = createHash("sha256").update(botToken).digest();
   const expectedHash = createHmac("sha256", secretKey).update(dataCheckString).digest("hex");
