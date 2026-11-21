@@ -15,6 +15,7 @@ import {
 import { getSubscriptionGrantTelegramChatIds } from "./subscription-grant-persistence.js";
 import { buildExpiredSubscriptionNotice } from "./subscription-messages.js";
 import { runLifecyclePassWithLease } from "./subscription-lifecycle-runner.js";
+import { findOtherActiveSubscriptionAccessGrant } from "./subscription-access-revocation.js";
 import {
   deliverPendingOwnerNotifications,
   enqueueProjectOwnerNotification,
@@ -419,22 +420,11 @@ async function expireSubscriptions(
     let accessPreservedByAnotherSubscription = false;
     for (const grant of subscription.accessGrants) {
       if (!isLeaseOwned()) return;
-      const otherActiveGrant = await prisma.subscriptionAccessGrant.findFirst({
-        where: {
-          id: { not: grant.id },
-          connectedChatId: grant.connectedChatId,
-          revokedAt: null,
-          subscription: {
-            id: { not: subscription.id },
-            customerId: subscription.customerId,
-            status: "ACTIVE",
-            AND: [
-              { OR: [{ startsAt: null }, { startsAt: { lte: now } }] },
-              { OR: [{ endsAt: null }, { endsAt: { gt: now } }] }
-            ]
-          }
-        },
-        select: { id: true }
+      const otherActiveGrant = await findOtherActiveSubscriptionAccessGrant({
+        subscriptionId: subscription.id,
+        customerId: subscription.customerId,
+        connectedChatId: grant.connectedChatId,
+        now
       });
       if (otherActiveGrant) {
         // Preserve membership from the other entitlement, but still revoke the
