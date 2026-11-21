@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   evaluateWorkspaceLimit,
   evaluateWorkspacePlanLimit,
+  evaluateWorkspacePlanUsage,
   parseWorkspacePlanFeatureConfig,
   type WorkspacePlanFeatureConfig
 } from "./workspace-plan-limits.js";
