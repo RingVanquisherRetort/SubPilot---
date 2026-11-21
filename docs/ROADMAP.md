@@ -51,7 +51,7 @@
 - [x] Add PostgreSQL-backed distributed lifecycle-worker lease locking across API replicas.
 - [x] Retry failed owner-notification and access-delivery operations.
 - [x] Add dead-letter monitoring, alerting and operator recovery for exhausted owner notifications and subscription access delivery (10-attempt ceiling, owner alert, workspace-scoped operator retry).
-- [ ] Manual grants, manual revocation and trials.
+- [x] Manual time-limited/lifetime grants, one-time trials, active-subscription listing and audited early revocation for workspace OWNER/ADMIN; overlapping active entitlements preserve access.
 
 ## Stage 4 — Payments
 
