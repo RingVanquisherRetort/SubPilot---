@@ -134,6 +134,14 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
     assert.equal(retry.checkoutUrl, checkout.checkoutUrl);
     assert.equal(createCalls, 1);
 
+    const retryWithNewBrowserKey = await createPlatformPaymentCheckout({
+      ...checkoutInput,
+      idempotencyKey: "new-browser-key-" + suffix
+    }, { fetch: fakeFetch });
+    assert.equal(retryWithNewBrowserKey.paymentId, checkout.paymentId);
+    assert.equal(retryWithNewBrowserKey.checkoutUrl, checkout.checkoutUrl);
+    assert.equal(createCalls, 1);
+
     const notification = {
       type: "notification",
       event: "payment.succeeded",
