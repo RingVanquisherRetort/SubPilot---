@@ -13,6 +13,7 @@ import {
 import { isPrivateControlChat } from "./private-control-context.js";
 import { isPlatformAdminTelegramId } from "./platform-admin.js";
 import { parsePlatformPlanUpsertInput } from "./platform-plan-catalog.js";
+import { parseWorkspacePlanFeatureConfig } from "./workspace-plan-limits.js";
 import {
   formatWorkspaceBillingOverview,
   getWorkspaceBillingOverview
