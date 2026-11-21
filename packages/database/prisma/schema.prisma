@@ -487,6 +487,7 @@ model PlatformPaymentProviderConnection {
   credentialsEncrypted String
   publicConfig         Json?
   status               ProviderConnectionStatus @default(PENDING)
+  credentialVersion    Int                      @default(1)
   lastVerifiedAt       DateTime?
   lastError            String?
   payments             PlatformPayment[]
