@@ -1,5 +1,6 @@
 import { prisma } from "@subpilot/database";
-import { encryptSecret } from "@subpilot/security";
+import { decryptSecret, encryptSecret } from "@subpilot/security";
+import type { PaymentProviderCredentialVerifierRegistry } from "@subpilot/payments";
 import type {
   PlatformExternalProviderId,
   PlatformProviderEnvironment
@@ -7,7 +8,12 @@ import type {
 
 export class PlatformProviderConnectionError extends Error {
   constructor(
-    public readonly code: "CONNECTION_NOT_FOUND" | "DUPLICATE_CONNECTION"
+    public readonly code:
+      | "CONNECTION_NOT_FOUND"
+      | "DUPLICATE_CONNECTION"
+      | "CONNECTION_DISABLED"
+      | "ADAPTER_NOT_CONFIGURED"
+      | "CONNECTION_CHANGED_DURING_VERIFICATION"
   ) {
     super(code);
     this.name = "PlatformProviderConnectionError";
@@ -213,5 +219,129 @@ export async function disablePlatformProviderConnection(
     });
 
     return updated;
+  });
+}
+
+
+/**
+ * Verifies a pending connection against the provider API. The network request
+ * happens outside the database transaction; the final compare-and-set checks
+ * updatedAt so a concurrent credential rotation cannot be overwritten by a
+ * stale verification result.
+ */
+export async function verifyPlatformProviderConnection(input: {
+  connectionId: string;
+  actorUserId: string;
+  verifiers: PaymentProviderCredentialVerifierRegistry;
+}): Promise<{
+  connection: PlatformProviderConnectionSummary;
+  verification: "VERIFIED" | "REJECTED";
+  errorCode?: string;
+}> {
+  const snapshot = await prisma.platformPaymentProviderConnection.findUnique({
+    where: { id: input.connectionId },
+    select: {
+      id: true,
+      provider: true,
+      environment: true,
+      credentialsEncrypted: true,
+      status: true,
+      updatedAt: true
+    }
+  });
+  if (!snapshot) throw new PlatformProviderConnectionError("CONNECTION_NOT_FOUND");
+  if (snapshot.status === "DISABLED") {
+    throw new PlatformProviderConnectionError("CONNECTION_DISABLED");
+  }
+
+  let verifier;
+  try {
+    verifier = input.verifiers.get(snapshot.provider);
+  } catch {
+    throw new PlatformProviderConnectionError("ADAPTER_NOT_CONFIGURED");
+  }
+
+  let verified = false;
+  let errorCode: string | undefined;
+  try {
+    const credentials = JSON.parse(decryptSecret(snapshot.credentialsEncrypted)) as unknown;
+    if (!credentials || typeof credentials !== "object" || Array.isArray(credentials) ||
+        Object.values(credentials).some((value) => typeof value !== "string")) {
+      throw new Error("Invalid stored credential format.");
+    }
+    const result = await verifier.verifyCredentials({
+      credentials: credentials as Record<string, string>,
+      environment: snapshot.environment
+    });
+    if (result && result.ok === true) {
+      verified = true;
+    } else {
+      const candidate = result && "errorCode" in result ? result.errorCode : "";
+      errorCode = typeof candidate === "string" && /^[A-Z0-9_]{1,64}$/.test(candidate)
+        ? candidate
+        : "PROVIDER_REJECTED_CREDENTIALS";
+    }
+  } catch {
+    // Never persist provider exceptions: some SDK errors echo secrets or headers.
+    errorCode = "VERIFICATION_FAILED";
+  }
+
+  const now = new Date();
+  const nextStatus = verified ? "ACTIVE" : "ERROR";
+  const safeError = verified ? null : errorCode ?? "VERIFICATION_FAILED";
+
+  return prisma.$transaction(async (tx) => {
+    const changed = await tx.platformPaymentProviderConnection.updateMany({
+      where: {
+        id: snapshot.id,
+        status: snapshot.status,
+        updatedAt: snapshot.updatedAt
+      },
+      data: {
+        status: nextStatus,
+        lastVerifiedAt: verified ? now : null,
+        lastError: safeError
+      }
+    });
+    if (changed.count !== 1) {
+      throw new PlatformProviderConnectionError("CONNECTION_CHANGED_DURING_VERIFICATION");
+    }
+
+    const connection = await tx.platformPaymentProviderConnection.findUniqueOrThrow({
+      where: { id: snapshot.id },
+      select: {
+        id: true,
+        provider: true,
+        label: true,
+        environment: true,
+        status: true,
+        lastVerifiedAt: true,
+        lastError: true,
+        createdAt: true
+      }
+    });
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        action: verified
+          ? "PLATFORM_PROVIDER_CONNECTION_VERIFIED"
+          : "PLATFORM_PROVIDER_CONNECTION_VERIFICATION_FAILED",
+        resourceType: "PlatformPaymentProviderConnection",
+        resourceId: connection.id,
+        metadata: {
+          provider: connection.provider,
+          label: connection.label,
+          environment: connection.environment,
+          status: connection.status,
+          errorCode: safeError
+        }
+      }
+    });
+
+    return {
+      connection,
+      verification: verified ? "VERIFIED" as const : "REJECTED" as const,
+      ...(safeError ? { errorCode: safeError } : {})
+    };
   });
 }
