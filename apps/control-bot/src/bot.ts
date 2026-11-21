@@ -28,8 +28,10 @@ import {
   disablePlatformProviderConnection,
   PlatformProviderConnectionError,
   listPlatformProviderConnections,
-  rotatePlatformProviderCredentials
+  rotatePlatformProviderCredentials,
+  verifyPlatformProviderConnection
 } from "./platform-provider-connection-service.js";
+import { platformProviderCredentialVerifiers } from "./platform-provider-verifiers.js";
 import { parseWorkspacePlanFeatureConfig } from "./workspace-plan-limits.js";
 import {
   formatWorkspaceBillingOverview,
@@ -3304,6 +3306,46 @@ export function createControlBot(token: string): Bot {
       "Сообщение будет удалено по возможности. После ротации статус станет PENDING до повторной проверки.\n" +
       "Ожидание — 5 минут. Для отмены: /cancel"
     );
+  });
+
+  bot.command("platformprovidercheck", async (ctx) => {
+    if (ctx.chat.type !== "private" || !ctx.from ||
+        !isPlatformAdminTelegramId(ctx.from.id, process.env.PLATFORM_ADMIN_TELEGRAM_IDS)) {
+      await ctx.reply("Команда доступна только уполномоченным операторам SubPilot в личном чате.");
+      return;
+    }
+
+    const connectionId = String(ctx.match ?? "").trim();
+    if (!/^[A-Za-z0-9_-]{10,40}$/.test(connectionId)) {
+      await ctx.reply("Формат: /platformprovidercheck CONNECTION_ID");
+      return;
+    }
+    try {
+      const actor = await upsertTelegramUser(ctx);
+      const result = await verifyPlatformProviderConnection({
+        connectionId,
+        actorUserId: actor.id,
+        verifiers: platformProviderCredentialVerifiers
+      });
+      await ctx.reply(
+        result.verification === "VERIFIED"
+          ? `Реквизиты ${result.connection.provider} «${result.connection.label}» проверены провайдером. Подключение активно.`
+          : `Провайдер отклонил реквизиты ${result.connection.provider} «${result.connection.label}». Код: ${result.errorCode ?? "VERIFICATION_FAILED"}. Подключение неактивно.`
+      );
+    } catch (error) {
+      if (error instanceof PlatformProviderConnectionError) {
+        const messages: Record<string, string> = {
+          CONNECTION_NOT_FOUND: "Подключение не найдено.",
+          CONNECTION_DISABLED: "Подключение отключено. Сначала замените реквизиты или создайте новое подключение.",
+          ADAPTER_NOT_CONFIGURED: "Для этого провайдера ещё нет реализованной проверки реквизитов. Подключение остаётся PENDING.",
+          CONNECTION_CHANGED_DURING_VERIFICATION: "Реквизиты или состояние подключения изменились во время проверки. Запустите проверку заново."
+        };
+        await ctx.reply(messages[error.code] ?? "Не удалось проверить подключение.");
+      } else {
+        console.error("Platform provider verification failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Проверка подключения завершилась ошибкой. Секреты не выводились в журнал.");
+      }
+    }
   });
 
   bot.command("platformproviderdisable", async (ctx) => {
