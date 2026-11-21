@@ -11,7 +11,7 @@ test("access-delivery retries use bounded exponential backoff", () => {
   for (let prior = 0; prior < waits.length; prior++) {
     const state = getAccessDeliveryFailureState(prior, now, "TELEGRAM_FORBIDDEN");
     assert.equal(state.attempts, prior + 1);
-    assert.equal(state.nextAttemptAt.getTime() - now.getTime(), waits[prior] * 60_000);
+    assert.equal(state.nextAttemptAt.getTime() - now.getTime(), (waits[prior] ?? 0) * 60_000);
     assert.equal(state.failedAt !== null, prior + 1 >= MAX_ACCESS_DELIVERY_ATTEMPTS);
     assert.equal(state.lastError, "TELEGRAM_FORBIDDEN");
   }
