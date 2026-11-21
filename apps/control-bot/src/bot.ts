@@ -3045,6 +3045,16 @@ export function createControlBot(token: string): Bot {
     try {
       const input = parsePlatformPlanUpsertInput(String(ctx.match ?? ""));
       const actor = await upsertTelegramUser(ctx);
+      // Rebuild as a plain JSON object so it satisfies Prisma's JSON input type.
+      const featureJson = {
+        schemaVersion: input.features.schemaVersion,
+        limits: {
+          projects: input.features.limits.projects,
+          members: input.features.limits.members,
+          plansPerProject: input.features.limits.plansPerProject,
+          connectedChatsPerProject: input.features.limits.connectedChatsPerProject
+        }
+      };
       const plan = await prisma.platformPlan.upsert({
         where: { code: input.code },
         create: {
@@ -3054,7 +3064,7 @@ export function createControlBot(token: string): Bot {
           price: input.price,
           currency: input.currency,
           billingPeriodDays: input.billingPeriodDays,
-          features: input.features,
+          features: featureJson,
           isActive: true
         },
         update: {
@@ -3063,7 +3073,7 @@ export function createControlBot(token: string): Bot {
           price: input.price,
           currency: input.currency,
           billingPeriodDays: input.billingPeriodDays,
-          features: input.features
+          features: featureJson
         }
       });
 
@@ -3079,7 +3089,7 @@ export function createControlBot(token: string): Bot {
             price: plan.price.toString(),
             currency: plan.currency,
             billingPeriodDays: plan.billingPeriodDays,
-            features: input.features
+            features: featureJson
           }
         }
       });
