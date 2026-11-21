@@ -18,6 +18,18 @@ import {
   setPlatformPlanActive,
   upsertPlatformPlan
 } from "./platform-plan-catalog-service.js";
+import {
+  parsePlatformProviderConnectionInput,
+  parsePlatformProviderCredentials,
+  type PlatformProviderConnectionInput
+} from "./platform-provider-connection.js";
+import {
+  createPlatformProviderConnection,
+  disablePlatformProviderConnection,
+  PlatformProviderConnectionError,
+  listPlatformProviderConnections,
+  rotatePlatformProviderCredentials
+} from "./platform-provider-connection-service.js";
 import { parseWorkspacePlanFeatureConfig } from "./workspace-plan-limits.js";
 import {
   formatWorkspaceBillingOverview,
@@ -72,6 +84,10 @@ type PendingBotConnection = {
   projectId: string;
   expiresAt: number;
 };
+
+type PendingPlatformProviderSecret =
+  | { kind: "CREATE"; connection: PlatformProviderConnectionInput; expiresAt: number }
+  | { kind: "ROTATE"; connectionId: string; expiresAt: number };
 
 type PendingTextActionInput =
   | { kind: "new_project" }
@@ -242,6 +258,7 @@ export function createControlBot(token: string): Bot {
   // A bot restart cancels a pending token submission; no secrets are persisted here.
   const pendingBotConnections = new Map<number, PendingBotConnection>();
   const pendingTextActions = new Map<number, PendingTextAction>();
+  const pendingPlatformProviderSecrets = new Map<number, PendingPlatformProviderSecret>();
 
   const setPendingTextAction = (userId: number, action: PendingTextActionInput): void => {
     pendingBotConnections.delete(userId);
@@ -2575,6 +2592,7 @@ export function createControlBot(token: string): Bot {
     if (ctx.from) {
       pendingBotConnections.delete(ctx.from.id);
       pendingTextActions.delete(ctx.from.id);
+      pendingPlatformProviderSecrets.delete(ctx.from.id);
     }
     await ctx.reply("Текущая операция отменена.");
   });
@@ -2582,6 +2600,59 @@ export function createControlBot(token: string): Bot {
   bot.on("message:text", async (ctx) => {
     if (ctx.chat.type !== "private" || !ctx.from) return;
     if (ctx.message.text.startsWith("/")) return;
+
+    const pendingPlatformSecret = pendingPlatformProviderSecrets.get(ctx.from.id);
+    if (pendingPlatformSecret) {
+      pendingPlatformProviderSecrets.delete(ctx.from.id);
+      const submittedSecretText = ctx.message.text;
+      await ctx.deleteMessage().catch(() => undefined);
+
+      if (pendingPlatformSecret.expiresAt <= Date.now()) {
+        await ctx.reply("Время ожидания истекло. Начните операцию подключения провайдера заново.");
+        return;
+      }
+      if (!isPlatformAdminTelegramId(ctx.from.id, process.env.PLATFORM_ADMIN_TELEGRAM_IDS)) {
+        await ctx.reply("Доступ оператора отозван. Секрет не сохранён.");
+        return;
+      }
+
+      try {
+        const credentials = parsePlatformProviderCredentials(submittedSecretText);
+        const actor = await upsertTelegramUser(ctx);
+        const connection = pendingPlatformSecret.kind === "CREATE"
+          ? await createPlatformProviderConnection({
+              ...pendingPlatformSecret.connection,
+              credentials,
+              actorUserId: actor.id
+            })
+          : await rotatePlatformProviderCredentials({
+              connectionId: pendingPlatformSecret.connectionId,
+              credentials,
+              actorUserId: actor.id
+            });
+
+        await ctx.reply(
+          pendingPlatformSecret.kind === "CREATE"
+            ? `Подключение ${connection.provider} «${connection.label}» сохранено в зашифрованном виде. Статус: PENDING. Оно не будет принимать платежи до проверки интеграции.`
+            : `Реквизиты ${connection.provider} «${connection.label}» обновлены. Статус сброшен в PENDING до повторной проверки.`
+        );
+      } catch (error) {
+        if (error instanceof PlatformProviderConnectionError &&
+            error.code === "DUPLICATE_CONNECTION") {
+          await ctx.reply("Подключение с таким провайдером и меткой уже существует. Выберите другую метку.");
+        } else if (error instanceof Error &&
+                   /^(Отправьте JSON|Не удалось разобрать JSON|Секреты должны|JSON должен|Каждое поле)/.test(error.message)) {
+          await ctx.reply(error.message);
+        } else if (error instanceof PlatformProviderConnectionError &&
+                   error.code === "CONNECTION_NOT_FOUND") {
+          await ctx.reply("Подключение не найдено. Секрет не сохранён.");
+        } else {
+          console.error("Platform provider secret save failed:", error instanceof Error ? error.name : "UnknownError");
+          await ctx.reply("Не удалось сохранить реквизиты провайдера. Исходное сообщение удалено по возможности.");
+        }
+      }
+      return;
+    }
 
     const pendingAction = pendingTextActions.get(ctx.from.id);
     if (pendingAction) {
@@ -3132,6 +3203,129 @@ export function createControlBot(token: string): Bot {
       } else {
         console.error("Platform plan status update failed:", error instanceof Error ? error.name : "UnknownError");
         await ctx.reply("Не удалось изменить статус тарифа.");
+      }
+    }
+  });
+
+  bot.command("platformproviders", async (ctx) => {
+    if (ctx.chat.type !== "private" || !ctx.from ||
+        !isPlatformAdminTelegramId(ctx.from.id, process.env.PLATFORM_ADMIN_TELEGRAM_IDS)) {
+      await ctx.reply("Команда доступна только уполномоченным операторам SubPilot в личном чате.");
+      return;
+    }
+
+    try {
+      const connections = await listPlatformProviderConnections();
+      if (connections.length === 0) {
+        await ctx.reply("Подключений внешних провайдеров SubPilot пока нет.");
+        return;
+      }
+      const statusLabel: Record<string, string> = {
+        PENDING: "ожидает проверки",
+        ACTIVE: "активно",
+        ERROR: "ошибка",
+        DISABLED: "отключено"
+      };
+      const lines = connections.map((connection) =>
+        `${connection.provider} — ${connection.label} (${connection.environment})\n` +
+        `ID: ${connection.id}\nСтатус: ${statusLabel[connection.status] ?? connection.status}` +
+        (connection.lastVerifiedAt
+          ? `\nПоследняя проверка: ${connection.lastVerifiedAt.toISOString()}`
+          : "")
+      );
+      await ctx.reply("Внешние подключения SubPilot:\n\n" + lines.join("\n\n"));
+    } catch (error) {
+      console.error("Platform provider connection list failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось получить список подключений провайдеров.");
+    }
+  });
+
+  bot.command("platformprovideradd", async (ctx) => {
+    if (ctx.chat.type !== "private" || !ctx.from ||
+        !isPlatformAdminTelegramId(ctx.from.id, process.env.PLATFORM_ADMIN_TELEGRAM_IDS)) {
+      await ctx.reply("Команда доступна только уполномоченным операторам SubPilot в личном чате.");
+      return;
+    }
+
+    try {
+      const connection = parsePlatformProviderConnectionInput(String(ctx.match ?? ""));
+      pendingBotConnections.delete(ctx.from.id);
+      pendingTextActions.delete(ctx.from.id);
+      pendingPlatformProviderSecrets.set(ctx.from.id, {
+        kind: "CREATE",
+        connection,
+        expiresAt: Date.now() + BOT_TOKEN_TTL_MS
+      });
+      await ctx.reply(
+        "Теперь отправьте реквизиты подключения отдельным сообщением в формате JSON.\n" +
+        'Пример структуры: {"shopId":"...","secretKey":"..."}\n' +
+        "Сообщение будет удалено по возможности сразу после получения. Секрет сохранится в зашифрованном виде.\n" +
+        "Новое подключение останется в PENDING до появления и успешного прохождения проверки провайдера.\n" +
+        "Ожидание — 5 минут. Для отмены: /cancel"
+      );
+    } catch (error) {
+      await ctx.reply(error instanceof Error ? error.message : "Неверные параметры подключения.");
+    }
+  });
+
+  bot.command("platformproviderrotate", async (ctx) => {
+    if (ctx.chat.type !== "private" || !ctx.from ||
+        !isPlatformAdminTelegramId(ctx.from.id, process.env.PLATFORM_ADMIN_TELEGRAM_IDS)) {
+      await ctx.reply("Команда доступна только уполномоченным операторам SubPilot в личном чате.");
+      return;
+    }
+
+    const connectionId = String(ctx.match ?? "").trim();
+    if (!/^[A-Za-z0-9_-]{10,40}$/.test(connectionId)) {
+      await ctx.reply("Формат: /platformproviderrotate CONNECTION_ID");
+      return;
+    }
+    const existing = await prisma.platformPaymentProviderConnection.findUnique({
+      where: { id: connectionId },
+      select: { id: true, provider: true, label: true }
+    });
+    if (!existing) {
+      await ctx.reply("Подключение не найдено.");
+      return;
+    }
+
+    pendingBotConnections.delete(ctx.from.id);
+    pendingTextActions.delete(ctx.from.id);
+    pendingPlatformProviderSecrets.set(ctx.from.id, {
+      kind: "ROTATE",
+      connectionId,
+      expiresAt: Date.now() + BOT_TOKEN_TTL_MS
+    });
+    await ctx.reply(
+      `Отправьте новые реквизиты для ${existing.provider} «${existing.label}» отдельным сообщением в формате JSON.\n` +
+      "Сообщение будет удалено по возможности. После ротации статус станет PENDING до повторной проверки.\n" +
+      "Ожидание — 5 минут. Для отмены: /cancel"
+    );
+  });
+
+  bot.command("platformproviderdisable", async (ctx) => {
+    if (ctx.chat.type !== "private" || !ctx.from ||
+        !isPlatformAdminTelegramId(ctx.from.id, process.env.PLATFORM_ADMIN_TELEGRAM_IDS)) {
+      await ctx.reply("Команда доступна только уполномоченным операторам SubPilot в личном чате.");
+      return;
+    }
+
+    const connectionId = String(ctx.match ?? "").trim();
+    if (!/^[A-Za-z0-9_-]{10,40}$/.test(connectionId)) {
+      await ctx.reply("Формат: /platformproviderdisable CONNECTION_ID");
+      return;
+    }
+    try {
+      const actor = await upsertTelegramUser(ctx);
+      const connection = await disablePlatformProviderConnection(connectionId, actor.id);
+      await ctx.reply(`Подключение ${connection.provider} «${connection.label}» отключено. История платежей сохранена.`);
+    } catch (error) {
+      if (error instanceof PlatformProviderConnectionError &&
+          error.code === "CONNECTION_NOT_FOUND") {
+        await ctx.reply("Подключение не найдено.");
+      } else {
+        console.error("Platform provider connection disable failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось отключить подключение.");
       }
     }
   });
