@@ -10,6 +10,20 @@ export class PlatformPlanCatalogError extends Error {
   }
 }
 
+type PlatformPlanTransaction = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+
+/**
+ * Assignment, editing and deactivation must all serialize on this row.
+ * Future workspace-plan assignment code must lock the plan before checking
+ * isActive and inserting/updating WorkspaceBilling.
+ */
+export async function lockPlatformPlanInTransaction(
+  tx: PlatformPlanTransaction,
+  platformPlanId: string
+): Promise<void> {
+  await tx.$queryRaw`SELECT "id" FROM "PlatformPlan" WHERE "id" = ${platformPlanId} FOR UPDATE`;
+}
+
 function toFeatureJson(input: PlatformPlanUpsertInput) {
   return {
     schemaVersion: input.features.schemaVersion,
@@ -32,10 +46,18 @@ export async function upsertPlatformPlan(
   actorUserId: string
 ) {
   return prisma.$transaction(async (tx) => {
-    const existing = await tx.platformPlan.findUnique({
+    const candidate = await tx.platformPlan.findUnique({
       where: { code: input.code },
-      include: { _count: { select: { workspaceBillings: true } } }
+      select: { id: true }
     });
+    let existing = null;
+    if (candidate) {
+      await lockPlatformPlanInTransaction(tx, candidate.id);
+      existing = await tx.platformPlan.findUnique({
+        where: { code: input.code },
+        include: { _count: { select: { workspaceBillings: true } } }
+      });
+    }
 
     if (existing && existing._count.workspaceBillings > 0) {
       throw new PlatformPlanCatalogError("PLAN_HAS_ASSIGNED_WORKSPACES");
@@ -92,8 +114,14 @@ export async function setPlatformPlanActive(
   actorUserId: string
 ) {
   return prisma.$transaction(async (tx) => {
-    const plan = await tx.platformPlan.findUnique({
+    const candidate = await tx.platformPlan.findUnique({
       where: { code },
+      select: { id: true }
+    });
+    if (!candidate) throw new PlatformPlanCatalogError("PLAN_NOT_FOUND");
+    await lockPlatformPlanInTransaction(tx, candidate.id);
+    const plan = await tx.platformPlan.findUnique({
+      where: { id: candidate.id },
       include: { _count: { select: { workspaceBillings: true } } }
     });
     if (!plan) throw new PlatformPlanCatalogError("PLAN_NOT_FOUND");
