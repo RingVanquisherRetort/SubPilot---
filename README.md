@@ -68,7 +68,7 @@ Global SubPilot plan-catalogue administration is separate from workspace OWNER/A
 Available private-chat commands for allowlisted operators:
 
 - `/platformplans` — list the global catalogue and show how many workspaces are assigned to each plan.
-- `/platformplan CODE | Title | Price | Currency | PeriodDays | Projects | Members | PlansPerProject | ConnectedChatsPerProject | Description` — create or update a plan. Use `*` for explicitly unlimited quotas and `0` to disable a resource. Currency is a three-letter uppercase code; price is stored as a decimal string with up to two fractional digits.
+- `/platformplan CODE | Title | Price | Currency | PeriodDays | Projects | Members | PlansPerProject | ConnectedChatsPerProject | Description` — create or update an unassigned plan. Use `*` for explicitly unlimited quotas and `0` to disable a resource. Currency is a three-letter uppercase code; price is stored as a decimal string with up to two fractional digits. A plan already assigned to any workspace is immutable; publish changed terms under a new code.
 - `/platformplanstatus CODE active|off` — activate a catalogue item or disable it only when no workspaces are assigned to it.
 
 Every catalogue mutation is written to the audit log. An empty or malformed allowlist fails closed. Workspace-plan assignment is intentionally not exposed yet: the product still needs approved trial/paid activation rules and payment-lifecycle handling. Merely creating a catalogue item does not bill or assign it to any workspace.
