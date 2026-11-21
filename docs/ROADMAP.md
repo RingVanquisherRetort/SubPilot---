@@ -88,7 +88,9 @@ Initial research candidates for creators who are individuals: YooMoney, Crypto P
   - [ ] Define the initial plan tiers, commercial prices and quota values.
   - [ ] Populate/manage the platform plan catalogue and assign a plan to each workspace.
   - [x] Add a read-only control-bot screen for assigned-plan status and live workspace/per-project usage.
-  - [ ] Enforce quotas atomically at resource-creation and linking boundaries.
+  - [x] Enforce workspace project/member limits and per-project creator-plan limits in control-bot mutation paths using serialized transactions.
+  - [x] Enforce per-project active connected-chat limits when Telegram confirms bot activation.
+  - [ ] Audit remaining mutation paths and add integration tests for quota races, invite acceptance and Telegram chat activation.
   - [ ] Implement separate platform checkout, billing lifecycle and payment reconciliation.
 - [ ] Implement workspace billing lifecycle, payment status transitions and grace periods.
 - [ ] Add separate platform billing adapters, invoices/receipts and reconciliation as required.
