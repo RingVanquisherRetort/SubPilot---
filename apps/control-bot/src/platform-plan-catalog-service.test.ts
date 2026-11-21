@@ -8,6 +8,7 @@ test("PostgreSQL platform plan catalogue audits changes and protects plans assig
   const { prisma } = await import("@subpilot/database");
   const {
     PlatformPlanCatalogError,
+    lockPlatformPlanInTransaction,
     setPlatformPlanActive,
     upsertPlatformPlan
   } = await import("./platform-plan-catalog-service.js");
@@ -16,7 +17,7 @@ test("PostgreSQL platform plan catalogue audits changes and protects plans assig
   const suffix = randomUUID().replace(/-/g, "").slice(0, 12);
   const telegramId = BigInt(Date.now()) * 1_000_000n + BigInt(Math.floor(Math.random() * 100_000));
   let actorId: string | undefined;
-  let workspaceId: string | undefined;
+  const workspaceIds: string[] = [];
   const planIds: string[] = [];
 
   try {
@@ -45,7 +46,7 @@ test("PostgreSQL platform plan catalogue audits changes and protects plans assig
         }
       }
     });
-    workspaceId = workspace.id;
+    workspaceIds.push(workspace.id);
 
     const changedAssignedInput = parsePlatformPlanUpsertInput(
       `assigned-${suffix} | Assigned plan changed | 299 | RUB | 30 | 5 | 6 | 7 | 8 | Changed`
@@ -94,8 +95,60 @@ test("PostgreSQL platform plan catalogue audits changes and protects plans assig
       where: { resourceType: "PlatformPlan", resourceId: draft.id, actorUserId: actor.id }
     });
     assert.equal(auditCount, 4, "create, update, disable and enable should each be audited");
+
+    const racePlanInput = parsePlatformPlanUpsertInput(
+      `race-${suffix} | Race plan | 50 | RUB | 30 | 1 | 1 | 1 | 1 | Lock race test`
+    );
+    const racePlan = await upsertPlatformPlan(racePlanInput, actor.id);
+    planIds.push(racePlan.id);
+    const raceWorkspace = await prisma.workspace.create({
+      data: {
+        name: "Plan lock race test",
+        slug: `plan-race-${suffix}`,
+        createdById: actor.id,
+        members: { create: { userId: actor.id, role: "OWNER" } }
+      }
+    });
+    workspaceIds.push(raceWorkspace.id);
+
+    const assignPlan = prisma.$transaction(async (tx) => {
+      const candidate = await tx.platformPlan.findUnique({
+        where: { code: racePlan.code },
+        select: { id: true }
+      });
+      assert.ok(candidate);
+      await lockPlatformPlanInTransaction(tx, candidate.id);
+      const lockedPlan = await tx.platformPlan.findUniqueOrThrow({
+        where: { id: candidate.id }
+      });
+      if (!lockedPlan.isActive) throw new Error("PLAN_INACTIVE");
+      // Keep the plan row locked long enough for the competing status operation
+      // to arrive at the same serialization point.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return tx.workspaceBilling.create({
+        data: {
+          workspaceId: raceWorkspace.id,
+          platformPlanId: lockedPlan.id,
+          status: "ACTIVE"
+        }
+      });
+    });
+
+    const raceResults = await Promise.allSettled([
+      setPlatformPlanActive(racePlan.code, false, actor.id),
+      assignPlan
+    ]);
+    assert.equal(raceResults.filter((result) => result.status === "fulfilled").length, 1);
+    const finalRacePlan = await prisma.platformPlan.findUniqueOrThrow({
+      where: { id: racePlan.id }
+    });
+    const finalRaceBilling = await prisma.workspaceBilling.findUnique({
+      where: { workspaceId: raceWorkspace.id }
+    });
+    assert.equal(finalRacePlan.isActive, Boolean(finalRaceBilling),
+      "a disabled plan must never be assigned and an assigned plan must remain active");
   } finally {
-    if (workspaceId) await prisma.workspace.deleteMany({ where: { id: workspaceId } });
+    if (workspaceIds.length) await prisma.workspace.deleteMany({ where: { id: { in: workspaceIds } } });
     if (planIds.length) await prisma.platformPlan.deleteMany({ where: { id: { in: planIds } } });
     if (actorId) {
       await prisma.auditLog.deleteMany({ where: { actorUserId: actorId } });
