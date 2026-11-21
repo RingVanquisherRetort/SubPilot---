@@ -83,6 +83,8 @@ Quota-sensitive mutations serialize on the workspace row using a row lock and RE
 
 Global catalogue administration is restricted to the numeric Telegram IDs configured in `PLATFORM_ADMIN_TELEGRAM_IDS`; workspace OWNER/ADMIN roles do not grant these powers. Operators can list, create/update and activate/deactivate catalogue records in the private control bot. Each catalogue mutation and status transition is audited. A plan referenced by any `WorkspaceBilling` record cannot be edited or deactivated; changed commercial terms require a new plan code. Future workspace-assignment logic must serialize against changes to the corresponding `PlatformPlan` record.
 
+The workspace checkout route is still a pending product decision. If it is sold as a digital service inside the SubPilot Telegram bot/Mini App, Telegram's current rules require Stars (XTR); recurring Bot API invoices currently support a 30-day period and up to 10,000 Stars per period. See [platform billing checkout decision](decisions/platform-billing-checkout.md) for the recommended route, official references and missing lifecycle work. Never infer a RUB amount from XTR.
+
 This is enforcement groundwork, not an operational billing product: approved commercial prices/quota values, workspace-to-plan assignment, platform checkout, billing lifecycle and payment reconciliation remain pending. Catalogue management itself is available to allowlisted operators. Creator payment transactions are not charged or debited by this quota layer. No commercial prices or quota values are hard-coded.
 
 The **Start Without Upfront Cost** offer (seven days followed by a 14% commission) is retained as an isolated commercial experiment and is not part of the default launch pricing or creator checkout flow:
