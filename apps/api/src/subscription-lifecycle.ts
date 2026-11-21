@@ -10,6 +10,7 @@ import { prisma } from "@subpilot/database";
 import { decryptSecret } from "@subpilot/security";
 import { isTelegramInviteAlreadyRevoked } from "@subpilot/payments";
 import { deliverSubscriptionAccess } from "./project-bot-updates.js";
+import { getSubscriptionGrantTelegramChatIds } from "./subscription-grant-persistence.js";
 import { buildExpiredSubscriptionNotice } from "./subscription-messages.js";
 import {
   deliverPendingOwnerNotifications,
@@ -126,6 +127,10 @@ async function retryPendingAccessDeliveries(
         orderBy: { paidAt: "desc" },
         take: 1,
         select: { metadata: true }
+      },
+      accessGrants: {
+        where: { revokedAt: null },
+        select: { connectedChat: { select: { telegramChatId: true } } }
       }
     },
     orderBy: { updatedAt: "asc" },
@@ -142,9 +147,10 @@ async function retryPendingAccessDeliveries(
     const projectBotId = typeof metadata.projectBotId === "string"
       ? metadata.projectBotId
       : undefined;
-    const chatIds = Array.isArray(metadata.chatIds)
-      ? metadata.chatIds.filter((value): value is string => typeof value === "string")
-      : undefined;
+    // Deliver against every persisted grant, not just the latest payment's
+    // chatIds snapshot. Earlier purchases can have destinations no longer linked
+    // to the plan, but their active entitlement rows must still be recoverable.
+    const chatIds = getSubscriptionGrantTelegramChatIds(subscription.accessGrants);
     const bot = await getProjectBot(subscription.projectId, projectBotId);
     if (!isLeaseOwned()) return;
     if (!bot) {
