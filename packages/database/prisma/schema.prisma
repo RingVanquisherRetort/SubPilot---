@@ -62,6 +62,15 @@ enum PaymentProvider {
   MANUAL
 }
 
+enum PlatformPaymentProvider {
+  YOOKASSA
+  YOOMONEY
+  PRODAMUS
+  ROBOKASSA
+  CLOUDPAYMENTS
+  CRYPTO_PAY
+}
+
 enum ProviderConnectionStatus {
   PENDING
   ACTIVE
@@ -142,6 +151,7 @@ model Workspace {
   invites     WorkspaceInvite[]
   projects    Project[]
   billing     WorkspaceBilling?
+  platformPayments PlatformPayment[]
   auditLogs   AuditLog[]
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
@@ -443,6 +453,7 @@ model PlatformPlan {
   features          Json?
   isActive          Boolean            @default(true)
   workspaceBillings WorkspaceBilling[]
+  platformPayments PlatformPayment[]
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
 }
@@ -468,22 +479,80 @@ model WorkspaceBilling {
   updatedAt          DateTime               @updatedAt
 }
 
-model PlatformPayment {
-  id                 String           @id @default(cuid())
-  workspaceBillingId String
-  provider           PaymentProvider
-  providerPaymentId  String?
-  idempotencyKey     String?          @unique
-  amount             Decimal          @db.Decimal(12, 2)
-  currency           String
-  status             PaymentStatus    @default(CREATED)
-  paidAt             DateTime?
-  metadata           Json?
-  workspaceBilling   WorkspaceBilling @relation(fields: [workspaceBillingId], references: [id], onDelete: Cascade)
-  createdAt          DateTime         @default(now())
-  updatedAt          DateTime         @updatedAt
+model PlatformPaymentProviderConnection {
+  id                   String                   @id @default(cuid())
+  provider             PlatformPaymentProvider
+  label                String
+  environment          ProviderEnvironment      @default(LIVE)
+  credentialsEncrypted String
+  publicConfig         Json?
+  status               ProviderConnectionStatus @default(PENDING)
+  lastVerifiedAt       DateTime?
+  lastError            String?
+  payments             PlatformPayment[]
+  webhookEvents        PlatformPaymentWebhookEvent[]
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
 
+  @@unique([provider, label])
+  @@index([provider, status])
+}
+
+model PlatformPayment {
+  id                       String           @id @default(cuid())
+  workspaceId              String
+  workspaceBillingId       String?
+  platformPlanId           String
+  providerConnectionId     String?
+  provider                 PaymentProvider
+  providerPaymentId        String?
+  externalCheckoutId       String?
+  checkoutUrl              String?
+  idempotencyKey           String?          @unique
+  planCodeSnapshot         String
+  planTitleSnapshot        String
+  billingPeriodDaysSnapshot Int
+  initiatedByTelegramId    BigInt?
+  amount                   Decimal          @db.Decimal(12, 2)
+  currency                 String
+  status                   PaymentStatus    @default(CREATED)
+  expiresAt                DateTime?
+  paidAt                   DateTime?
+  refundedAt               DateTime?
+  refundAttemptedAt        DateTime?
+  refundAttempts           Int              @default(0)
+  refundLastError          String?
+  metadata                 Json?
+  workspace                Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspaceBilling         WorkspaceBilling? @relation(fields: [workspaceBillingId], references: [id], onDelete: SetNull)
+  platformPlan             PlatformPlan     @relation(fields: [platformPlanId], references: [id], onDelete: Restrict)
+  providerConnection       PlatformPaymentProviderConnection? @relation(fields: [providerConnectionId], references: [id], onDelete: SetNull)
+  createdAt                DateTime         @default(now())
+  updatedAt                DateTime         @updatedAt
+
+  @@unique([providerConnectionId, providerPaymentId])
+  @@index([workspaceId, status, createdAt])
   @@index([workspaceBillingId, status, createdAt])
+  @@index([platformPlanId])
+}
+
+model PlatformPaymentWebhookEvent {
+  id                  String                           @id @default(cuid())
+  providerConnectionId String
+  dedupeKey           String?                          @unique
+  providerEventId     String
+  eventType           String
+  payload             Json
+  signatureVerifiedAt DateTime?
+  receivedAt          DateTime                         @default(now())
+  processedAt         DateTime?
+  attempts            Int                              @default(0)
+  lastError           String?
+  providerConnection  PlatformPaymentProviderConnection @relation(fields: [providerConnectionId], references: [id], onDelete: Cascade)
+
+  @@unique([providerConnectionId, providerEventId])
+  @@index([processedAt, receivedAt])
+  @@index([providerConnectionId, receivedAt])
 }
 
 model PlatformCommissionEntry {
