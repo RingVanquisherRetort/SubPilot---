@@ -1976,6 +1976,7 @@ export function createControlBot(token: string): Bot {
         where: {
           sentAt: null,
           attempts: { gte: 10 },
+          lastError: { not: "RECIPIENT_NO_LONGER_WORKSPACE_MEMBER" },
           project: { workspaceId: workspace.id }
         },
         include: { project: { select: { name: true } } },
@@ -1994,7 +1995,7 @@ export function createControlBot(token: string): Bot {
         `ID: ${notification.id}`
       );
       await ctx.reply(
-        "Неотправленные уведомления (показаны последние 10):\n\n" + lines.join("\n\n") +
+        "Неотправленные уведомления (показаны до 10):\n\n" + lines.join("\n\n") +
         "\n\nДля повторной постановки в очередь: /retrynotification ID"
       );
     } catch (error) {
