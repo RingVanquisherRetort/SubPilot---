@@ -101,6 +101,14 @@ test("workspace access-delivery dead letters are scoped, auditable and manually 
     assert.equal(deadLetter.deliveryLastError, "INVITE_CREATION_FAILED");
     assert.ok(deadLetter.deliveryFailedAt);
     assert.ok(deadLetter.deliveryNextAttemptAt.getTime() > Date.now() - 60 * 60_000);
+    const ownerAlert = await prisma.ownerNotification.findFirst({
+      where: {
+        projectId: project.id,
+        eventType: "access_delivery_dead_letter"
+      }
+    });
+    assert.ok(ownerAlert);
+    assert.match(ownerAlert.messageText, /10 неудачных попыток/);
 
     const listed = await listWorkspaceFailedAccessDeliveries(workspace.id);
     assert.equal(listed.length, 1);
