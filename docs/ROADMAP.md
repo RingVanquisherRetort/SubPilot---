@@ -86,7 +86,8 @@ Initial research candidates for creators who are individuals: YooMoney, Crypto P
   - [x] Define and validate versioned workspace quota configuration for projects, members, plans and connected chats.
   - [x] Add a pure evaluator for a complete workspace usage snapshot and requested quota increments.
   - [ ] Define the initial plan tiers, commercial prices and quota values.
-  - [ ] Populate/manage the platform plan catalogue and assign a plan to each workspace.
+  - [x] Add allowlisted operator commands to inspect, create/update and activate/deactivate catalogue items; audit all mutations and freeze plan terms after the first workspace assignment.
+  - [ ] Populate the catalogue with approved commercial tiers and assign a plan to each workspace.
   - [x] Add a read-only control-bot screen for assigned-plan status and live workspace/per-project usage.
   - [x] Enforce workspace project/member limits and per-project creator-plan limits in control-bot mutation paths using workspace-row-locked transactions, including archived-resource restoration.
   - [x] Enforce per-project active connected-chat limits on Telegram-confirmed activation/reactivation using the same workspace lock.
