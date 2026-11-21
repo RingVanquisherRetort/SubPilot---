@@ -406,9 +406,11 @@ async function expireSubscriptions(
         dedupeKey: "subscription:" + subscription.id + ":access-revocation-bot-unavailable",
         eventType: "access_revocation_bot_unavailable",
         messageText:
-          "⚠️ Срок доступа по тарифу «" + subscription.plan.title +
+          (subscription.status === "CANCELLED"
+            ? "⚠️ Администратор досрочно отозвал доступ по тарифу «"
+            : "⚠️ Срок доступа по тарифу «") + subscription.plan.title +
           "» в проекте «" + subscription.project.name +
-          "» завершился, но исходный бот недоступен. Восстановите подключение исходного бота, чтобы SubPilot смог отключить доступ."
+          "», но исходный бот недоступен. Восстановите подключение исходного бота, чтобы SubPilot смог обработать отзыв."
       });
       continue;
     }
@@ -435,10 +437,27 @@ async function expireSubscriptions(
         select: { id: true }
       });
       if (otherActiveGrant) {
+        // Preserve membership from the other entitlement, but still revoke the
+        // expiring grant's unused one-person invite so it cannot be shared later.
+        const chatId = grant.connectedChat.telegramChatId.toString();
+        try {
+          if (grant.inviteLink && grant.expiresAt > now) {
+            await bot.api.revokeChatInviteLink(chatId, grant.inviteLink);
+            if (!isLeaseOwned()) return;
+          }
+        } catch (error) {
+          if (!isTelegramInviteAlreadyRevoked(error)) {
+            removalFailures.push(
+              grant.connectedChat.title ?? grant.connectedChat.username ?? chatId
+            );
+            continue;
+          }
+        }
         accessPreservedByAnotherSubscription = true;
+        if (!isLeaseOwned()) return;
         await prisma.subscriptionAccessGrant.updateMany({
           where: { id: grant.id, revokedAt: null },
-          data: { revokedAt: now }
+          data: { revokedAt: now, inviteLink: "", expiresAt: new Date(0) }
         });
         continue;
       }
