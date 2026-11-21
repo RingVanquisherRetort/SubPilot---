@@ -383,3 +383,27 @@ export async function revokeSubscriptionAccessManually(input: {
     };
   }, { isolationLevel: "ReadCommitted" });
 }
+
+export async function listActiveProjectSubscriptions(input: {
+  workspaceId: string;
+  projectId: string;
+  now?: Date;
+  limit?: number;
+}) {
+  const now = input.now ?? new Date();
+  const limit = Number.isSafeInteger(input.limit) ? Math.min(50, Math.max(1, input.limit ?? 20)) : 20;
+  return prisma.subscription.findMany({
+    where: {
+      projectId: input.projectId,
+      status: "ACTIVE",
+      OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+      project: { workspaceId: input.workspaceId, status: "ACTIVE" }
+    },
+    include: {
+      customer: { select: { telegramUserId: true, username: true, firstName: true } },
+      plan: { select: { title: true } }
+    },
+    orderBy: [{ endsAt: "asc" }, { createdAt: "desc" }],
+    take: limit
+  });
+}
