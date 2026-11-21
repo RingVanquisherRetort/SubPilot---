@@ -37,6 +37,8 @@ test("rejects tampered, stale and future Telegram login assertions", () => {
   const valid = signedTelegramPayload("123456:bot-token-secret", nowSeconds);
   assert.throws(() => verifyTelegramLoginPayload({ ...valid, id: "987654321" },
     "123456:bot-token-secret", { nowMs }), /INVALID_TELEGRAM_LOGIN/);
+  assert.throws(() => verifyTelegramLoginPayload({ ...valid, id: Number.MAX_SAFE_INTEGER + 1 },
+    "123456:bot-token-secret", { nowMs }), /INVALID_TELEGRAM_LOGIN/);
   assert.throws(() => verifyTelegramLoginPayload(
     signedTelegramPayload("123456:bot-token-secret", nowSeconds - 301),
     "123456:bot-token-secret", { nowMs }), /EXPIRED_TELEGRAM_LOGIN/);
