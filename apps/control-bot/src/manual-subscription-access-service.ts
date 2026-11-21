@@ -1,6 +1,6 @@
 import { prisma } from "@subpilot/database";
 
-type Transaction = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+type Transaction = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$use" | "$extends">;
 
 export class ManualSubscriptionAccessError extends Error {
   constructor(public readonly code:
