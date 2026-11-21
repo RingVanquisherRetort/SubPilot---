@@ -99,10 +99,11 @@ Initial research candidates for creators who are individuals: YooMoney, Crypto P
   - [ ] Approve commercial terms (currency, billing period, trial, grace period, cancellation, refunds and proration).
   - [x] Add a dedicated platform acquiring-connection model and webhook-event ledger, separate from creator project connections and payment events.
   - [x] Add platform payment workspace/plan references, immutable plan terms snapshots, checkout references, expiry and refund retry fields.
-  - [x] Add allowlisted operator commands to list, add, rotate and disable SubPilot-owned PSP connections; encrypt credentials and audit all mutations without storing secrets in audit metadata.
+  - [x] Add allowlisted operator commands to list, add, rotate, verify and disable SubPilot-owned PSP connections; encrypt credentials and audit all mutations without storing secrets in audit metadata.
+  - [x] Add provider credential verification contract and credential-version compare-and-set to prevent stale verification from activating rotated credentials.
   - [x] Add a provider-agnostic normalized-event guard for exact payment-reference, provider payment ID, amount and currency matching; route duplicate and out-of-order events safely.
   - [ ] Implement provider-agnostic platform checkout, verified payment events/idempotency, billing lifecycle and reconciliation.
-  - [ ] Implement and sandbox-test the selected external PSP adapter before customer-facing activation.
+  - [ ] Implement and sandbox-test the selected external PSP adapter and its credential verifier before customer-facing activation.
 - [ ] Implement workspace billing lifecycle, payment status transitions and grace periods.
 - [ ] Add separate external platform billing adapters, hosted checkout, invoices/receipts and reconciliation; never reuse creator payment records or provider credentials.
 - [ ] Reconsider the 14% offer only after a separate legal, provider, currency and commercial review; do not debit creator Stars.
