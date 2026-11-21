@@ -50,7 +50,7 @@
 - [x] Extend an active subscription when a buyer renews early.
 - [x] Add PostgreSQL-backed distributed lifecycle-worker lease locking across API replicas.
 - [x] Retry failed owner-notification and access-delivery operations.
-- [ ] Add dead-letter monitoring, alerting and operator recovery for exhausted retries.
+- [x] Add dead-letter monitoring, alerting and operator recovery for exhausted owner notifications and subscription access delivery (10-attempt ceiling, owner alert, workspace-scoped operator retry).
 - [ ] Manual grants, manual revocation and trials.
 
 ## Stage 4 — Payments
@@ -62,7 +62,7 @@
 - [x] Verify pre-checkout data and require Telegram successful_payment before activation.
 - [x] Add idempotent Stars receipt storage, payment history and refund handling.
 - [x] Persist pending access-delivery records and retry failed invite delivery through the lifecycle worker.
-- [ ] Add delivery dead-letter monitoring, reconciliation and operator recovery.
+- [x] Add access-delivery dead-letter monitoring, owner alert, bounded retries and audited workspace-scoped operator recovery.
 - [ ] Implement external provider adapters only for compliant checkout scenarios and eligible merchants/products.
 - [ ] Add recurring Stars subscriptions (Telegram currently constrains recurring bot invoices to a 30-day period).
 - [x] Keep creator payments isolated from SubPilot platform billing through separate payment, workspace-billing and commission ledgers.
@@ -102,10 +102,10 @@ Initial research candidates for creators who are individuals: YooMoney, Crypto P
   - [x] Add allowlisted operator commands to list, add, rotate, verify and disable SubPilot-owned PSP connections; encrypt credentials and audit all mutations without storing secrets in audit metadata.
   - [x] Add provider credential verification contract and credential-version compare-and-set to prevent stale verification from activating rotated credentials.
   - [x] Add a provider-agnostic normalized-event guard for exact payment-reference, provider payment ID, amount and currency matching; route duplicate and out-of-order events safely.
-  - [ ] Implement provider-agnostic platform checkout, verified payment events/idempotency, billing lifecycle and reconciliation.
-  - [ ] Implement and sandbox-test the selected external PSP adapter and its credential verifier before customer-facing activation.
-- [ ] Implement workspace billing lifecycle, payment status transitions and grace periods.
-- [ ] Add separate external platform billing adapters, hosted checkout, invoices/receipts and reconciliation; never reuse creator payment records or provider credentials.
+  - [x] Implement authenticated independent-web SubPilot workspace checkout, YooKassa payment verification, idempotency, manual one-time renewal, full-refund period reconciliation and operator manual-review queue (live merchant sandbox and compliance approval remain open).
+  - [ ] Complete owner-authorized YooKassa test-store payment/refund validation and verify merchant onboarding, receipts and reconciliation before customer-facing activation.
+- [x] Implement one-time workspace payment status transitions, paid-period extension and period-aware full-refund handling. Manual renewal is the product decision; automatic recurring charges/grace scheduling are not required.
+- [x] Add the separate hosted YooKassa platform checkout and reconciliation path; creator payment records/credentials remain isolated. Live merchant acceptance, invoices/receipts and production reconciliation remain to be validated.
 - [ ] Reconsider the 14% offer only after a separate legal, provider, currency and commercial review; do not debit creator Stars.
 - [ ] Upgrade/downgrade, grace period and payment-failure handling.
 
