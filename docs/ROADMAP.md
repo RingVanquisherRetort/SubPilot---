@@ -93,10 +93,14 @@ Initial research candidates for creators who are individuals: YooMoney, Crypto P
   - [x] Enforce per-project active connected-chat limits on Telegram-confirmed activation/reactivation using the same workspace lock.
   - [x] Audit resource mutation paths and add PostgreSQL race tests for project/member/plan/chat quotas, invite acceptance and archived-resource restoration, plus Telegram chat activation policy tests.
   - [x] Add allowlisted operator commands to inspect, create/update and activate/deactivate catalogue items; audit all mutations and freeze plan terms after first workspace assignment.
-  - [ ] Approve workspace billing sales surface and payment terms (currency, renewal mode, period, trial, grace period, refunds and proration).
-  - [ ] Implement platform checkout, payment-event verification/idempotency, billing lifecycle and reconciliation using the approved sales surface.
+  - [x] Fix the product direction: SubPilot workspace billing targets external acquiring, separate from creator payment flows (Nemiling-style provider architecture).
+  - [ ] Confirm a compliant sales surface for the digital SaaS subscription; Telegram's Bot Platform Terms require Stars for digital goods/services sold through a bot or Mini App.
+  - [ ] Select and verify an external PSP for SubPilot as merchant (SaaS category, recurring billing, webhooks, refunds, settlement, receipts and onboarding).
+  - [ ] Approve commercial terms (currency, billing period, trial, grace period, cancellation, refunds and proration).
+  - [ ] Implement provider-agnostic platform checkout, verified payment events/idempotency, billing lifecycle and reconciliation.
+  - [ ] Implement and sandbox-test the selected external PSP adapter before customer-facing activation.
 - [ ] Implement workspace billing lifecycle, payment status transitions and grace periods.
-- [ ] Add separate platform billing adapters, invoices/receipts and reconciliation as required.
+- [ ] Add separate external platform billing adapters, hosted checkout, invoices/receipts and reconciliation; never reuse creator payment records or provider credentials.
 - [ ] Reconsider the 14% offer only after a separate legal, provider, currency and commercial review; do not debit creator Stars.
 - [ ] Upgrade/downgrade, grace period and payment-failure handling.
 
