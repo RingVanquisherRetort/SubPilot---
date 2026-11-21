@@ -883,15 +883,21 @@ export function createControlBot(token: string): Bot {
       await ctx.reply("Нет прав восстанавливать тариф.");
       return;
     }
-    const result = await withWorkspaceQuotaTransaction(
-      project.workspaceId,
-      "plansPerProject",
-      (tx) => tx.creatorPlan.updateMany({
-        where: { id: planId, projectId, status: "ARCHIVED" },
-        data: { status: "ACTIVE" }
-      }),
-      projectId
-    );
+    let result;
+    try {
+      result = await withWorkspaceQuotaTransaction(
+        project.workspaceId,
+        "plansPerProject",
+        (tx) => tx.creatorPlan.updateMany({
+          where: { id: planId, projectId, status: "ARCHIVED" },
+          data: { status: "ACTIVE" }
+        }),
+        projectId
+      );
+    } catch (error) {
+      await ctx.reply(formatWorkspaceQuotaError(error));
+      return;
+    }
     if (result.count !== 1) {
       await ctx.reply("Тариф не найден или уже активен.");
       return;
