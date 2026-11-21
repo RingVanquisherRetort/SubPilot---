@@ -34,7 +34,9 @@ export function verifyTelegramLoginPayload(
   }
   const telegramId = String(idRaw);
   const authDate = Number(authDateRaw);
-  if (!/^\d{1,20}$/.test(telegramId) || !Number.isSafeInteger(authDate) || authDate <= 0) {
+  if (!/^\d{1,20}$/.test(telegramId) ||
+      (typeof idRaw === "number" && !Number.isSafeInteger(idRaw)) ||
+      !Number.isSafeInteger(authDate) || authDate <= 0) {
     throw new Error("INVALID_TELEGRAM_LOGIN");
   }
   const nowSeconds = Math.floor((options.nowMs ?? Date.now()) / 1000);
