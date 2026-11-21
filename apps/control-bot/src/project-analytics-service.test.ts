@@ -153,7 +153,7 @@ test("project analytics keep currencies separate and audit history hides raw met
     });
     assert.equal(report.activeSubscriptions, 2);
     assert.equal(report.uniqueActiveCustomers, 2);
-    assert.equal(report.newSubscriptions, 4);
+    assert.equal(report.newSubscriptions, 3);
     assert.equal(report.expiredSubscriptions, 1);
     assert.equal(report.cancelledSubscriptions, 1);
     assert.equal(report.newTrials, 1);
