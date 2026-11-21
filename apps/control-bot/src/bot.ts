@@ -50,6 +50,10 @@ import {
   retryWorkspaceFailedAccessDelivery
 } from "./workspace-access-delivery-service.js";
 import {
+  getProjectAnalytics,
+  listProjectAuditHistory
+} from "./project-analytics-service.js";
+import {
   assertWorkspaceQuotaInTransaction,
   formatWorkspaceQuotaError,
   isWorkspaceQuotaRestriction,
@@ -1734,6 +1738,105 @@ export function createControlBot(token: string): Bot {
     } catch (error) {
       console.error("Control bot /restoreproject failed:", error);
       await ctx.reply(formatWorkspaceQuotaError(error));
+    }
+  });
+
+  bot.command("projectstats", async (ctx) => {
+    const fields = String(ctx.match ?? "").trim().split(/\s+/).filter(Boolean);
+    const projectId = fields[0] ?? "";
+    const days = fields[1] === undefined ? 30 : Number(fields[1]);
+    if (!projectId || fields.length > 2 || !Number.isSafeInteger(days) || days < 1 || days > 365) {
+      await ctx.reply("Формат: /projectstats PROJECT_ID [DAYS]\nПериод: от 1 до 365 дней, по умолчанию 30.");
+      return;
+    }
+    try {
+      const actor = await upsertTelegramUser(ctx);
+      const { workspace, role } = await getActiveWorkspace(actor);
+      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
+        await ctx.reply("Агрегированную аналитику проекта могут смотреть только владелец или администратор пространства.");
+        return;
+      }
+      const project = await canAccessProject(projectId, actor.id, ["OWNER", "ADMIN"]);
+      if (!project || project.workspaceId !== workspace.id) {
+        await ctx.reply("Проект не найден в активном пространстве или у вас нет прав.");
+        return;
+      }
+      const report = await getProjectAnalytics({
+        workspaceId: workspace.id,
+        projectId: project.id,
+        periodDays: days
+      });
+      const currencyLines = report.revenueByCurrency.length
+        ? report.revenueByCurrency.map((item) =>
+            "• " + item.currency + ": поступления " + item.grossAmount +
+            ", возвраты " + item.refundedAmount + ", чистый итог " + item.netAmount +
+            " (" + item.successfulPayments + " оплат / " + item.refundedPayments + " возвратов)"
+          )
+        : ["• За выбранный период успешных оплат и возвратов нет."];
+      const planLines = report.activePlans.length
+        ? report.activePlans.map((item) => "• " + item.title + ": " + item.activeSubscriptions)
+        : ["• Нет активных тарифов с подписчиками."];
+      await ctx.reply(
+        "Статистика проекта «" + report.projectName + "» за " + report.periodDays + " дней\n" +
+        report.from.toLocaleDateString("ru-RU") + " — " + report.to.toLocaleDateString("ru-RU") + "\n\n" +
+        "Активные подписки: " + report.activeSubscriptions + "\nУникальные активные клиенты: " + report.uniqueActiveCustomers + "\n" +
+        "Новые подписки: " + report.newSubscriptions + "\nЗавершились: " + report.expiredSubscriptions + "\nДосрочно отменены: " + report.cancelledSubscriptions + "\n" +
+        "Новые trial: " + report.newTrials + "\nРучные выдачи: " + report.manualGrants + "\n\n" +
+        "Оплаты: " + report.successfulPayments + "\nВозвраты: " + report.refundedPayments + "\n" +
+        "Повторных оплат по одной подписке за период: " + report.repeatPayingSubscriptions + "\n\n" +
+        "Финансы (валюты не смешиваются):\n" + currencyLines.join("\n") +
+        "\n\nАктивность тарифов:\n" + planLines.join("\n") +
+        "\n\nЭто агрегированная статистика; персональные карточки клиентов не показываются."
+      );
+    } catch (error) {
+      console.error("Control bot /projectstats failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось сформировать статистику проекта.");
+    }
+  });
+
+  bot.command("auditlog", async (ctx) => {
+    const fields = String(ctx.match ?? "").trim().split(/\s+/).filter(Boolean);
+    const projectId = fields[0] ?? "";
+    const limit = fields[1] === undefined ? 10 : Number(fields[1]);
+    if (!projectId || fields.length > 2 || !Number.isSafeInteger(limit) || limit < 1 || limit > 25) {
+      await ctx.reply("Формат: /auditlog PROJECT_ID [LIMIT]\nLIMIT: от 1 до 25, по умолчанию 10.");
+      return;
+    }
+    try {
+      const actor = await upsertTelegramUser(ctx);
+      const { workspace, role } = await getActiveWorkspace(actor);
+      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
+        await ctx.reply("Историю действий проекта могут смотреть только владелец или администратор пространства.");
+        return;
+      }
+      const project = await canAccessProject(projectId, actor.id, ["OWNER", "ADMIN"]);
+      if (!project || project.workspaceId !== workspace.id) {
+        await ctx.reply("Проект не найден в активном пространстве или у вас нет прав.");
+        return;
+      }
+      const events = await listProjectAuditHistory({
+        workspaceId: workspace.id,
+        projectId: project.id,
+        limit
+      });
+      if (events.length === 0) {
+        await ctx.reply("Для этого проекта пока нет записей истории действий.");
+        return;
+      }
+      const rows = events.map((event, index) =>
+        (index + 1) + ". " + event.createdAt.toLocaleString("ru-RU") + "\n" +
+        "Действие: " + event.action + "\nОбъект: " + event.resourceType +
+        (event.resourceId ? " (" + event.resourceId + ")" : "") +
+        "\nКто: " + event.actor
+      );
+      await ctx.reply(
+        "История проекта «" + project.name + "» (последние " + events.length + "):\n\n" +
+        rows.join("\n\n") +
+        "\n\nВ истории скрыты служебные metadata и персональные данные."
+      );
+    } catch (error) {
+      console.error("Control bot /auditlog failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось загрузить историю проекта.");
     }
   });
 
@@ -3761,7 +3864,9 @@ export function createControlBot(token: string): Bot {
       "/renameproject ID Название — переименовать проект\n" +
       "/archiveproject ID — архивировать проект\n" +
       "/restoreproject ID — восстановить проект\n" +
-      "/createplan ID | Название | Цена | Дней — создать тариф\n" +      "/grantaccess PROJECT_ID | TELEGRAM_ID | PLAN_ID | DAYS — вручную выдать доступ\n" +
+      "/createplan ID | Название | Цена | Дней — создать тариф\n" +      "/projectstats PROJECT_ID [DAYS] — агрегированная статистика проекта\n" +
+      "/auditlog PROJECT_ID [LIMIT] — история действий проекта\n" +
+      "/grantaccess PROJECT_ID | TELEGRAM_ID | PLAN_ID | DAYS — вручную выдать доступ\n" +
       "/trialaccess PROJECT_ID | TELEGRAM_ID | PLAN_ID | DAYS — выдать пробный доступ\n" +
       "/activesubscriptions PROJECT_ID — список активных подписок\n" +
       "/revokeaccess SUBSCRIPTION_ID — досрочно отозвать доступ\n" +
