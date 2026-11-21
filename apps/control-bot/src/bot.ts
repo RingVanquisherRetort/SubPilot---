@@ -10,6 +10,7 @@ import {
   canRemoveWorkspaceMember,
   type InvitableWorkspaceRole
 } from "./workspace-permissions.js";
+import { isPrivateControlChat } from "./private-control-context.js";
 import {
   classifyTelegramRefundError,
   listPaymentProviderAvailability,
@@ -241,13 +242,13 @@ export function createControlBot(token: string): Bot {
   // members, payment history, invitation URLs or admin actions in group chats.
   bot.use(async (ctx, next) => {
     const chat = ctx.chat;
-    if (chat && chat.type !== "private") {
+    if (!isPrivateControlChat(chat?.type)) {
       if (ctx.callbackQuery) {
         await ctx.answerCallbackQuery({
           text: "Управление SubPilot доступно только в личном чате с ботом.",
           show_alert: true
         }).catch(() => undefined);
-      } else if (ctx.message && "text" in ctx.message && ctx.message.text.startsWith("/")) {
+      } else if (chat && ctx.message && "text" in ctx.message && ctx.message.text.startsWith("/")) {
         await ctx.reply("Для безопасности используйте управляющего бота SubPilot только в личном чате.")
           .catch(() => undefined);
       }
