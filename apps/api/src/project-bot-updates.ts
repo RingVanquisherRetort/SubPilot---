@@ -14,6 +14,7 @@ import { getInvoiceDispatchState } from "./telegram-invoice-state.js";
 import { getSubscriptionGrantChatIds, getSubscriptionGrantTelegramChatIds } from "./subscription-grant-persistence.js";
 import { shouldQueueNewSubscriberNotification } from "./payment-event-notification.js";
 import { shouldProcessTelegramUpdate } from "./telegram-update-order.js";
+import { shouldActivateConnectedChat } from "./connected-chat-quota.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
@@ -1074,41 +1075,22 @@ export async function handleProjectBotUpdate(
             where: { workspaceId: project.workspaceId },
             include: { platformPlan: true }
           });
+          const currentUsage = billing
+            ? await tx.connectedChat.count({ where: { projectId, isActive: true } })
+            : 0;
 
-          // Legacy workspaces without an assigned platform plan are not blocked.
-          if (billing) {
-            const features = billing.platformPlan.features;
-            const validStatus = billing.status === "ACTIVE" || billing.status === "TRIALING";
-            const featureObject = typeof features === "object" && features !== null && !Array.isArray(features)
-              ? features as Record<string, unknown>
-              : null;
-            const limits = featureObject && typeof featureObject.limits === "object" &&
-              featureObject.limits !== null && !Array.isArray(featureObject.limits)
-              ? featureObject.limits as Record<string, unknown>
-              : null;
-            const requiredLimitKeys = [
-              "projects", "members", "plansPerProject", "connectedChatsPerProject"
-            ];
-            const chatLimit = limits?.connectedChatsPerProject;
-            const validLimit = (value: unknown) => value === null ||
-              (typeof value === "number" && Number.isSafeInteger(value) && value >= 0);
-            const validConfig = Boolean(
-              featureObject &&
-              featureObject.schemaVersion === 1 &&
-              limits &&
-              Object.keys(limits).length === requiredLimitKeys.length &&
-              requiredLimitKeys.every((key) => Object.hasOwn(limits, key) && validLimit(limits[key]))
-            );
-
-            if (!validStatus || !billing.platformPlan.isActive || !validConfig) {
-              isActive = false;
-            } else if (chatLimit !== null) {
-              const currentUsage = await tx.connectedChat.count({
-                where: { projectId, isActive: true }
-              });
-              isActive = currentUsage < (chatLimit as number);
-            }
-          }
+          isActive = shouldActivateConnectedChat({
+            hasRequiredRights,
+            wasAlreadyActive: Boolean(existingChat?.isActive),
+            billing: billing ? {
+              status: billing.status,
+              platformPlanIsActive: billing.platformPlan.isActive,
+              features: billing.platformPlan.features
+            } : null,
+            currentActiveChats: currentUsage
+          });
+        } else {
+          isActive = false;
         }
       }
 
