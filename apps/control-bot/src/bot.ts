@@ -18,6 +18,7 @@ import {
 import {
   assertWorkspaceQuotaInTransaction,
   formatWorkspaceQuotaError,
+  isWorkspaceQuotaRestriction,
   lockWorkspace,
   withWorkspaceQuotaTransaction
 } from "./workspace-quota-enforcement.js";
@@ -1158,7 +1159,11 @@ export function createControlBot(token: string): Bot {
       );
     } catch (error) {
       console.error("Control bot /start failed:", error);
-      await ctx.reply("Не удалось открыть рабочее пространство. Попробуйте ещё раз позже.");
+      await ctx.reply(
+        isWorkspaceQuotaRestriction(error)
+          ? formatWorkspaceQuotaError(error)
+          : "Не удалось открыть рабочее пространство. Попробуйте ещё раз позже."
+      );
     }
   });
 
