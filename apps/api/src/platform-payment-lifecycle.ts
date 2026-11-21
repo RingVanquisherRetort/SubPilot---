@@ -538,6 +538,9 @@ export async function createPlatformPaymentCheckout(
         orderBy: [{ createdAt: "desc" }, { id: "desc" }]
       });
       if (pendingCheckout) {
+        if (pendingCheckout.status === "REFUNDING") {
+          throw new PlatformPaymentLifecycleError("CHECKOUT_ALREADY_IN_PROGRESS");
+        }
         // Do not open a second charge while an earlier provider payment is
         // non-terminal, even if its displayed expiry has passed. A delayed
         // success webhook could still arrive; reconcile/cancel the old payment first.
