@@ -106,7 +106,7 @@ export async function getProjectAnalytics(input: {
     }),
     prisma.payment.groupBy({
       by: ["currency"],
-      where: { projectId: project.id, status: "SUCCEEDED", paidAt: { gte: from, lte: to } },
+      where: { projectId: project.id, status: { in: ["SUCCEEDED", "REFUNDING", "REFUNDED"] }, paidAt: { gte: from, lte: to } },
       _sum: { amount: true },
       _count: { _all: true }
     }),
@@ -117,13 +117,13 @@ export async function getProjectAnalytics(input: {
       _count: { _all: true }
     }),
     prisma.payment.count({
-      where: { projectId: project.id, status: "SUCCEEDED", paidAt: { gte: from, lte: to } }
+      where: { projectId: project.id, status: { in: ["SUCCEEDED", "REFUNDING", "REFUNDED"] }, paidAt: { gte: from, lte: to } }
     }),
     prisma.payment.groupBy({
       by: ["subscriptionId"],
       where: {
         projectId: project.id,
-        status: "SUCCEEDED",
+        status: { in: ["SUCCEEDED", "REFUNDING", "REFUNDED"] },
         paidAt: { gte: from, lte: to },
         subscriptionId: { not: null }
       },
