@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { createLifecycleLeaseGuard } from "./lifecycle-lease-guard.js";
 import {
   acquireSubscriptionLifecycleLease,
   releaseSubscriptionLifecycleLease,
@@ -12,6 +11,7 @@ import { isTelegramInviteAlreadyRevoked } from "@subpilot/payments";
 import { deliverSubscriptionAccess } from "./project-bot-updates.js";
 import { getSubscriptionGrantTelegramChatIds } from "./subscription-grant-persistence.js";
 import { buildExpiredSubscriptionNotice } from "./subscription-messages.js";
+import { runLifecyclePassWithLease } from "./subscription-lifecycle-runner.js";
 import {
   deliverPendingOwnerNotifications,
   enqueueProjectOwnerNotification,
@@ -454,46 +454,32 @@ async function expireSubscriptions(
 
 export async function runSubscriptionLifecycle(now = new Date()): Promise<void> {
   const leaseId = randomUUID();
-  if (!await acquireSubscriptionLifecycleLease(leaseId)) return;
-
-  const leaseGuard = createLifecycleLeaseGuard();
-  const heartbeat = setInterval(() => {
-    void renewSubscriptionLifecycleLease(leaseId)
-      .then((renewed) => {
-        if (!renewed) {
-          leaseGuard.markLost();
-          console.error("Subscription lifecycle worker lost its PostgreSQL lease; the current pass will stop.");
-        }
-      })
-      .catch((error: unknown) => {
-        leaseGuard.markLost();
-        console.error(
-          "Could not renew subscription lifecycle worker lease; ownership is now treated as lost:",
-          error instanceof Error ? error.name : "UnknownError"
-        );
-      });
-  }, WORKER_LEASE_HEARTBEAT_MS);
-  heartbeat.unref?.();
-
-  try {
-    await cancelStalePendingPayments(now, leaseGuard.isOwned);
-    if (!leaseGuard.isOwned()) return;
-    await retryPendingAccessDeliveries(now, leaseGuard.isOwned);
-    if (!leaseGuard.isOwned()) return;
-    await sendRenewalReminders(now, leaseGuard.isOwned);
-    if (!leaseGuard.isOwned()) return;
-    await expireSubscriptions(now, leaseGuard.isOwned);
-    if (!leaseGuard.isOwned()) return;
-    await deliverPendingOwnerNotifications(now, leaseGuard.isOwned);
-  } finally {
-    clearInterval(heartbeat);
-    await releaseSubscriptionLifecycleLease(leaseId).catch((error: unknown) => {
+  await runLifecyclePassWithLease({
+    leaseId,
+    heartbeatMs: WORKER_LEASE_HEARTBEAT_MS,
+    acquire: acquireSubscriptionLifecycleLease,
+    renew: renewSubscriptionLifecycleLease,
+    release: releaseSubscriptionLifecycleLease,
+    stages: [
+      (isLeaseOwned) => cancelStalePendingPayments(now, isLeaseOwned),
+      (isLeaseOwned) => retryPendingAccessDeliveries(now, isLeaseOwned),
+      (isLeaseOwned) => sendRenewalReminders(now, isLeaseOwned),
+      (isLeaseOwned) => expireSubscriptions(now, isLeaseOwned),
+      (isLeaseOwned) => deliverPendingOwnerNotifications(now, isLeaseOwned)
+    ],
+    onLeaseLost: (reason) => {
+      console.error(
+        "Subscription lifecycle worker lost its PostgreSQL lease; the current pass will stop.",
+        reason
+      );
+    },
+    onReleaseError: (error) => {
       console.error(
         "Could not release subscription lifecycle worker lease:",
         error instanceof Error ? error.name : "UnknownError"
       );
-    });
-  }
+    }
+  });
 }
 
 export function startSubscriptionLifecycleWorker(
