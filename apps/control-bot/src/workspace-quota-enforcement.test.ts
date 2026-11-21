@@ -9,9 +9,14 @@ test("PostgreSQL workspace quotas serialize concurrent creation and archived-res
   const {
     WorkspaceQuotaError,
     assertWorkspaceQuotaInTransaction,
+    isWorkspaceQuotaRestriction,
     lockWorkspace,
     withWorkspaceQuotaTransaction
   } = await import("./workspace-quota-enforcement.js");
+
+  assert.equal(isWorkspaceQuotaRestriction(new WorkspaceQuotaError("members", 2, 2)), true);
+  assert.equal(isWorkspaceQuotaRestriction(new Error("Подписка рабочего пространства не активна.")), true);
+  assert.equal(isWorkspaceQuotaRestriction(new Error("Unexpected database failure")), false);
 
   const suffix = randomUUID();
   const telegramBase = BigInt(Date.now()) * 1_000_000n + BigInt(Math.floor(Math.random() * 100_000));
