@@ -60,24 +60,26 @@ export function reconcileExternalPaymentEvent(input: {
 }): ExternalPaymentEventDecision {
   const { payment, event } = input;
 
-  if (!event.providerEventId.trim()) {
+  if (typeof event.providerEventId !== "string" || !event.providerEventId.trim()) {
     return { kind: "REJECT", reason: "EVENT_ID_MISSING" };
   }
-  if (!event.providerPaymentId.trim()) {
+  if (typeof event.providerPaymentId !== "string" || !event.providerPaymentId.trim()) {
     return { kind: "REJECT", reason: "PROVIDER_PAYMENT_ID_MISSING" };
   }
-  if (!event.paymentReference || event.paymentReference !== payment.reference) {
+  if (typeof event.paymentReference !== "string" ||
+      !event.paymentReference ||
+      event.paymentReference !== payment.reference) {
     return { kind: "REJECT", reason: "PAYMENT_REFERENCE_MISMATCH" };
   }
 
-  const expectedAmount = normalizeAmount(payment.amount);
-  const receivedAmount = normalizeAmount(event.amount);
+  const expectedAmount = typeof payment.amount === "string" ? normalizeAmount(payment.amount) : null;
+  const receivedAmount = typeof event.amount === "string" ? normalizeAmount(event.amount) : null;
   if (expectedAmount === null || receivedAmount === null || expectedAmount !== receivedAmount) {
     return { kind: "REJECT", reason: "AMOUNT_MISMATCH" };
   }
 
-  const expectedCurrency = payment.currency.trim().toUpperCase();
-  const receivedCurrency = event.currency.trim().toUpperCase();
+  const expectedCurrency = typeof payment.currency === "string" ? payment.currency.trim().toUpperCase() : "";
+  const receivedCurrency = typeof event.currency === "string" ? event.currency.trim().toUpperCase() : "";
   if (!/^[A-Z]{3}$/.test(expectedCurrency) ||
       !/^[A-Z]{3}$/.test(receivedCurrency) ||
       expectedCurrency !== receivedCurrency) {
