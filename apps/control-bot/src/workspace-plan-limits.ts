@@ -115,3 +115,15 @@ export function evaluateWorkspaceLimit(
     remaining
   };
 }
+
+/**
+ * Evaluates a named resource directly against a validated plan configuration.
+ */
+export function evaluateWorkspacePlanLimit(
+  config: WorkspacePlanFeatureConfig,
+  resource: WorkspacePlanLimitKey,
+  currentUsage: number,
+  requested = 1
+): WorkspaceLimitDecision {
+  return evaluateWorkspaceLimit(config.limits[resource], currentUsage, requested);
+}
