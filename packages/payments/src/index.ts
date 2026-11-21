@@ -154,3 +154,11 @@ export type {
   TelegramStarsRefundReceipt,
   TelegramStarsRefundPaymentSnapshot
 } from "./telegram-refund.js";
+
+export {
+  reconcileExternalPaymentEvent
+} from "./external-payment-reconciliation.js";
+export type {
+  TrackedExternalPaymentStatus,
+  ExternalPaymentEventDecision
+} from "./external-payment-reconciliation.js";
