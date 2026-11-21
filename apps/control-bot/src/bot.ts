@@ -1958,6 +1958,89 @@ export function createControlBot(token: string): Bot {
     }
   });
 
+  bot.command("failednotifications", async (ctx) => {
+    if (ctx.chat.type !== "private") {
+      await ctx.reply("Просматривать ошибки уведомлений можно только в личном чате с SubPilot.");
+      return;
+    }
+
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace, role } = await getActiveWorkspace(user);
+      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
+        await ctx.reply("Просматривать ошибки уведомлений могут только владелец или администратор пространства.");
+        return;
+      }
+
+      const failed = await prisma.ownerNotification.findMany({
+        where: {
+          sentAt: null,
+          attempts: { gte: 10 },
+          project: { workspaceId: workspace.id }
+        },
+        include: { project: { select: { name: true } } },
+        orderBy: { updatedAt: "asc" },
+        take: 10
+      });
+
+      if (failed.length === 0) {
+        await ctx.reply("В активном пространстве нет уведомлений с исчерпанными попытками.");
+        return;
+      }
+
+      const lines = failed.map((notification, index) =>
+        `${index + 1}. ${notification.project.name} · ${notification.eventType}\\n` +
+        `Попыток: ${notification.attempts}/10 · Ошибка: ${notification.lastError ?? "не указана"}\\n` +
+        `ID: ${notification.id}`
+      );
+      await ctx.reply(
+        "Неотправленные уведомления (показаны последние 10):\\n\\n" + lines.join("\\n\\n") +
+        "\\n\\nДля повторной постановки в очередь: /retrynotification ID"
+      );
+    } catch (error) {
+      console.error("Control bot /failednotifications failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось загрузить неотправленные уведомления.");
+    }
+  });
+
+  bot.command("retrynotification", async (ctx) => {
+    const notificationId = String(ctx.match ?? "").trim();
+    if (!notificationId) {
+      await ctx.reply("Формат: /retrynotification NOTIFICATION_ID\\nСписок: /failednotifications");
+      return;
+    }
+    if (ctx.chat.type !== "private") {
+      await ctx.reply("Восстанавливать уведомления можно только в личном чате с SubPilot.");
+      return;
+    }
+
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace, role } = await getActiveWorkspace(user);
+      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
+        await ctx.reply("Восстанавливать уведомления могут только владелец или администратор пространства.");
+        return;
+      }
+
+      const restored = await prisma.ownerNotification.updateMany({
+        where: {
+          id: notificationId,
+          sentAt: null,
+          attempts: { gte: 10 },
+          project: { workspaceId: workspace.id }
+        },
+        data: { attempts: 0, nextAttemptAt: new Date(), lastError: null }
+      });
+
+      await ctx.reply(restored.count === 1
+        ? "Уведомление возвращено в очередь. SubPilot повторит отправку при следующем проходе обработчика."
+        : "Не удалось восстановить уведомление. Проверьте его ID, статус и права в активном пространстве.");
+    } catch (error) {
+      console.error("Control bot /retrynotification failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось восстановить уведомление.");
+    }
+  });
+
   bot.command("refundpayment", async (ctx) => {
     const paymentId = String(ctx.match ?? "").trim();
 
@@ -2815,6 +2898,8 @@ export function createControlBot(token: string): Bot {
       "/plans ID — посмотреть тарифы\n" +
       "/payments ID — история платежей проекта\n" +
       "/testnotifications — отправить четыре тестовых уведомления себе\n" +
+      "/failednotifications — показать уведомления с исчерпанными попытками\n" +
+      "/retrynotification ID — вернуть уведомление в очередь\n" +
       "/refundpayment ID — вернуть платёж Stars\n" +
       "/chats ID — список каналов и групп проекта\n" +
       "/linkchat PLAN_ID CHAT_ID — привязать площадку к тарифу\n" +
