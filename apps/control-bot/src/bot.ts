@@ -12,6 +12,10 @@ import {
 } from "./workspace-permissions.js";
 import { isPrivateControlChat } from "./private-control-context.js";
 import {
+  formatWorkspaceBillingOverview,
+  getWorkspaceBillingOverview
+} from "./workspace-billing-service.js";
+import {
   classifyTelegramRefundError,
   listPaymentProviderAvailability,
   recalculateSubscriptionPeriod,
@@ -71,7 +75,9 @@ function homeKeyboard(): InlineKeyboard {
     .text("🏬 Создать агентство", "ui:newagency")
     .row()
     .text("👥 Команда", "ui:team")
-    .text("❔ Помощь", "ui:help");
+    .text("❔ Помощь", "ui:help")
+    .row()
+    .text("💳 Тариф пространства", "ui:billing");
 }
 
 function backHomeKeyboard(): InlineKeyboard {
@@ -265,6 +271,34 @@ export function createControlBot(token: string): Bot {
       `🚀 SubPilot\n\nПространство: ${workspace.name}\nРоль: ${String(role).toLowerCase()}\n\nВыберите действие:`,
       { reply_markup: homeKeyboard() }
     );
+  });
+
+  bot.callbackQuery("ui:billing", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace } = await getActiveWorkspace(user);
+      const overview = await getWorkspaceBillingOverview(workspace.id);
+      if (!overview) {
+        await ctx.editMessageText(
+          "Рабочее пространство не найдено.",
+          { reply_markup: backHomeKeyboard() }
+        );
+        return;
+      }
+      await ctx.editMessageText(
+        formatWorkspaceBillingOverview(overview),
+        {
+          reply_markup: new InlineKeyboard()
+            .text("🔄 Обновить", "ui:billing")
+            .row()
+            .text("⬅️ В главное меню", "ui:home")
+        }
+      );
+    } catch (error) {
+      console.error("Control bot workspace billing overview failed:", error);
+      await ctx.reply("Не удалось загрузить сведения о тарифе пространства.");
+    }
   });
 
   bot.callbackQuery("ui:team", async (ctx) => {
