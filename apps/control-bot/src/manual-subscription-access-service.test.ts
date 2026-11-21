@@ -75,7 +75,7 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
       }
     });
     await prisma.creatorPlanChat.create({
-      data: { planId: plan.id, connectedChatId: chat.id }
+      data: { creatorPlanId: plan.id, connectedChatId: chat.id }
     });
 
     await assert.rejects(
