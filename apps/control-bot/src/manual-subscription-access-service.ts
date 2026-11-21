@@ -181,9 +181,9 @@ export async function grantManualSubscriptionAccess(input: AccessOperationInput 
     let subscriptionId: string;
     let endsAt: Date | null;
     if (existing) {
-      endsAt = durationDays === null
+      endsAt = durationDays === null || existing.endsAt === null
         ? null
-        : new Date(Math.max(now.getTime(), existing.endsAt?.getTime() ?? now.getTime()) +
+        : new Date(Math.max(now.getTime(), existing.endsAt.getTime()) +
             durationDays * 24 * 60 * 60 * 1000);
       const updated = await tx.subscription.update({
         where: { id: existing.id },
@@ -271,7 +271,18 @@ export async function grantTrialSubscriptionAccess(input: AccessOperationInput &
       },
       select: { id: true }
     });
-    if (priorTrial) throw new ManualSubscriptionAccessError("TRIAL_ALREADY_USED");
+    const activeSubscription = await tx.subscription.findFirst({
+      where: {
+        customerId: customer.id,
+        planId: plan.id,
+        status: "ACTIVE",
+        OR: [{ endsAt: null }, { endsAt: { gt: now } }]
+      },
+      select: { id: true }
+    });
+    if (priorTrial || activeSubscription) {
+      throw new ManualSubscriptionAccessError("TRIAL_ALREADY_USED");
+    }
 
     const endsAt = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
     const created = await tx.subscription.create({
