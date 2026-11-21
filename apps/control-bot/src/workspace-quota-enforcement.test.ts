@@ -14,7 +14,7 @@ test("PostgreSQL workspace quotas serialize concurrent creation and archived-res
   } = await import("./workspace-quota-enforcement.js");
 
   const suffix = randomUUID();
-  const telegramBase = BigInt(`9${Date.now()}${Math.floor(Math.random() * 1_000_000)}`);
+  const telegramBase = BigInt(Date.now()) * 1_000_000n + BigInt(Math.floor(Math.random() * 100_000));
   let ownerId: string | undefined;
   let firstMemberId: string | undefined;
   let secondMemberId: string | undefined;
