@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createLifecycleLeaseGuard } from "./lifecycle-lease-guard.js";
+import {
+  acquireSubscriptionLifecycleLease,
+  releaseSubscriptionLifecycleLease,
+  renewSubscriptionLifecycleLease
+} from "./subscription-lifecycle-lease.js";
 import { Bot, InlineKeyboard } from "grammy";
 import { prisma } from "@subpilot/database";
 import { decryptSecret } from "@subpilot/security";
@@ -15,40 +20,8 @@ import {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PENDING_PAYMENT_TTL_MS = 24 * 60 * 60 * 1000;
 const BATCH_SIZE = 100;
-const LIFECYCLE_WORKER_LEASE_KEY = "subscription-lifecycle";
-const WORKER_LEASE_TTL_MS = 5 * 60_000;
 const WORKER_LEASE_HEARTBEAT_MS = 60_000;
 type LeaseOwnershipCheck = () => boolean;
-
-async function acquireLifecycleWorkerLease(leaseId: string): Promise<boolean> {
-  const now = new Date();
-  const lockedUntil = new Date(now.getTime() + WORKER_LEASE_TTL_MS);
-  const acquired = await prisma.$queryRaw<Array<{ key: string }>>`
-    INSERT INTO "WorkerLease" ("key", "leaseId", "lockedUntil", "createdAt", "updatedAt")
-    VALUES (${LIFECYCLE_WORKER_LEASE_KEY}, ${leaseId}, ${lockedUntil}, ${now}, ${now})
-    ON CONFLICT ("key") DO UPDATE
-      SET "leaseId" = EXCLUDED."leaseId",
-          "lockedUntil" = EXCLUDED."lockedUntil",
-          "updatedAt" = EXCLUDED."updatedAt"
-      WHERE "WorkerLease"."lockedUntil" <= ${now}
-    RETURNING "key"
-  `;
-  return acquired.length === 1;
-}
-
-async function renewLifecycleWorkerLease(leaseId: string): Promise<boolean> {
-  const result = await prisma.workerLease.updateMany({
-    where: { key: LIFECYCLE_WORKER_LEASE_KEY, leaseId },
-    data: { lockedUntil: new Date(Date.now() + WORKER_LEASE_TTL_MS) }
-  });
-  return result.count === 1;
-}
-
-async function releaseLifecycleWorkerLease(leaseId: string): Promise<void> {
-  await prisma.workerLease.deleteMany({
-    where: { key: LIFECYCLE_WORKER_LEASE_KEY, leaseId }
-  });
-}
 
 async function cancelStalePendingPayments(
   now: Date,
@@ -475,11 +448,11 @@ async function expireSubscriptions(
 
 export async function runSubscriptionLifecycle(now = new Date()): Promise<void> {
   const leaseId = randomUUID();
-  if (!await acquireLifecycleWorkerLease(leaseId)) return;
+  if (!await acquireSubscriptionLifecycleLease(leaseId)) return;
 
   const leaseGuard = createLifecycleLeaseGuard();
   const heartbeat = setInterval(() => {
-    void renewLifecycleWorkerLease(leaseId)
+    void renewSubscriptionLifecycleLease(leaseId)
       .then((renewed) => {
         if (!renewed) {
           leaseGuard.markLost();
@@ -508,7 +481,7 @@ export async function runSubscriptionLifecycle(now = new Date()): Promise<void> 
     await deliverPendingOwnerNotifications(now, leaseGuard.isOwned);
   } finally {
     clearInterval(heartbeat);
-    await releaseLifecycleWorkerLease(leaseId).catch((error: unknown) => {
+    await releaseSubscriptionLifecycleLease(leaseId).catch((error: unknown) => {
       console.error(
         "Could not release subscription lifecycle worker lease:",
         error instanceof Error ? error.name : "UnknownError"
