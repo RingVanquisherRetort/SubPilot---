@@ -8,6 +8,8 @@ test("PostgreSQL workspace quotas serialize concurrent creation and archived-res
   const { prisma } = await import("@subpilot/database");
   const {
     WorkspaceQuotaError,
+    assertWorkspaceQuotaInTransaction,
+    lockWorkspace,
     withWorkspaceQuotaTransaction
   } = await import("./workspace-quota-enforcement.js");
 
@@ -122,17 +124,56 @@ test("PostgreSQL workspace quotas serialize concurrent creation and archived-res
       WorkspaceQuotaError
     );
 
-    const memberAttempts = await Promise.allSettled([firstMember.id, secondMember.id].map((userId) =>
-      withWorkspaceQuotaTransaction(workspace.id, "members", (tx) =>
-        tx.workspaceMember.create({
-          data: { workspaceId: workspace.id, userId, role: "MANAGER" }
-        })
-      )
+    const invites = await Promise.all([firstMember.id, secondMember.id].map((userId) =>
+      prisma.workspaceInvite.create({
+        data: {
+          workspaceId: workspace.id,
+          invitedByUserId: owner.id,
+          tokenHash: randomUUID(),
+          role: "MANAGER",
+          expiresAt: new Date(Date.now() + 60_000)
+        }
+      }).then((invite) => ({ inviteId: invite.id, userId }))
     ));
+
+    const acceptInvite = (inviteId: string, userId: string) =>
+      prisma.$transaction(async (tx) => {
+        const claimed = await tx.workspaceInvite.updateMany({
+          where: { id: inviteId, usedAt: null, expiresAt: { gt: new Date() } },
+          data: { usedAt: new Date() }
+        });
+        if (claimed.count !== 1) return false;
+
+        await lockWorkspace(tx, workspace.id);
+        const existingMembership = await tx.workspaceMember.findUnique({
+          where: {
+            workspaceId_userId: { workspaceId: workspace.id, userId }
+          },
+          select: { id: true }
+        });
+        if (!existingMembership) {
+          await assertWorkspaceQuotaInTransaction(tx, workspace.id, "members");
+        }
+        return tx.workspaceMember.upsert({
+          where: {
+            workspaceId_userId: { workspaceId: workspace.id, userId }
+          },
+          update: {},
+          create: { workspaceId: workspace.id, userId, role: "MANAGER" },
+          select: { role: true }
+        });
+      });
+
+    const memberAttempts = await Promise.allSettled(
+      invites.map(({ inviteId, userId }) => acceptInvite(inviteId, userId))
+    );
     assert.equal(memberAttempts.filter((result) => result.status === "fulfilled").length, 1);
     const memberFailure = memberAttempts.find((result) => result.status === "rejected");
     assert.ok(memberFailure?.status === "rejected" && memberFailure.reason instanceof WorkspaceQuotaError);
     assert.equal(await prisma.workspaceMember.count({ where: { workspaceId: workspace.id } }), 2);
+    assert.equal(await prisma.workspaceInvite.count({
+      where: { workspaceId: workspace.id, usedAt: null }
+    }), 1, "the invite rejected by the quota check must remain unused");
 
     const planAttempts = await Promise.allSettled([0, 1].map((index) =>
       withWorkspaceQuotaTransaction(workspace.id, "plansPerProject", (tx) =>
