@@ -262,6 +262,7 @@ export function createControlBot(token: string): Bot {
 
   const setPendingTextAction = (userId: number, action: PendingTextActionInput): void => {
     pendingBotConnections.delete(userId);
+    pendingPlatformProviderSecrets.delete(userId);
     pendingTextActions.set(userId, {
       ...action,
       expiresAt: Date.now() + TEXT_ACTION_TTL_MS
@@ -270,6 +271,7 @@ export function createControlBot(token: string): Bot {
 
   const setPendingBotConnection = (userId: number, projectId: string): void => {
     pendingTextActions.delete(userId);
+    pendingPlatformProviderSecrets.delete(userId);
     pendingBotConnections.set(userId, {
       projectId,
       expiresAt: Date.now() + BOT_TOKEN_TTL_MS
@@ -507,6 +509,7 @@ export function createControlBot(token: string): Bot {
     if (ctx.from) {
       pendingTextActions.delete(ctx.from.id);
       pendingBotConnections.delete(ctx.from.id);
+      pendingPlatformProviderSecrets.delete(ctx.from.id);
     }
     await ctx.reply("Возвращаемся в меню.", { reply_markup: homeKeyboard() });
   });
