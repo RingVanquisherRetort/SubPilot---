@@ -18,7 +18,7 @@ export class PlatformPaymentLifecycleError extends Error {
     | "CHECKOUT_NOT_ELIGIBLE" | "INVALID_ACTOR" | "WORKSPACE_ACCESS_DENIED"
     | "PLAN_NOT_AVAILABLE" | "PROVIDER_NOT_AVAILABLE" | "RETURN_URL_NOT_CONFIGURED"
     | "IDEMPOTENCY_CONFLICT" | "PAYMENT_ALREADY_FINAL"
-    | "PLAN_CHANGE_REQUIRES_MANUAL_REVIEW" | "PROVIDER_CONNECTION_NOT_FOUND"
+    | "PLAN_CHANGE_REQUIRES_MANUAL_REVIEW" | "CHECKOUT_ALREADY_IN_PROGRESS" | "PROVIDER_CONNECTION_NOT_FOUND"
     | "INVALID_PROVIDER_CREDENTIALS" | "PAYMENT_NOT_FOUND"
     | "REFUND_NOT_ALLOWED" | "REFUND_IN_PROGRESS" | "REFUND_PROVIDER_UNAVAILABLE"
   ) {
@@ -527,6 +527,27 @@ export async function createPlatformPaymentCheckout(
           existing.currency === currency;
         if (!matches) throw new PlatformPaymentLifecycleError("IDEMPOTENCY_CONFLICT");
         return existing;
+      }
+
+      const now = new Date();
+      const activePending = await tx.platformPayment.findFirst({
+        where: {
+          workspaceId: input.workspaceId,
+          status: { in: ["CREATED", "PENDING"] },
+          OR: [
+            { expiresAt: null, createdAt: { gt: new Date(now.getTime() - 30 * 60 * 1000) } },
+            { expiresAt: { gt: now } }
+          ]
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }]
+      });
+      if (activePending) {
+        const matches = activePending.platformPlanId === plan.id &&
+          activePending.providerConnectionId === connection.id &&
+          activePending.amount.toString() === amount &&
+          activePending.currency === currency;
+        if (!matches) throw new PlatformPaymentLifecycleError("CHECKOUT_ALREADY_IN_PROGRESS");
+        return activePending;
       }
 
       const billing = await tx.workspaceBilling.findUnique({ where: { workspaceId: input.workspaceId } });
