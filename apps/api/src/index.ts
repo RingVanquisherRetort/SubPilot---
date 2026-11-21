@@ -7,6 +7,7 @@ import { decryptSecret } from "@subpilot/security";
 import { handleProjectBotUpdate } from "./project-bot-updates.js";
 import { startSubscriptionLifecycleWorker } from "./subscription-lifecycle.js";
 import { resolveTelegramUpdateSequenceEpoch } from "./telegram-update-order.js";
+import { startLifecycleLeaseHeartbeat } from "./lifecycle-lease-guard.js";
 import { PlatformPaymentLifecycleError, processYooKassaWebhook } from "./platform-payment-lifecycle.js";
 import { registerPlatformBillingWebRoutes } from "./platform-billing-web.js";
 import {
@@ -32,17 +33,10 @@ async function processProjectBotWebhookUpdate(input: {
 
   if (!await acquireTelegramWebhookLease(projectBotId, leaseId)) return "BUSY";
 
-  let leaseOwned = true;
-  const heartbeat = setInterval(() => {
-    void renewTelegramWebhookLease(projectBotId, leaseId)
-      .then((renewed) => {
-        if (!renewed) leaseOwned = false;
-      })
-      .catch(() => {
-        leaseOwned = false;
-      });
-  }, TELEGRAM_WEBHOOK_LEASE_HEARTBEAT_MS);
-  heartbeat.unref?.();
+  const heartbeat = startLifecycleLeaseHeartbeat({
+    intervalMs: TELEGRAM_WEBHOOK_LEASE_HEARTBEAT_MS,
+    renew: () => renewTelegramWebhookLease(projectBotId, leaseId)
+  });
 
   let webhookRecordId: string | null = null;
   let sequenceEpoch = 0;
@@ -113,7 +107,7 @@ async function processProjectBotWebhookUpdate(input: {
       updateId,
       sequenceEpoch
     );
-    if (!leaseOwned) {
+    if (!heartbeat.isOwned()) {
       throw new Error("Telegram webhook processing lease was lost before acknowledgement.");
     }
 
@@ -148,7 +142,7 @@ async function processProjectBotWebhookUpdate(input: {
     }
     throw error;
   } finally {
-    clearInterval(heartbeat);
+    heartbeat.stop();
     await releaseTelegramWebhookLease(projectBotId, leaseId).catch(() => undefined);
   }
 }
