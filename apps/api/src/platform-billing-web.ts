@@ -223,6 +223,14 @@ export function registerPlatformBillingWebRoutes(app: FastifyInstance): void {
     return reply.type("text/html; charset=utf-8").send(page.html);
   });
 
+  app.get("/billing/return", async (_request, reply) => {
+    const config = readBillingWebConfig();
+    const page = billingPage(config);
+    setNoStoreHeaders(reply);
+    reply.header("Content-Security-Policy", page.csp);
+    return reply.type("text/html; charset=utf-8").send(page.html);
+  });
+
   app.post<{ Body: unknown }>("/web/billing/auth/telegram", async (request, reply) => {
     const config = readBillingWebConfig();
     setNoStoreHeaders(reply);
@@ -289,7 +297,7 @@ export function registerPlatformBillingWebRoutes(app: FastifyInstance): void {
     setNoStoreHeaders(reply);
     if (!config.enabled) return reply.code(503).send({ error: "Веб-оплата пока не включена." });
     if (!requireExpectedOrigin(request, config)) return reply.code(403).send({ error: "Недопустимый источник запроса." });
-    if (!request.isJson()) return reply.code(415).send({ error: "Требуется application/json." });
+    if (typeof request.headers["content-type"] !== "string" || request.headers["content-type"].split(";")[0]?.trim().toLowerCase() !== "application/json") return reply.code(415).send({ error: "Требуется application/json." });
     const telegramId = sessionTelegramId(request, config);
     if (!telegramId) return reply.code(401).send({ error: "Требуется повторный вход через Telegram." });
     if (typeof request.body !== "object" || request.body === null || Array.isArray(request.body)) {
