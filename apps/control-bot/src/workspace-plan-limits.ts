@@ -127,3 +127,30 @@ export function evaluateWorkspacePlanLimit(
 ): WorkspaceLimitDecision {
   return evaluateWorkspaceLimit(config.limits[resource], currentUsage, requested);
 }
+
+export type WorkspacePlanUsage = Record<WorkspacePlanLimitKey, number>;
+export type WorkspacePlanRequests = Partial<Record<WorkspacePlanLimitKey, number>>;
+export type WorkspacePlanEvaluation = Record<WorkspacePlanLimitKey, WorkspaceLimitDecision>;
+
+/**
+ * Evaluates every quota in one pass. Omitted requested increments default to
+ * one resource, matching the common create-one operation.
+ */
+export function evaluateWorkspacePlanUsage(
+  config: WorkspacePlanFeatureConfig,
+  currentUsage: WorkspacePlanUsage,
+  requested: WorkspacePlanRequests = {}
+): WorkspacePlanEvaluation {
+  const result = {} as WorkspacePlanEvaluation;
+
+  for (const resource of WORKSPACE_PLAN_LIMIT_KEYS) {
+    result[resource] = evaluateWorkspacePlanLimit(
+      config,
+      resource,
+      currentUsage[resource],
+      requested[resource] ?? 1
+    );
+  }
+
+  return result;
+}
