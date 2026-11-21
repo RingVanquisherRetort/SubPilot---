@@ -26,6 +26,7 @@ The central SubPilot bot is the default control panel and is restricted to priva
 - PaymentProviderConnection: encrypted merchant credentials belonging to a creator project. Registration in SubPilot is open to ordinary individuals; payment-method eligibility is evaluated separately for each project and provider.
 - Payment / PaymentWebhookEvent: creator-side payment and idempotent webhook record.
 - PlatformPlan / WorkspaceBilling / PlatformPayment: SubPilot's own tariff catalogue, workspace subscription and payment ledger.
+- PlatformPaymentProviderConnection / PlatformPaymentWebhookEvent: globally managed SubPilot merchant credentials and a webhook ledger isolated from creator-owned provider connections and events.
 - AuditLog: security-sensitive actions and important workspace changes.
 
 ## Two payment domains — never mix them
@@ -60,6 +61,8 @@ Whether funds settle directly to a creator or through a platform/marketplace arr
 ### SubPilot billing
 
 SubPilot sells its own plans and usage-based services through a separate billing domain and ledger. Platform payments and platform-fee receivables must never be recorded as creator payments.
+
+The platform's external acquiring integrations use a dedicated global PlatformPaymentProviderConnection, not a creator's project-level PaymentProviderConnection. Platform credentials are encrypted at rest; platform payment records retain the workspace and plan identity, immutable plan/price/period snapshots, the selected provider connection and a checkout reference. Provider webhook events are deduplicated in PlatformPaymentWebhookEvent and are not mixed with creator PaymentWebhookEvent records. The platform provider enum deliberately excludes Telegram Stars and manual confirmation: these are not external acquiring connections for SubPilot's own SaaS billing. The checkout, webhook processing and lifecycle code are not enabled yet; this schema migration establishes the isolated persistence boundary only.
 
 #### Workspace plan feature limits
 
