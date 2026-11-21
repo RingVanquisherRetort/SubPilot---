@@ -1989,13 +1989,13 @@ export function createControlBot(token: string): Bot {
       }
 
       const lines = failed.map((notification, index) =>
-        `${index + 1}. ${notification.project.name} · ${notification.eventType}\\n` +
-        `Попыток: ${notification.attempts}/10 · Ошибка: ${notification.lastError ?? "не указана"}\\n` +
+        `${index + 1}. ${notification.project.name} · ${notification.eventType}\n` +
+        `Попыток: ${notification.attempts}/10 · Ошибка: ${notification.lastError ?? "не указана"}\n` +
         `ID: ${notification.id}`
       );
       await ctx.reply(
-        "Неотправленные уведомления (показаны последние 10):\\n\\n" + lines.join("\\n\\n") +
-        "\\n\\nДля повторной постановки в очередь: /retrynotification ID"
+        "Неотправленные уведомления (показаны последние 10):\n\n" + lines.join("\n\n") +
+        "\n\nДля повторной постановки в очередь: /retrynotification ID"
       );
     } catch (error) {
       console.error("Control bot /failednotifications failed:", error instanceof Error ? error.name : "UnknownError");
@@ -2006,7 +2006,7 @@ export function createControlBot(token: string): Bot {
   bot.command("retrynotification", async (ctx) => {
     const notificationId = String(ctx.match ?? "").trim();
     if (!notificationId) {
-      await ctx.reply("Формат: /retrynotification NOTIFICATION_ID\\nСписок: /failednotifications");
+      await ctx.reply("Формат: /retrynotification NOTIFICATION_ID\nСписок: /failednotifications");
       return;
     }
     if (ctx.chat.type !== "private") {
