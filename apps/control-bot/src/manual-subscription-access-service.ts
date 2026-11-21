@@ -1,5 +1,7 @@
 import { prisma } from "@subpilot/database";
 
+type Transaction = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+
 export class ManualSubscriptionAccessError extends Error {
   constructor(public readonly code:
     | "INVALID_TELEGRAM_USER_ID"
@@ -41,7 +43,7 @@ function validateDuration(days: number | null): void {
   }
 }
 
-async function lockWorkspace(tx: typeof prisma, workspaceId: string): Promise<void> {
+async function lockWorkspace(tx: Transaction, workspaceId: string): Promise<void> {
   await tx.$queryRawUnsafe(
     'SELECT "id" FROM "Workspace" WHERE "id" = $1 FOR UPDATE',
     workspaceId
@@ -49,7 +51,7 @@ async function lockWorkspace(tx: typeof prisma, workspaceId: string): Promise<vo
 }
 
 async function assertWorkspaceAdmin(
-  tx: typeof prisma,
+  tx: Transaction,
   workspaceId: string,
   actorUserId: string
 ): Promise<void> {
@@ -65,7 +67,7 @@ async function assertWorkspaceAdmin(
 }
 
 async function validateProjectAndPlan(
-  tx: typeof prisma,
+  tx: Transaction,
   input: AccessOperationInput
 ) {
   const project = await tx.project.findFirst({
@@ -94,7 +96,7 @@ async function validateProjectAndPlan(
 }
 
 async function ensureCustomer(
-  tx: typeof prisma,
+  tx: Transaction,
   projectId: string,
   telegramUserId: bigint
 ) {
@@ -108,7 +110,7 @@ async function ensureCustomer(
 }
 
 async function ensureAccessGrantRows(
-  tx: typeof prisma,
+  tx: Transaction,
   subscriptionId: string,
   connectedChatIds: string[],
   now: Date
