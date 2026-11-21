@@ -3072,6 +3072,47 @@ export function createControlBot(token: string): Bot {
     }
   });
 
+  bot.command("platformpaymentreviews", async (ctx) => {
+    if (ctx.chat.type !== "private" || !ctx.from ||
+        !isPlatformAdminTelegramId(ctx.from.id, process.env.PLATFORM_ADMIN_TELEGRAM_IDS)) {
+      await ctx.reply("Команда доступна только уполномоченным операторам SubPilot в личном чате.");
+      return;
+    }
+
+    try {
+      const events = await prisma.platformPaymentWebhookEvent.findMany({
+        where: { processedAt: null },
+        include: {
+          providerConnection: {
+            select: { provider: true, label: true }
+          }
+        },
+        orderBy: [{ receivedAt: "asc" }, { id: "asc" }],
+        take: 20
+      });
+      if (events.length === 0) {
+        await ctx.reply("Очередь ручной сверки платежей пуста.");
+        return;
+      }
+
+      const lines = events.map((event) => [
+        `${event.providerConnection.provider} · ${event.eventType}`,
+        `ID: ${event.id}`,
+        `Подключение: ${event.providerConnection.label}`,
+        `Причина: ${event.lastError ?? "Ожидает обработки"}`,
+        `Попыток: ${event.attempts} · Получено: ${event.receivedAt.toISOString()}`
+      ].join("\n"));
+
+      await ctx.reply(
+        "События платежей, требующие ручной сверки (первые 20):\n\n" + lines.join("\n\n") +
+        "\n\nКоманда только показывает очередь. Она не подтверждает оплату и не меняет доступ."
+      );
+    } catch (error) {
+      console.error("Platform payment review queue failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось загрузить очередь ручной сверки платежей.");
+    }
+  });
+
   bot.command("platformplans", async (ctx) => {
     if (ctx.chat.type !== "private" || !ctx.from ||
         !isPlatformAdminTelegramId(ctx.from.id, process.env.PLATFORM_ADMIN_TELEGRAM_IDS)) {
