@@ -98,6 +98,12 @@ export async function withWorkspaceQuotaTransaction<T>(
   }, { isolationLevel: "ReadCommitted" });
 }
 
+export function isWorkspaceQuotaRestriction(error: unknown): boolean {
+  return error instanceof WorkspaceQuotaError ||
+    (error instanceof Error &&
+      /Подписка рабочего пространства|Тариф рабочего пространства|лимиты тарифа/.test(error.message));
+}
+
 export function formatWorkspaceQuotaError(error: unknown): string {
   if (error instanceof WorkspaceQuotaError) {
     const labels: Record<WorkspacePlanLimitKey, string> = {
