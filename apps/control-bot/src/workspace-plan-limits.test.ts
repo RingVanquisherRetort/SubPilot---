@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   evaluateWorkspaceLimit,
+  evaluateWorkspacePlanLimit,
   parseWorkspacePlanFeatureConfig,
   type WorkspacePlanFeatureConfig
 } from "./workspace-plan-limits.js";
