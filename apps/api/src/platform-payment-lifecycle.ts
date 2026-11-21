@@ -533,7 +533,7 @@ export async function createPlatformPaymentCheckout(
       const pendingCheckout = await tx.platformPayment.findFirst({
         where: {
           workspaceId: input.workspaceId,
-          status: { in: ["CREATED", "PENDING"] }
+          status: { in: ["CREATED", "PENDING", "REFUNDING"] }
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }]
       });
