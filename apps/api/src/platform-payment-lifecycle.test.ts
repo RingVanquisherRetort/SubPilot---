@@ -1,0 +1,180 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { test } from "node:test";
+
+test("YooKassa checkout and webhook lifecycle is idempotent and activates billing only after API-confirmed success", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  const previousKey = process.env.SECRETS_ENCRYPTION_KEY;
+  const previousReturnUrl = process.env.PLATFORM_BILLING_RETURN_URL;
+  process.env.SECRETS_ENCRYPTION_KEY = Buffer.alloc(32, 41).toString("base64");
+  process.env.PLATFORM_BILLING_RETURN_URL = "https://tgsubpilot.ru/billing/return";
+  const { prisma } = await import("@subpilot/database");
+  const { encryptSecret } = await import("@subpilot/security");
+  const { createPlatformPaymentCheckout, processYooKassaWebhook } =
+    await import("./platform-payment-lifecycle.js");
+  const suffix = randomUUID().replace(/-/g, "").slice(0, 12);
+  const telegramId = BigInt(Date.now()) * 1_000_000n + BigInt(Math.floor(Math.random() * 100_000));
+  let actorId: string | undefined;
+  let workspaceId: string | undefined;
+  let planId: string | undefined;
+  let connectionId: string | undefined;
+
+  try {
+    const actor = await prisma.user.create({ data: { telegramId, firstName: "Billing integration test" } });
+    actorId = actor.id;
+    const workspace = await prisma.workspace.create({
+      data: {
+        name: "YooKassa test " + suffix,
+        slug: "yoo-test-" + suffix,
+        createdById: actor.id,
+        members: { create: { userId: actor.id, role: "OWNER" } }
+      }
+    });
+    workspaceId = workspace.id;
+    const plan = await prisma.platformPlan.create({
+      data: {
+        code: "yoo-test-" + suffix,
+        title: "YooKassa integration " + suffix,
+        price: "99.00",
+        currency: "RUB",
+        billingPeriodDays: 30,
+        features: {
+          schemaVersion: 1,
+          limits: { projects: 3, members: 5, plansPerProject: 10, connectedChatsPerProject: 3 }
+        }
+      }
+    });
+    planId = plan.id;
+    const connection = await prisma.platformPaymentProviderConnection.create({
+      data: {
+        provider: "YOOKASSA",
+        label: "test-" + suffix,
+        environment: "TEST",
+        credentialsEncrypted: encryptSecret(JSON.stringify({ shopId: "123456", secretKey: "test_secret_" + suffix })),
+        status: "ACTIVE"
+      }
+    });
+    connectionId = connection.id;
+    const providerPaymentId = "yoo_payment_" + suffix;
+    let paymentId = "";
+    let createCalls = 0;
+    const fakeFetch: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/payments") && init?.method === "POST") {
+        createCalls += 1;
+        const body = JSON.parse(String(init.body));
+        assert.deepEqual(body.amount, { value: "99.00", currency: "RUB" });
+        assert.equal(typeof body.metadata.subpilot_payment_id, "string");
+        return new Response(JSON.stringify({
+          id: providerPaymentId,
+          status: "pending",
+          confirmation: { type: "redirect", confirmation_url: "https://yookassa.ru/checkout/" + suffix }
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/payments/" + providerPaymentId)) {
+        return new Response(JSON.stringify({
+          id: providerPaymentId,
+          status: "succeeded",
+          amount: { value: "99.00", currency: "RUB" },
+          metadata: { subpilot_payment_id: paymentId }
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ code: "not_found" }), { status: 404 });
+    };
+
+    const checkoutInput = {
+      workspaceId: workspace.id,
+      planCode: plan.code,
+      providerConnectionId: connection.id,
+      actorTelegramId: telegramId.toString(),
+      idempotencyKey: "test-idempotency-" + suffix,
+      salesSurface: "INDEPENDENT_WEB" as const,
+      telegramTpaRelated: false
+    };
+    const checkout = await createPlatformPaymentCheckout(checkoutInput, { fetch: fakeFetch });
+    paymentId = checkout.paymentId;
+    assert.equal(checkout.status, "PENDING");
+    assert.match(checkout.checkoutUrl, /^https:\/\/yookassa\.ru\//);
+    assert.equal(createCalls, 1);
+
+    const retry = await createPlatformPaymentCheckout(checkoutInput, { fetch: fakeFetch });
+    assert.equal(retry.paymentId, checkout.paymentId);
+    assert.equal(retry.checkoutUrl, checkout.checkoutUrl);
+    assert.equal(createCalls, 1);
+
+    const notification = {
+      type: "notification",
+      event: "payment.succeeded",
+      object: {
+        id: providerPaymentId,
+        status: "succeeded",
+        amount: { value: "99.00", currency: "RUB" },
+        metadata: { subpilot_payment_id: paymentId },
+        captured_at: "2026-11-21T12:00:00.000Z"
+      }
+    };
+    const first = await processYooKassaWebhook({
+      connectionId: connection.id,
+      headers: {},
+      rawBody: JSON.stringify(notification),
+      body: notification
+    }, { fetch: fakeFetch });
+    assert.deepEqual(first, { authenticated: true, processed: 1, duplicates: 0, manualReview: 0 });
+
+    const paid = await prisma.platformPayment.findUniqueOrThrow({ where: { id: paymentId } });
+    assert.equal(paid.status, "SUCCEEDED");
+    assert.equal(paid.providerPaymentId, providerPaymentId);
+    assert.ok(paid.paidAt);
+    const billing = await prisma.workspaceBilling.findUniqueOrThrow({ where: { workspaceId: workspace.id } });
+    assert.equal(billing.status, "ACTIVE");
+    assert.equal(billing.platformPlanId, plan.id);
+    assert.ok(billing.currentPeriodStart);
+    assert.ok(billing.currentPeriodEnd);
+    assert.equal(billing.currentPeriodEnd.getTime() - billing.currentPeriodStart.getTime(),
+      30 * 24 * 60 * 60 * 1000);
+
+    const second = await processYooKassaWebhook({
+      connectionId: connection.id,
+      headers: {},
+      rawBody: JSON.stringify(notification),
+      body: notification
+    }, { fetch: fakeFetch });
+    assert.deepEqual(second, { authenticated: true, processed: 0, duplicates: 1, manualReview: 0 });
+    const billingAgain = await prisma.workspaceBilling.findUniqueOrThrow({ where: { workspaceId: workspace.id } });
+    assert.equal(billingAgain.currentPeriodEnd?.getTime(), billing.currentPeriodEnd?.getTime());
+  } finally {
+    if (connectionId) {
+      await prisma.platformPaymentWebhookEvent.deleteMany({ where: { providerConnectionId: connectionId } });
+      await prisma.platformPayment.deleteMany({ where: { providerConnectionId: connectionId } });
+      await prisma.platformPaymentProviderConnection.deleteMany({ where: { id: connectionId } });
+    }
+    if (workspaceId) {
+      await prisma.workspaceBilling.deleteMany({ where: { workspaceId } });
+      await prisma.auditLog.deleteMany({ where: { workspaceId } });
+      await prisma.workspace.deleteMany({ where: { id: workspaceId } });
+    }
+    if (planId) await prisma.platformPlan.deleteMany({ where: { id: planId } });
+    if (actorId) await prisma.user.deleteMany({ where: { id: actorId } });
+    await prisma.$disconnect();
+    if (previousKey === undefined) delete process.env.SECRETS_ENCRYPTION_KEY;
+    else process.env.SECRETS_ENCRYPTION_KEY = previousKey;
+    if (previousReturnUrl === undefined) delete process.env.PLATFORM_BILLING_RETURN_URL;
+    else process.env.PLATFORM_BILLING_RETURN_URL = previousReturnUrl;
+  }
+});
+
+test("policy gate blocks a YooKassa checkout for a Telegram-related digital service", async () => {
+  const { createPlatformPaymentCheckout } = await import("./platform-payment-lifecycle.js");
+  await assert.rejects(() => createPlatformPaymentCheckout({
+    workspaceId: "not-reached",
+    planCode: "not-reached",
+    providerConnectionId: "not-reached",
+    actorTelegramId: "123456",
+    idempotencyKey: "policy-test",
+    salesSurface: "INDEPENDENT_WEB",
+    telegramTpaRelated: true
+  }), (error: unknown) =>
+    error instanceof Error && "code" in error && error.code === "CHECKOUT_NOT_ELIGIBLE"
+  );
+});

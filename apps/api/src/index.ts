@@ -7,6 +7,7 @@ import { decryptSecret } from "@subpilot/security";
 import { handleProjectBotUpdate } from "./project-bot-updates.js";
 import { startSubscriptionLifecycleWorker } from "./subscription-lifecycle.js";
 import { resolveTelegramUpdateSequenceEpoch } from "./telegram-update-order.js";
+import { PlatformPaymentLifecycleError, processYooKassaWebhook } from "./platform-payment-lifecycle.js";
 import {
   acquireTelegramWebhookLease,
   releaseTelegramWebhookLease,
@@ -176,6 +177,42 @@ app.get("/ready", async (_request, reply) => {
     });
   }
 });
+
+app.post<{ Params: { connectionId: string } }>(
+  "/webhooks/platform/yookassa/:connectionId",
+  async (request, reply) => {
+    if (!/^[A-Za-z0-9_-]{10,40}$/.test(request.params.connectionId)) {
+      return reply.code(400).send({ error: "Invalid provider connection identifier" });
+    }
+    try {
+      const result = await processYooKassaWebhook({
+        connectionId: request.params.connectionId,
+        headers: request.headers as Record<string, string | string[] | undefined>,
+        rawBody: typeof request.body === "string" ? request.body : JSON.stringify(request.body ?? null),
+        body: request.body
+      });
+      if (!result.authenticated) {
+        return reply.code(401).send({ error: "Provider notification could not be authenticated" });
+      }
+      return reply.code(200).send({
+        ok: true,
+        processed: result.processed,
+        duplicates: result.duplicates,
+        manualReview: result.manualReview
+      });
+    } catch (error) {
+      const missing = error instanceof PlatformPaymentLifecycleError &&
+        error.code === "PROVIDER_CONNECTION_NOT_FOUND";
+      request.log.error(
+        { errorName: error instanceof Error ? error.name : "UnknownError" },
+        "YooKassa webhook processing failed"
+      );
+      return reply.code(missing ? 404 : 503).send({
+        error: missing ? "Provider connection not found" : "Webhook temporarily unavailable"
+      });
+    }
+  }
+);
 
 app.post<{ Params: { botId: string } }>("/webhooks/telegram/:botId", async (request, reply) => {
   const { botId } = request.params;
