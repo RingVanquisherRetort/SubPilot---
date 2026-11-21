@@ -1079,18 +1079,26 @@ export async function handleProjectBotUpdate(
           if (billing) {
             const features = billing.platformPlan.features;
             const validStatus = billing.status === "ACTIVE" || billing.status === "TRIALING";
-            const limits = typeof features === "object" && features !== null && !Array.isArray(features)
-              ? (features as Record<string, unknown>).limits
+            const featureObject = typeof features === "object" && features !== null && !Array.isArray(features)
+              ? features as Record<string, unknown>
               : null;
-            const chatLimit = typeof limits === "object" && limits !== null && !Array.isArray(limits)
-              ? (limits as Record<string, unknown>).connectedChatsPerProject
-              : undefined;
-            const validLimit = chatLimit === null ||
-              (typeof chatLimit === "number" && Number.isSafeInteger(chatLimit) && chatLimit >= 0);
-            const validConfig = typeof features === "object" && features !== null &&
-              !Array.isArray(features) &&
-              (features as Record<string, unknown>).schemaVersion === 1 &&
-              validLimit;
+            const limits = featureObject && typeof featureObject.limits === "object" &&
+              featureObject.limits !== null && !Array.isArray(featureObject.limits)
+              ? featureObject.limits as Record<string, unknown>
+              : null;
+            const requiredLimitKeys = [
+              "projects", "members", "plansPerProject", "connectedChatsPerProject"
+            ];
+            const chatLimit = limits?.connectedChatsPerProject;
+            const validLimit = (value: unknown) => value === null ||
+              (typeof value === "number" && Number.isSafeInteger(value) && value >= 0);
+            const validConfig = Boolean(
+              featureObject &&
+              featureObject.schemaVersion === 1 &&
+              limits &&
+              Object.keys(limits).length === requiredLimitKeys.length &&
+              requiredLimitKeys.every((key) => Object.hasOwn(limits, key) && validLimit(limits[key]))
+            );
 
             if (!validStatus || !billing.platformPlan.isActive || !validConfig) {
               isActive = false;
