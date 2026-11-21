@@ -37,6 +37,11 @@ test("supports explicit unlimited limits", () => {
 });
 
 test("rejects missing, unknown and unsupported feature configuration", () => {
+  const { members: _members, ...missingMemberLimit } = validConfig.limits;
+  assert.throws(
+    () => parseWorkspacePlanFeatureConfig({ schemaVersion: 1, limits: missingMemberLimit }),
+    /Missing workspace plan limit "members"/
+  );
   assert.throws(() => parseWorkspacePlanFeatureConfig(null), /JSON object/);
   assert.throws(
     () => parseWorkspacePlanFeatureConfig({ schemaVersion: 2, limits: validConfig.limits }),
@@ -60,6 +65,16 @@ test("rejects missing, unknown and unsupported feature configuration", () => {
     }),
     /Invalid workspace plan limit/
   );
+});
+
+test("accepts zero as an explicit disabled-resource limit", () => {
+  const config = parseWorkspacePlanFeatureConfig({
+    schemaVersion: 1,
+    limits: { ...validConfig.limits, projects: 0 }
+  });
+
+  assert.equal(config.limits.projects, 0);
+  assert.equal(evaluateWorkspacePlanLimit(config, "projects", 0).allowed, false);
 });
 
 test("rejects negative, fractional, unsafe and string-valued limits", () => {
