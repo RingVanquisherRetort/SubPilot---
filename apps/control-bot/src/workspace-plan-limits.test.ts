@@ -3,7 +3,7 @@ import { test } from "node:test";
 import {
   evaluateWorkspaceLimit,
   evaluateWorkspacePlanLimit,
-  evaluateWorkspacePlanUsage,
+  evaluateWorkspaceQuotaSnapshot,
   parseWorkspacePlanFeatureConfig,
   type WorkspacePlanFeatureConfig
 } from "./workspace-plan-limits.js";
@@ -120,18 +120,17 @@ test("treats null as unlimited and reports no finite remaining capacity", () => 
   });
 });
 
-test("evaluates all workspace quota dimensions from one usage snapshot", () => {
-  const evaluation = evaluateWorkspacePlanUsage(
+test("evaluates workspace-wide and per-project quota dimensions separately", () => {
+  const evaluation = evaluateWorkspaceQuotaSnapshot(
     validConfig,
     {
       projects: 2,
       members: 1,
-      plansPerProject: 4,
-      connectedChatsPerProject: 1
+      project: { plans: 4, connectedChats: 1 }
     },
     {
       projects: 1,
-      plansPerProject: 1
+      projectPlans: 1
     }
   );
 
@@ -139,9 +138,27 @@ test("evaluates all workspace quota dimensions from one usage snapshot", () => {
   assert.equal(evaluation.projects.remaining, 1);
   assert.equal(evaluation.members.allowed, false);
   assert.equal(evaluation.members.remaining, 0);
-  assert.equal(evaluation.plansPerProject.allowed, true);
-  assert.equal(evaluation.connectedChatsPerProject.allowed, true);
-  assert.equal(evaluation.connectedChatsPerProject.requested, 1);
+  assert.equal(evaluation.project.plansPerProject.allowed, true);
+  assert.equal(evaluation.project.connectedChatsPerProject.allowed, true);
+  assert.equal(evaluation.project.connectedChatsPerProject.requested, 1);
+});
+
+test("does not aggregate plans or connected chats across projects", () => {
+  const firstProject = evaluateWorkspaceQuotaSnapshot(validConfig, {
+    projects: 2,
+    members: 2,
+    project: { plans: 5, connectedChats: 2 }
+  });
+  const secondProject = evaluateWorkspaceQuotaSnapshot(validConfig, {
+    projects: 2,
+    members: 2,
+    project: { plans: 1, connectedChats: 1 }
+  });
+
+  assert.equal(firstProject.project.plansPerProject.allowed, false);
+  assert.equal(firstProject.project.connectedChatsPerProject.allowed, false);
+  assert.equal(secondProject.project.plansPerProject.allowed, true);
+  assert.equal(secondProject.project.connectedChatsPerProject.allowed, true);
 });
 
 test("rejects invalid usage and requested amounts", () => {
