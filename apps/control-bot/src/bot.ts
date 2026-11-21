@@ -33,6 +33,13 @@ import {
   verifyPlatformProviderConnection
 } from "./platform-provider-connection-service.js";
 import { platformProviderCredentialVerifiers } from "./platform-provider-verifiers.js";
+import {
+  grantManualSubscriptionAccess,
+  grantTrialSubscriptionAccess,
+  listActiveProjectSubscriptions,
+  ManualSubscriptionAccessError,
+  revokeSubscriptionAccessManually
+} from "./manual-subscription-access-service.js";
 import { parseWorkspacePlanFeatureConfig } from "./workspace-plan-limits.js";
 import {
   formatWorkspaceBillingOverview,
@@ -1727,6 +1734,205 @@ export function createControlBot(token: string): Bot {
     } catch (error) {
       console.error("Control bot /restoreproject failed:", error);
       await ctx.reply(formatWorkspaceQuotaError(error));
+    }
+  });
+
+  bot.command("grantaccess", async (ctx) => {
+    const fields = String(ctx.match ?? "").split("|").map((value) => value.trim());
+    if (fields.length < 3 || fields.length > 4 || !fields[0] || !fields[1] || !fields[2]) {
+      await ctx.reply(
+        "Формат: /grantaccess PROJECT_ID | TELEGRAM_USER_ID | PLAN_ID | DAYS\n" +
+        "DAYS необязателен: без него используется срок тарифа, 0 означает бессрочный доступ.\n" +
+        "ID площадок и тарифов можно посмотреть командами /projects, /plans и /chats."
+      );
+      return;
+    }
+    const [projectId, telegramUserId, planId, daysText] = fields;
+    let durationDays: number | null | undefined;
+    if (daysText !== undefined) {
+      if (!/^\d+$/.test(daysText)) {
+        await ctx.reply("DAYS должен быть целым числом от 0 до 3650.");
+        return;
+      }
+      durationDays = Number(daysText) === 0 ? null : Number(daysText);
+    }
+    try {
+      const actor = await upsertTelegramUser(ctx);
+      const { workspace, role } = await getActiveWorkspace(actor);
+      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
+        await ctx.reply("Ручную выдачу доступа могут выполнять только владелец или администратор пространства.");
+        return;
+      }
+      const result = await grantManualSubscriptionAccess({
+        workspaceId: workspace.id,
+        projectId: projectId as string,
+        planId: planId as string,
+        telegramUserId: telegramUserId as string,
+        actorUserId: actor.id,
+        ...(durationDays !== undefined ? { durationDays } : {})
+      });
+      await ctx.reply(
+        `Ручной доступ поставлен в очередь.\nПроект: «${result.projectName}»\nТариф: «${result.planTitle}»\n` +
+        `Telegram ID: ${result.telegramUserId}\nСрок: ${result.endsAt ? result.endsAt.toLocaleString("ru-RU") : "бессрочно"}\n` +
+        `Площадок: ${result.destinations}\nПодписка: ${result.subscriptionId}\n\n` +
+        (result.renewedExistingGrant
+          ? "Срок существующей ручной подписки продлён."
+          : "SubPilot выдаст приглашения фоновым обработчиком. Платёж не создавался.")
+      );
+    } catch (error) {
+      if (error instanceof ManualSubscriptionAccessError) {
+        const messages: Record<string, string> = {
+          INVALID_TELEGRAM_USER_ID: "Telegram ID должен быть положительным числом.",
+          INVALID_DURATION: "Срок должен быть от 1 до 3650 дней; 0 означает бессрочный доступ.",
+          ACTOR_NOT_AUTHORIZED: "Только владелец или администратор пространства может выдавать доступ.",
+          PROJECT_NOT_FOUND: "Проект не найден в активном пространстве или он архивирован.",
+          PLAN_NOT_AVAILABLE: "Активный тариф проекта не найден.",
+          NO_PLAN_DESTINATIONS: "У тарифа нет подключённых площадок.",
+          TRIAL_NOT_CONFIGURED: "Для этого тарифа не задан пробный срок. Укажите DAYS явно.",
+          TRIAL_ALREADY_USED: "Пробный доступ уже использовался или у клиента есть действующая подписка на этот тариф.",
+          SUBSCRIPTION_NOT_FOUND: "Подписка не найдена в активном пространстве.",
+          SUBSCRIPTION_NOT_ACTIVE: "Подписка уже не активна."
+        };
+        await ctx.reply(messages[error.code] ?? "Не удалось выдать доступ.");
+      } else {
+        console.error("Manual access grant failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось выдать доступ. Изменение не было подтверждено.");
+      }
+    }
+  });
+
+  bot.command("trialaccess", async (ctx) => {
+    const fields = String(ctx.match ?? "").split("|").map((value) => value.trim());
+    if (fields.length < 3 || fields.length > 4 || !fields[0] || !fields[1] || !fields[2]) {
+      await ctx.reply(
+        "Формат: /trialaccess PROJECT_ID | TELEGRAM_USER_ID | PLAN_ID | DAYS\n" +
+        "DAYS необязателен, если в настройках тарифа уже задан trialDays."
+      );
+      return;
+    }
+    const [projectId, telegramUserId, planId, daysText] = fields;
+    let durationDays: number | undefined;
+    if (daysText !== undefined) {
+      if (!/^\d+$/.test(daysText) || Number(daysText) < 1 || Number(daysText) > 3650) {
+        await ctx.reply("DAYS должен быть целым числом от 1 до 3650.");
+        return;
+      }
+      durationDays = Number(daysText);
+    }
+    try {
+      const actor = await upsertTelegramUser(ctx);
+      const { workspace, role } = await getActiveWorkspace(actor);
+      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
+        await ctx.reply("Пробный доступ могут выдавать только владелец или администратор пространства.");
+        return;
+      }
+      const result = await grantTrialSubscriptionAccess({
+        workspaceId: workspace.id,
+        projectId: projectId as string,
+        planId: planId as string,
+        telegramUserId: telegramUserId as string,
+        actorUserId: actor.id,
+        ...(durationDays !== undefined ? { durationDays } : {})
+      });
+      await ctx.reply(
+        `Пробный доступ создан.\nПроект: «${result.projectName}»\nТариф: «${result.planTitle}»\n` +
+        `Telegram ID: ${result.telegramUserId}\nОкончание: ${result.endsAt.toLocaleString("ru-RU")}\n` +
+        `Площадок: ${result.destinations}\nПодписка: ${result.subscriptionId}\n\n` +
+        "Приглашения будут выданы фоновым обработчиком. Платёж не создавался."
+      );
+    } catch (error) {
+      if (error instanceof ManualSubscriptionAccessError) {
+        const messages: Record<string, string> = {
+          INVALID_TELEGRAM_USER_ID: "Telegram ID должен быть положительным числом.",
+          INVALID_DURATION: "Пробный срок должен быть от 1 до 3650 дней.",
+          ACTOR_NOT_AUTHORIZED: "Только владелец или администратор пространства может выдавать пробный доступ.",
+          PROJECT_NOT_FOUND: "Проект не найден в активном пространстве или он архивирован.",
+          PLAN_NOT_AVAILABLE: "Активный тариф проекта не найден.",
+          NO_PLAN_DESTINATIONS: "У тарифа нет подключённых площадок.",
+          TRIAL_NOT_CONFIGURED: "Для этого тарифа не задан пробный срок. Укажите DAYS явно.",
+          TRIAL_ALREADY_USED: "Пробный доступ уже использовался или у клиента есть действующая подписка на этот тариф."
+        };
+        await ctx.reply(messages[error.code] ?? "Не удалось выдать пробный доступ.");
+      } else {
+        console.error("Trial access grant failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось выдать пробный доступ.");
+      }
+    }
+  });
+
+  bot.command("activesubscriptions", async (ctx) => {
+    const projectId = String(ctx.match ?? "").trim();
+    if (!projectId) {
+      await ctx.reply("Формат: /activesubscriptions PROJECT_ID");
+      return;
+    }
+    try {
+      const actor = await upsertTelegramUser(ctx);
+      const { workspace, role } = await getActiveWorkspace(actor);
+      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
+        await ctx.reply("Список подписок доступен только владельцу или администратору пространства.");
+        return;
+      }
+      const items = await listActiveProjectSubscriptions({
+        workspaceId: workspace.id,
+        projectId
+      });
+      if (items.length === 0) {
+        await ctx.reply("В этом проекте нет активных подписок.");
+        return;
+      }
+      const rows = items.map((item, index) =>
+        `${index + 1}. ${item.plan.title} · ${item.customer.firstName ?? "Покупатель"}` +
+        ` (ID ${item.customer.telegramUserId.toString()})\n` +
+        `Тип: ${item.grantType.toLowerCase()} · окончание: ${item.endsAt ? item.endsAt.toLocaleString("ru-RU") : "без срока"}\n` +
+        `ID: ${item.id}`
+      );
+      await ctx.reply(
+        "Активные подписки (показаны до 20):\n\n" +
+        rows.join("\n\n") +
+        "\n\nДосрочный отзыв: /revokeaccess SUBSCRIPTION_ID"
+      );
+    } catch (error) {
+      console.error("Active subscriptions list failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось получить список активных подписок.");
+    }
+  });
+
+  bot.command("revokeaccess", async (ctx) => {
+    const subscriptionId = String(ctx.match ?? "").trim();
+    if (!/^[A-Za-z0-9_-]{10,40}$/.test(subscriptionId)) {
+      await ctx.reply("Формат: /revokeaccess SUBSCRIPTION_ID\nСписок: /activesubscriptions PROJECT_ID");
+      return;
+    }
+    try {
+      const actor = await upsertTelegramUser(ctx);
+      const { workspace, role } = await getActiveWorkspace(actor);
+      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
+        await ctx.reply("Досрочно отзывать доступ могут только владелец или администратор пространства.");
+        return;
+      }
+      const result = await revokeSubscriptionAccessManually({
+        subscriptionId,
+        workspaceId: workspace.id,
+        actorUserId: actor.id
+      });
+      await ctx.reply(
+        `Досрочный отзыв принят.\nПроект: «${result.projectName}»\nТариф: «${result.planTitle}»\n` +
+        `Подписка: ${result.subscriptionId}\n\nФоновый обработчик удалит активные приглашения и отзовёт доступ. ` +
+        "Если у клиента есть другая действующая подписка на ту же площадку, она останется активной."
+      );
+    } catch (error) {
+      if (error instanceof ManualSubscriptionAccessError) {
+        const messages: Record<string, string> = {
+          ACTOR_NOT_AUTHORIZED: "Только владелец или администратор пространства может отзывать доступ.",
+          SUBSCRIPTION_NOT_FOUND: "Подписка не найдена в активном пространстве.",
+          SUBSCRIPTION_NOT_ACTIVE: "Подписка уже не активна."
+        };
+        await ctx.reply(messages[error.code] ?? "Не удалось отозвать доступ.");
+      } else {
+        console.error("Manual access revocation failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось отозвать доступ.");
+      }
     }
   });
 
@@ -3555,7 +3761,10 @@ export function createControlBot(token: string): Bot {
       "/renameproject ID Название — переименовать проект\n" +
       "/archiveproject ID — архивировать проект\n" +
       "/restoreproject ID — восстановить проект\n" +
-      "/createplan ID | Название | Цена | Дней — создать тариф\n" +
+      "/createplan ID | Название | Цена | Дней — создать тариф\n" +      "/grantaccess PROJECT_ID | TELEGRAM_ID | PLAN_ID | DAYS — вручную выдать доступ\n" +
+      "/trialaccess PROJECT_ID | TELEGRAM_ID | PLAN_ID | DAYS — выдать пробный доступ\n" +
+      "/activesubscriptions PROJECT_ID — список активных подписок\n" +
+      "/revokeaccess SUBSCRIPTION_ID — досрочно отозвать доступ\n" +
       "/plans ID — посмотреть тарифы\n" +
       "/payments ID — история платежей проекта\n" +
       "/testnotifications — отправить четыре тестовых уведомления себе\n" +
