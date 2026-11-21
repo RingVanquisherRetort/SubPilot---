@@ -251,10 +251,12 @@ export class YooKassaCredentialVerifier implements PaymentProviderCredentialVeri
 
   async verifyCredentials(input: ProviderCredentialVerificationInput): Promise<ProviderCredentialVerificationResult> {
     try {
-      const safe = normalizeCredentials({
-        shopId: input.credentials.shopId,
-        secretKey: input.credentials.secretKey
-      });
+      const shopId = input.credentials.shopId;
+      const secretKey = input.credentials.secretKey;
+      if (typeof shopId !== "string" || typeof secretKey !== "string") {
+        return { ok: false, errorCode: "INVALID_CREDENTIAL_FORMAT" };
+      }
+      const safe = normalizeCredentials({ shopId, secretKey });
       const response = await this.fetchImpl(API_BASE + "/payments?limit=1", {
         method: "GET",
         headers: {
