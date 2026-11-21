@@ -162,3 +162,12 @@ export type {
   TrackedExternalPaymentStatus,
   ExternalPaymentEventDecision
 } from "./external-payment-reconciliation.js";
+
+export {
+  PaymentProviderCredentialVerifierRegistry
+} from "./provider-verification.js";
+export type {
+  PaymentProviderCredentialVerifier,
+  ProviderCredentialVerificationInput,
+  ProviderCredentialVerificationResult
+} from "./provider-verification.js";
