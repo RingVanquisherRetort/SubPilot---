@@ -11,6 +11,8 @@ import {
   type InvitableWorkspaceRole
 } from "./workspace-permissions.js";
 import { isPrivateControlChat } from "./private-control-context.js";
+import { isPlatformAdminTelegramId } from "./platform-admin.js";
+import { parsePlatformPlanUpsertInput } from "./platform-plan-catalog.js";
 import {
   formatWorkspaceBillingOverview,
   getWorkspaceBillingOverview
@@ -2985,6 +2987,175 @@ export function createControlBot(token: string): Bot {
     } catch (error) {
       console.error("Notification smoke test failed:", error instanceof Error ? error.name : "UnknownError");
       await ctx.reply("Не удалось отправить тестовые уведомления. Проверьте доступность Telegram Bot API.");
+    }
+  });
+
+  bot.command("platformplans", async (ctx) => {
+    if (ctx.chat.type !== "private" || !ctx.from ||
+        !isPlatformAdminTelegramId(ctx.from.id, process.env.PLATFORM_ADMIN_TELEGRAM_IDS)) {
+      await ctx.reply("Команда доступна только уполномоченным операторам SubPilot в личном чате.");
+      return;
+    }
+
+    try {
+      const plans = await prisma.platformPlan.findMany({
+        include: { _count: { select: { workspaceBillings: true } } },
+        orderBy: [{ isActive: "desc" }, { createdAt: "asc" }],
+        take: 100
+      });
+
+      if (plans.length === 0) {
+        await ctx.reply("Каталог тарифов SubPilot пока пуст. Добавить тариф: /platformplan CODE | Название | Цена | Валюта | Дней | Проекты | Участники | Тарифы/проект | Площадки/проект | Описание");
+        return;
+      }
+
+      const lines = plans.map((plan) => {
+        let limits = "лимиты невалидны";
+        try {
+          const parsed = parseWorkspacePlanFeatureConfig(plan.features);
+          const value = (key: keyof typeof parsed.limits) =>
+            parsed.limits[key] === null ? "∞" : String(parsed.limits[key]);
+          limits = `проекты ${value("projects")}, участники ${value("members")}, тарифы/проект ${value("plansPerProject")}, площадки/проект ${value("connectedChatsPerProject")}`;
+        } catch {
+          // Do not present malformed feature data as unlimited.
+        }
+        return [
+          `${plan.isActive ? "✅" : "⏸"} ${plan.title} (${plan.code})`,
+          `Цена: ${plan.price.toString()} ${plan.currency} / ${plan.billingPeriodDays} дн.`,
+          `Назначено пространствам: ${plan._count.workspaceBillings}`,
+          `Лимиты: ${limits}`
+        ].join("\n");
+      });
+
+      await ctx.reply("Каталог тарифов SubPilot:\n\n" + lines.join("\n\n"));
+    } catch (error) {
+      console.error("Platform plan catalogue read failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось загрузить каталог тарифов.");
+    }
+  });
+
+  bot.command("platformplan", async (ctx) => {
+    if (ctx.chat.type !== "private" || !ctx.from ||
+        !isPlatformAdminTelegramId(ctx.from.id, process.env.PLATFORM_ADMIN_TELEGRAM_IDS)) {
+      await ctx.reply("Команда доступна только уполномоченным операторам SubPilot в личном чате.");
+      return;
+    }
+
+    try {
+      const input = parsePlatformPlanUpsertInput(String(ctx.match ?? ""));
+      const actor = await upsertTelegramUser(ctx);
+      const plan = await prisma.platformPlan.upsert({
+        where: { code: input.code },
+        create: {
+          code: input.code,
+          title: input.title,
+          description: input.description,
+          price: input.price,
+          currency: input.currency,
+          billingPeriodDays: input.billingPeriodDays,
+          features: input.features,
+          isActive: true
+        },
+        update: {
+          title: input.title,
+          description: input.description,
+          price: input.price,
+          currency: input.currency,
+          billingPeriodDays: input.billingPeriodDays,
+          features: input.features
+        }
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          actorUserId: actor.id,
+          action: "PLATFORM_PLAN_UPSERT",
+          resourceType: "PlatformPlan",
+          resourceId: plan.id,
+          metadata: {
+            code: plan.code,
+            title: plan.title,
+            price: plan.price.toString(),
+            currency: plan.currency,
+            billingPeriodDays: plan.billingPeriodDays,
+            features: input.features
+          }
+        }
+      });
+
+      await ctx.reply(
+        `Тариф SubPilot «${plan.title}» (${plan.code}) сохранён.\n` +
+        `Цена: ${plan.price.toString()} ${plan.currency} за ${plan.billingPeriodDays} дн.\n` +
+        "Лимиты сохранены в версии схемы 1. Уже назначенный статус активности не изменён."
+      );
+    } catch (error) {
+      if (error instanceof Error && /^(Формат:|Код тарифа|Название тарифа|Цена должна|Валюта должна|Период оплаты|Лимит «|Описание тарифа)/.test(error.message)) {
+        await ctx.reply(error.message);
+        return;
+      }
+      console.error("Platform plan upsert failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось сохранить тариф SubPilot. Проверьте данные и повторите попытку.");
+    }
+  });
+
+  bot.command("platformplanstatus", async (ctx) => {
+    if (ctx.chat.type !== "private" || !ctx.from ||
+        !isPlatformAdminTelegramId(ctx.from.id, process.env.PLATFORM_ADMIN_TELEGRAM_IDS)) {
+      await ctx.reply("Команда доступна только уполномоченным операторам SubPilot в личном чате.");
+      return;
+    }
+
+    const fields = String(ctx.match ?? "").trim().split(/\s+/);
+    const code = fields[0];
+    const requestedStatus = fields[1]?.toLowerCase();
+    if (!code || !["active", "off"].includes(requestedStatus ?? "") || fields.length !== 2) {
+      await ctx.reply("Формат: /platformplanstatus CODE active|off");
+      return;
+    }
+
+    try {
+      const actor = await upsertTelegramUser(ctx);
+      const updated = await prisma.$transaction(async (tx) => {
+        const plan = await tx.platformPlan.findUnique({
+          where: { code },
+          include: { _count: { select: { workspaceBillings: true } } }
+        });
+        if (!plan) throw new Error("PLAN_NOT_FOUND");
+        const activate = requestedStatus === "active";
+        if (!activate && plan._count.workspaceBillings > 0) {
+          throw new Error("PLAN_HAS_ASSIGNED_WORKSPACES");
+        }
+        if (plan.isActive === activate) return plan;
+        const result = await tx.platformPlan.update({
+          where: { id: plan.id },
+          data: { isActive: activate }
+        });
+        await tx.auditLog.create({
+          data: {
+            actorUserId: actor.id,
+            action: activate ? "PLATFORM_PLAN_ACTIVATED" : "PLATFORM_PLAN_DEACTIVATED",
+            resourceType: "PlatformPlan",
+            resourceId: plan.id,
+            metadata: { code: plan.code, assignedWorkspaces: plan._count.workspaceBillings }
+          }
+        });
+        return result;
+      });
+
+      await ctx.reply(
+        updated.isActive
+          ? `Тариф «${updated.title}» активирован в каталоге.`
+          : `Тариф «${updated.title}» отключён. Назначенных рабочих пространств нет.`
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === "PLAN_NOT_FOUND") {
+        await ctx.reply("Тариф с таким кодом не найден.");
+      } else if (error instanceof Error && error.message === "PLAN_HAS_ASSIGNED_WORKSPACES") {
+        await ctx.reply("Нельзя отключить тариф, пока он назначен хотя бы одному рабочему пространству. Сначала безопасно переведите пространства на другой тариф.");
+      } else {
+        console.error("Platform plan status update failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось изменить статус тарифа.");
+      }
     }
   });
 
