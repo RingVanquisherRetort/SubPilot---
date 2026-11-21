@@ -39,6 +39,10 @@ import {
   getWorkspaceBillingOverview
 } from "./workspace-billing-service.js";
 import {
+  listWorkspaceFailedAccessDeliveries,
+  retryWorkspaceFailedAccessDelivery
+} from "./workspace-access-delivery-service.js";
+import {
   assertWorkspaceQuotaInTransaction,
   formatWorkspaceQuotaError,
   isWorkspaceQuotaRestriction,
@@ -2162,6 +2166,74 @@ export function createControlBot(token: string): Bot {
     }
   });
 
+  bot.command("faileddeliveries", async (ctx) => {
+    if (ctx.chat.type !== "private") {
+      await ctx.reply("Просматривать ошибки выдачи доступа можно только в личном чате с SubPilot.");
+      return;
+    }
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace, role } = await getActiveWorkspace(user);
+      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
+        await ctx.reply("Просматривать ошибки выдачи доступа могут только владелец или администратор пространства.");
+        return;
+      }
+      const failed = await listWorkspaceFailedAccessDeliveries(workspace.id);
+      if (failed.length === 0) {
+        await ctx.reply("В активном пространстве нет выдач доступа, требующих ручного восстановления.");
+        return;
+      }
+      const lines = failed.map((grant, index) => {
+        const chatName = grant.connectedChat.title ??
+          grant.connectedChat.username ??
+          grant.connectedChat.telegramChatId.toString();
+        return `${index + 1}. Проект «${grant.subscription.project.name}» · ${grant.subscription.plan.title}\n` +
+          `Площадка: ${chatName}\n` +
+          `Попыток: ${grant.deliveryAttempts}/10 · Ошибка: ${grant.deliveryLastError ?? "не указана"}\n` +
+          `ID выдачи: ${grant.id}`;
+      });
+      await ctx.reply(
+        "Не удалось автоматически выдать доступ (показаны до 10 записей):\n\n" +
+        lines.join("\n\n") +
+        "\n\nПосле исправления прав бота можно запустить: /retrydelivery ID"
+      );
+    } catch (error) {
+      console.error("Control bot /faileddeliveries failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось загрузить ошибки выдачи доступа.");
+    }
+  });
+
+  bot.command("retrydelivery", async (ctx) => {
+    const grantId = String(ctx.match ?? "").trim();
+    if (!/^[A-Za-z0-9_-]{10,40}$/.test(grantId)) {
+      await ctx.reply("Формат: /retrydelivery ACCESS_GRANT_ID\nСписок: /faileddeliveries");
+      return;
+    }
+    if (ctx.chat.type !== "private") {
+      await ctx.reply("Восстанавливать выдачу доступа можно только в личном чате с SubPilot.");
+      return;
+    }
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace, role } = await getActiveWorkspace(user);
+      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
+        await ctx.reply("Восстанавливать выдачу доступа могут только владелец или администратор пространства.");
+        return;
+      }
+      const restored = await retryWorkspaceFailedAccessDelivery({
+        grantId,
+        workspaceId: workspace.id,
+        actorUserId: user.id
+      });
+      await ctx.reply(restored
+        ? "Выдача доступа возвращена в очередь. Повторная попытка будет выполнена worker-процессом с обычным контролем прав и статуса подписки."
+        : "Не удалось восстановить выдачу. Проверьте ID, статус подписки, активное пространство и права.");
+    } catch (error) {
+      console.error("Control bot /retrydelivery failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось восстановить выдачу доступа.");
+    }
+  });
+
   bot.command("refundpayment", async (ctx) => {
     const paymentId = String(ctx.match ?? "").trim();
 
@@ -3489,6 +3561,8 @@ export function createControlBot(token: string): Bot {
       "/testnotifications — отправить четыре тестовых уведомления себе\n" +
       "/failednotifications — показать уведомления с исчерпанными попытками\n" +
       "/retrynotification ID — вернуть уведомление в очередь\n" +
+      "/faileddeliveries — показать выдачи доступа с исчерпанными попытками\n" +
+      "/retrydelivery ID — вернуть выдачу доступа в очередь\n" +
       "/refundpayment ID — вернуть платёж Stars\n" +
       "/chats ID — список каналов и групп проекта\n" +
       "/linkchat PLAN_ID CHAT_ID — привязать площадку к тарифу\n" +
