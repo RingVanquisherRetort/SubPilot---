@@ -12,6 +12,7 @@ import {
 } from "./workspace-permissions.js";
 import { isPrivateControlChat } from "./private-control-context.js";
 import { isPlatformAdminTelegramId } from "./platform-admin.js";
+import { PlatformRefundError, requestPlatformPaymentRefund } from "./platform-refund-service.js";
 import { parsePlatformPlanUpsertInput } from "./platform-plan-catalog.js";
 import {
   PlatformPlanCatalogError,
@@ -3069,6 +3070,54 @@ export function createControlBot(token: string): Bot {
     } catch (error) {
       console.error("Notification smoke test failed:", error instanceof Error ? error.name : "UnknownError");
       await ctx.reply("Не удалось отправить тестовые уведомления. Проверьте доступность Telegram Bot API.");
+    }
+  });
+
+  bot.command("platformrefund", async (ctx) => {
+    if (ctx.chat.type !== "private" || !ctx.from ||
+        !isPlatformAdminTelegramId(ctx.from.id, process.env.PLATFORM_ADMIN_TELEGRAM_IDS)) {
+      await ctx.reply("Команда доступна только уполномоченным операторам SubPilot в личном чате.");
+      return;
+    }
+
+    const paymentId = String(ctx.match ?? "").trim();
+    if (!/^[A-Za-z0-9_-]{10,40}$/.test(paymentId)) {
+      await ctx.reply("Формат: /platformrefund PAYMENT_ID");
+      return;
+    }
+
+    try {
+      const actor = await upsertTelegramUser(ctx);
+      const result = await requestPlatformPaymentRefund({
+        paymentId,
+        actorTelegramId: ctx.from.id,
+        actorUserId: actor.id
+      });
+      if (result.providerStatus === "canceled") {
+        await ctx.reply(
+          `Провайдер отклонил возврат платежа ${result.paymentId}. Подписка не менялась. Проверьте кабинет YooKassa и причину отказа.`
+        );
+        return;
+      }
+      await ctx.reply(
+        `Запрос на полный возврат отправлен в YooKassa.\nПлатёж: ${result.paymentId}\nВозврат: ${result.providerRefundId}\nСтатус провайдера: ${result.providerStatus}\nПопытка: ${result.attempt}\n\nSubPilot изменит биллинговый период только после проверенного webhook refund.succeeded. Ответ API или скриншот не снимают доступ.`
+      );
+    } catch (error) {
+      if (error instanceof PlatformRefundError) {
+        const messages: Record<string, string> = {
+          INVALID_ACTOR: "Операция не разрешена для этого пользователя.",
+          PAYMENT_NOT_FOUND: "Платёж не найден.",
+          PAYMENT_NOT_REFUNDABLE: "Полный возврат доступен только для успешно оплаченного платежа.",
+          REFUND_IN_PROGRESS: "Запрос возврата уже обрабатывается. Повторите проверку позже.",
+          PROVIDER_CONNECTION_NOT_FOUND: "Подключение YooKassa для платежа не найдено.",
+          INVALID_PROVIDER_CREDENTIALS: "Не удалось расшифровать реквизиты YooKassa.",
+          PROVIDER_REQUEST_FAILED: "YooKassa не подтвердила создание возврата. Статус сохранён для повторной сверки; повторный запрос использует тот же ключ идемпотентности."
+        };
+        await ctx.reply(messages[error.code] ?? "Не удалось запросить возврат.");
+      } else {
+        console.error("Platform payment refund request failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось запросить возврат. Секреты провайдера не записывались в журнал.");
+      }
     }
   });
 
