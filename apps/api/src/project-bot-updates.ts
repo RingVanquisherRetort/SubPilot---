@@ -1138,7 +1138,7 @@ export async function handleProjectBotUpdate(
           lastBotStatusSequenceEpoch: sequenceEpoch
         }
       });
-    }, { isolationLevel: "Serializable" });
+    }, { isolationLevel: "ReadCommitted" });
   });
 
   const showPlans = async (ctx: Context, edit = false): Promise<void> => {
