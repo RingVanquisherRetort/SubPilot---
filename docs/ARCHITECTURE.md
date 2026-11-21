@@ -77,7 +77,7 @@ The `PlatformPlan.features` JSON field uses a versioned configuration. Version 1
 }
 ```
 
-Each value is a non-negative safe integer; `null` explicitly means unlimited. The validator rejects unsupported versions, missing or unknown keys, and malformed values. A pure evaluator checks current usage plus the requested increment against a named limit. This is configuration groundwork only: the plan catalogue, workspace-to-plan assignment, runtime usage counting and mutation-time enforcement are still pending. No commercial prices or quota values are hard-coded.
+Each value is a non-negative safe integer; `null` explicitly means unlimited. The validator rejects unsupported versions, missing or unknown keys, and malformed values. Pure evaluators check a named quota or all quota dimensions against a usage snapshot plus requested increments. This is configuration groundwork only: the plan catalogue, workspace-to-plan assignment, database-backed usage counting and mutation-time enforcement are still pending. No commercial prices or quota values are hard-coded.
 
 The **Start Without Upfront Cost** offer (seven days followed by a 14% commission) is retained as an isolated commercial experiment and is not part of the default launch pricing or creator checkout flow:
 - The primary launch model is fixed workspace billing; there is no default SubPilot percentage on creator transactions.
