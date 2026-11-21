@@ -109,3 +109,13 @@ test("rejects invalid usage and requested amounts", () => {
   assert.throws(() => evaluateWorkspaceLimit(5, 1, 0), /Requested amount/);
   assert.throws(() => evaluateWorkspaceLimit(5, 1, 1.5), /Requested amount/);
 });
+
+test("evaluates a resource by its key in the validated plan configuration", () => {
+  const allowed = evaluateWorkspacePlanLimit(validConfig, "projects", 2);
+  const blocked = evaluateWorkspacePlanLimit(validConfig, "projects", 3);
+
+  assert.equal(allowed.allowed, true);
+  assert.equal(allowed.remaining, 1);
+  assert.equal(blocked.allowed, false);
+  assert.equal(blocked.remaining, 0);
+});
