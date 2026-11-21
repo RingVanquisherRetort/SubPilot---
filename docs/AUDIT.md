@@ -78,6 +78,7 @@ These items have been inspected in source; the table does not claim that every s
 
 - The validated code snapshot `9679a69` completed migrations against clean PostgreSQL, generated Prisma Client, passed TypeScript checks and passed 56 tests (56 pass, 0 fail, 0 skipped). This includes PostgreSQL advisory-lock and webhook-lease integration tests.
 - `docs/AUDIT.md` and later documentation changes have their own CI runs; verify the latest branch head rather than reusing an earlier green run.
+- Code snapshot `7e824d0` completed CI run `44867867807`: clean PostgreSQL migrations, Prisma Client generation, TypeScript checks and 68 tests (68 pass, 0 fail, 0 skipped). The run includes the PostgreSQL lifecycle-lease ownership/expiry integration test. The audit-document-only commit is validated separately.
 - A green CI run validates the checks configured in `.github/workflows/ci.yml`; it does not prove live BotFather setup, actual Stars payment, Telegram chat permissions or end-to-end subscriber access behavior.
 - No production merge or deployment is authorized by this audit.
 
