@@ -149,7 +149,7 @@ test("project analytics keep currencies separate and audit history hides raw met
       workspaceId: workspace.id,
       projectId: project.id,
       periodDays: 30,
-      now
+      now: new Date(Date.now() + 60_000)
     });
     assert.equal(report.activeSubscriptions, 2);
     assert.equal(report.uniqueActiveCustomers, 2);
