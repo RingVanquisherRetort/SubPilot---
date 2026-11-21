@@ -58,6 +58,8 @@ The following commands remain available as an advanced fallback:
 - `/payments PROJECT_ID` — view recent payments.
 - `/refundpayment PAYMENT_ID` — issue or reconcile a Telegram Stars refund; remaining paid subscription time is recalculated when payment snapshots allow it.
 - `/testnotifications` — send four sample lifecycle notifications to your own private chat with the central bot. This smoke test does not contact project owners or subscribers.
+- `/failednotifications` and `/retrynotification ID` — inspect/requeue exhausted owner notifications in the active workspace.
+- `/faileddeliveries` and `/retrydelivery ACCESS_GRANT_ID` — inspect/requeue subscription access grants that reached the 10-attempt dead-letter threshold. Available to workspace owners/admins in a private chat; manual retries are audited.
 
 The control bot deletes the BotFather token message on a best-effort basis. If the message remains visible, revoke the token in BotFather and issue a new one. Project-bot webhook activation requires `PUBLIC_API_URL` and a reachable HTTPS API.
 
