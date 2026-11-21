@@ -8,6 +8,7 @@
 - [x] Add local PostgreSQL/Redis infrastructure.
 - [x] Add a minimal control-bot flow: register Telegram user, create personal workspace, create/list projects.
 - [x] Generate Prisma Client and apply the initial baseline against clean PostgreSQL in CI; run TypeScript checks and unit tests.
+- [x] Verify forward migration compatibility from the original baseline using representative legacy records and assert data preservation/backfills in CI.
 
 ## Stage 2 — Workspace and project management
 
