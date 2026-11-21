@@ -110,6 +110,16 @@ The **Start Without Upfront Cost** offer (seven days followed by a 14% commissio
 
 Platform plan limits are applied to workspaces, not to an individual creator's content transactions. Creator payments, platform subscription payments and platform commission receivables remain separate accounting domains.
 
+### Manual subscription access and entitlement safety
+
+The `Subscription.grantType` field distinguishes `PAID`, `MANUAL` and `TRIAL` subscriptions. Historical rows default to `PAID`; manual/trial entitlements are not represented as successful payment records. The central control bot exposes workspace OWNER/ADMIN-only operations in private chat:
+- `/grantaccess PROJECT_ID | TELEGRAM_USER_ID | PLAN_ID | DAYS` grants a time-limited or lifetime entitlement. Repeating a manual grant for the same customer and plan extends the same active manual subscription rather than creating duplicate rows.
+- `/trialaccess PROJECT_ID | TELEGRAM_USER_ID | PLAN_ID | DAYS` issues a trial. If DAYS is omitted, the plan's `trialDays` is used. A customer can receive one trial per project customer/plan, and an existing active subscription on that plan blocks a trial.
+- `/activesubscriptions PROJECT_ID` lists active subscriptions and their IDs.
+- `/revokeaccess SUBSCRIPTION_ID` marks an active subscription CANCELLED and records an audit event. The lifecycle worker revokes unused invite links and removes the subscriber from chats; this request does not bypass the normal worker/Telegram permission checks.
+
+Manual grants create pending `SubscriptionAccessGrant` rows, which are delivered by the existing lifecycle worker using the project's primary bot. Delivery failures use the normal bounded retry/dead-letter mechanism. On expiry or early revocation, the worker checks for another current active subscription for the same customer and chat. If one exists, membership is preserved while the ending subscription's unused invite is revoked. This prevents ending one overlapping plan from removing access still granted by another plan.
+
 ### Telegram and regional rules
 
 The payment adapter interface is deliberately separate from the product entitlement engine. The policy gate evaluates product type, checkout surface, Telegram association and provider. Paid access to Telegram channels/groups is always classified as TELEGRAM_CHANNEL_ACCESS and requires an in-Telegram Stars checkout. Other digital goods/services offered, promoted or fulfilled by the Telegram bot/Mini App also require Stars. An independent website product may be evaluated separately only when it is genuinely not offered, promoted or fulfilled by the Telegram TPA; this is not an external-checkout route for Telegram channel access. Telegram Stars are not the route for physical goods/services. Eligible physical goods/services may use third-party payment providers under Telegram's Bot Payments rules.
