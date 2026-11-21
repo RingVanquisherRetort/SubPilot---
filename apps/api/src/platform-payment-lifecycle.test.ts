@@ -11,7 +11,7 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
   process.env.PLATFORM_BILLING_RETURN_URL = "https://tgsubpilot.ru/billing/return";
   const { prisma } = await import("@subpilot/database");
   const { encryptSecret } = await import("@subpilot/security");
-  const { createPlatformPaymentCheckout, processYooKassaWebhook } =
+  const { createPlatformPaymentCheckout, processYooKassaWebhook, PlatformPaymentLifecycleError } =
     await import("./platform-payment-lifecycle.js");
   const suffix = randomUUID().replace(/-/g, "").slice(0, 12);
   const telegramId = BigInt(Date.now()) * 1_000_000n + BigInt(Math.floor(Math.random() * 100_000));
@@ -214,6 +214,16 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
     await prisma.platformPayment.update({
       where: { id: paymentId }, data: { status: "REFUNDING" }
     });
+    await assert.rejects(
+      createPlatformPaymentCheckout({
+        ...checkoutInput,
+        idempotencyKey: "blocked-during-refund-" + suffix
+      }, { fetch: fakeFetch }),
+      (error: unknown) => error instanceof PlatformPaymentLifecycleError &&
+        error.code === "CHECKOUT_ALREADY_IN_PROGRESS"
+    );
+    assert.equal(createCalls, 1);
+
     const refundNotification = {
       type: "notification",
       event: "refund.succeeded",
