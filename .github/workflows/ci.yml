@@ -99,13 +99,13 @@ jobs:
         env:
           DATABASE_URL: postgresql://subpilot:subpilot_dev_password@localhost:5432/subpilot_upgrade?schema=public
         run: |
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/database/prisma/migrations/0_init/migration.sql
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f packages/database/prisma/migrations/0_init/migration.sql
           pnpm --filter @subpilot/database exec prisma migrate resolve --applied 0_init --config prisma.config.ts
 
       - name: Seed representative legacy records
         env:
           DATABASE_URL: postgresql://subpilot:subpilot_dev_password@localhost:5432/subpilot_upgrade?schema=public
-        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/ci/seed-legacy-upgrade.sql
+        run: psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f scripts/ci/seed-legacy-upgrade.sql
 
       - name: Apply all forward migrations to the existing database
         env:
@@ -115,7 +115,7 @@ jobs:
       - name: Verify legacy data and migration backfills
         env:
           DATABASE_URL: postgresql://subpilot:subpilot_dev_password@localhost:5432/subpilot_upgrade?schema=public
-        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/ci/assert-legacy-upgrade.sql
+        run: psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f scripts/ci/assert-legacy-upgrade.sql
 
       - name: Verify migration history
         env:
