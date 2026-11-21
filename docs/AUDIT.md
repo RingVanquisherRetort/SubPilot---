@@ -25,6 +25,8 @@
 | Roadmap distributed lifecycle lock | Corrected | PostgreSQL-backed lifecycle lease and heartbeat exist. |
 | Roadmap dead-letter monitoring | Still open | Retries exist, but no dedicated dead-letter monitoring or operator recovery interface. |
 
+| Forward migration compatibility | CI-tested | New `upgrade-validation` job recreates the original `0_init` schema, marks the baseline as applied, seeds representative legacy user/workspace/project/subscription/workspace-billing/payment rows, applies every forward migration, and asserts preservation plus the `PlatformPayment` backfill and default `Subscription.grantType`. Run `44948983957` passed this upgrade path and the standard clean-database validation (146 tests). |
+
 ## 2. Code-confirmed existing functionality
 
 These items have been inspected in source; the table does not claim that every scenario has an automated test.
