@@ -60,7 +60,7 @@ async function lockWorkspace(tx: Transaction, workspaceId: string): Promise<void
 async function setManualReview(tx: Transaction, eventId: string, reason: string): Promise<void> {
   await tx.platformPaymentWebhookEvent.update({
     where: { id: eventId },
-    data: { attempts: { increment: 1 }, lastError: reason }
+    data: { lastError: reason }
   });
 }
 async function processVerifiedEvent(input: {

@@ -72,6 +72,14 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
           confirmation: { type: "redirect", confirmation_url: "https://yookassa.ru/checkout/" + suffix }
         }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
+      if (url.endsWith("/refunds/refund_" + suffix)) {
+        return new Response(JSON.stringify({
+          id: "refund_" + suffix,
+          payment_id: providerPaymentId,
+          status: "succeeded",
+          amount: { value: "99.00", currency: "RUB" }
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
       if (url.endsWith("/payments/" + providerPaymentId)) {
         return new Response(JSON.stringify({
           id: providerPaymentId,
@@ -143,6 +151,38 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
     assert.deepEqual(second, { authenticated: true, processed: 0, duplicates: 1, manualReview: 0 });
     const billingAgain = await prisma.workspaceBilling.findUniqueOrThrow({ where: { workspaceId: workspace.id } });
     assert.equal(billingAgain.currentPeriodEnd?.getTime(), billing.currentPeriodEnd?.getTime());
+
+    const refundNotification = {
+      type: "notification",
+      event: "refund.succeeded",
+      object: {
+        id: "refund_" + suffix,
+        payment_id: providerPaymentId,
+        status: "succeeded",
+        amount: { value: "99.00", currency: "RUB" }
+      }
+    };
+    const refundResult = await processYooKassaWebhook({
+      connectionId: connection.id,
+      headers: {},
+      rawBody: JSON.stringify(refundNotification),
+      body: refundNotification
+    }, { fetch: fakeFetch });
+    assert.deepEqual(refundResult, {
+      authenticated: true,
+      processed: 0,
+      duplicates: 0,
+      manualReview: 1
+    });
+    const paymentAfterRefundNotice = await prisma.platformPayment.findUniqueOrThrow({ where: { id: paymentId } });
+    const billingAfterRefundNotice = await prisma.workspaceBilling.findUniqueOrThrow({ where: { workspaceId: workspace.id } });
+    assert.equal(paymentAfterRefundNotice.status, "SUCCEEDED");
+    assert.equal(billingAfterRefundNotice.status, "ACTIVE");
+    const refundEvent = await prisma.platformPaymentWebhookEvent.findFirstOrThrow({
+      where: { providerConnectionId: connection.id, providerEventId: "refund.succeeded:refund_" + suffix }
+    });
+    assert.equal(refundEvent.processedAt, null);
+    assert.equal(refundEvent.lastError, "REFUND_REQUIRES_MANUAL_REVIEW");
   } finally {
     if (connectionId) {
       await prisma.platformPaymentWebhookEvent.deleteMany({ where: { providerConnectionId: connectionId } });
