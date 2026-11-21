@@ -8,6 +8,12 @@ VALUES ('upgrade-workspace', 'Upgrade Workspace', 'upgrade-workspace', 'upgrade-
 INSERT INTO "Project" ("id", "workspaceId", "name", "slug", "updatedAt")
 VALUES ('upgrade-project', 'upgrade-workspace', 'Upgrade Project', 'upgrade-project', CURRENT_TIMESTAMP);
 
+INSERT INTO "ProjectCustomer" ("id", "projectId", "telegramUserId", "firstName", "updatedAt")
+VALUES ('upgrade-customer', 'upgrade-project', 9000000002, 'Legacy Customer', CURRENT_TIMESTAMP);
+
+INSERT INTO "Subscription" ("id", "projectId", "customerId", "planId", "status", "updatedAt")
+VALUES ('upgrade-subscription', 'upgrade-project', 'upgrade-customer', 'upgrade-plan', 'ACTIVE', CURRENT_TIMESTAMP);
+
 INSERT INTO "PlatformPlan" ("id", "code", "title", "price", "currency", "billingPeriodDays", "updatedAt")
 VALUES ('upgrade-plan', 'upgrade-plan', 'Upgrade Plan', 100, 'RUB', 30, CURRENT_TIMESTAMP);
 
