@@ -61,6 +61,18 @@ The following commands remain available as an advanced fallback:
 
 The control bot deletes the BotFather token message on a best-effort basis. If the message remains visible, revoke the token in BotFather and issue a new one. Project-bot webhook activation requires `PUBLIC_API_URL` and a reachable HTTPS API.
 
+## Platform operator commands
+
+Global SubPilot plan-catalogue administration is separate from workspace OWNER/ADMIN roles. It is disabled by default and requires an explicit comma-separated allowlist of numeric Telegram user IDs in `PLATFORM_ADMIN_TELEGRAM_IDS`. Telegram usernames and workspace roles do not grant platform-operator access.
+
+Available private-chat commands for allowlisted operators:
+
+- `/platformplans` — list the global catalogue and show how many workspaces are assigned to each plan.
+- `/platformplan CODE | Title | Price | Currency | PeriodDays | Projects | Members | PlansPerProject | ConnectedChatsPerProject | Description` — create or update a plan. Use `*` for explicitly unlimited quotas and `0` to disable a resource. Currency is a three-letter uppercase code; price is stored as a decimal string with up to two fractional digits.
+- `/platformplanstatus CODE active|off` — activate a catalogue item or disable it only when no workspaces are assigned to it.
+
+Every catalogue mutation is written to the audit log. An empty or malformed allowlist fails closed. Workspace-plan assignment is intentionally not exposed yet: the product still needs approved trial/paid activation rules and payment-lifecycle handling. Merely creating a catalogue item does not bill or assign it to any workspace.
+
 ## Buyer flow
 
 Each connected project bot exposes a button-first buyer interface:
