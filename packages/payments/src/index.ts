@@ -178,3 +178,6 @@ export {
   YooKassaApiError
 } from "./yookassa-adapter.js";
 export type { YooKassaCredentials, YooKassaAdapterOptions } from "./yookassa-adapter.js";
+
+export { getAccessDeliveryFailureState, MAX_ACCESS_DELIVERY_ATTEMPTS } from "./access-delivery-retry.js";
+export type { AccessDeliveryFailureState } from "./access-delivery-retry.js";
