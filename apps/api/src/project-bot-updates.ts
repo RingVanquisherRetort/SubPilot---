@@ -1270,7 +1270,11 @@ export async function handleProjectBotUpdate(
       // A renewed subscription can contain grants from multiple immutable
       // purchase snapshots. Let buyers recover every non-revoked destination.
       const chatIds = getSubscriptionGrantTelegramChatIds(subscription.accessGrants);
-      const access = await deliverSubscriptionAccess(projectBot, subscription.id, chatIds);
+      const access = await deliverSubscriptionAccess(
+        projectBot,
+        subscription.id,
+        chatIds.length > 0 ? chatIds : undefined
+      );
       if (access.links.length > 0) {
         messages.push("«" + subscription.plan.title + "»\n" + access.links.join("\n"));
       }
