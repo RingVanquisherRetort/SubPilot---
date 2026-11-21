@@ -1039,7 +1039,11 @@ export async function handleProjectBotUpdate(
     const telegramChatId = BigInt(chat.id);
     const existingChat = await prisma.connectedChat.findUnique({
       where: { projectId_telegramChatId: { projectId, telegramChatId } },
-      select: { lastBotStatusUpdateId: true, lastBotStatusSequenceEpoch: true }
+      select: {
+        isActive: true,
+        lastBotStatusUpdateId: true,
+        lastBotStatusSequenceEpoch: true
+      }
     });
     if (existingChat && !shouldProcessTelegramUpdate(
       updateId,
@@ -1050,34 +1054,83 @@ export async function handleProjectBotUpdate(
       return;
     }
 
-    const isActive = hasRequiredSubscriptionChatRights(ctx.myChatMember.new_chat_member);
+    const hasRequiredRights = hasRequiredSubscriptionChatRights(ctx.myChatMember.new_chat_member);
 
-    await prisma.connectedChat.upsert({
-      where: {
-        projectId_telegramChatId: {
-          projectId,
-          telegramChatId
+    await prisma.$transaction(async (tx) => {
+      let isActive = hasRequiredRights;
+
+      if (hasRequiredRights && !existingChat?.isActive) {
+        const project = await tx.project.findUnique({
+          where: { id: projectId },
+          select: { workspaceId: true }
+        });
+
+        if (project) {
+          // Lock the same workspace row used by control-bot quota mutations so
+          // concurrent chat activations cannot exceed the per-project limit.
+          await tx.$queryRaw`SELECT "id" FROM "Workspace" WHERE "id" = ${project.workspaceId} FOR UPDATE`;
+
+          const billing = await tx.workspaceBilling.findUnique({
+            where: { workspaceId: project.workspaceId },
+            include: { platformPlan: true }
+          });
+
+          // Legacy workspaces without an assigned platform plan are not blocked.
+          if (billing) {
+            const features = billing.platformPlan.features;
+            const validStatus = billing.status === "ACTIVE" || billing.status === "TRIALING";
+            const limits = typeof features === "object" && features !== null && !Array.isArray(features)
+              ? (features as Record<string, unknown>).limits
+              : null;
+            const chatLimit = typeof limits === "object" && limits !== null && !Array.isArray(limits)
+              ? (limits as Record<string, unknown>).connectedChatsPerProject
+              : undefined;
+            const validLimit = chatLimit === null ||
+              (typeof chatLimit === "number" && Number.isSafeInteger(chatLimit) && chatLimit >= 0);
+            const validConfig = typeof features === "object" && features !== null &&
+              !Array.isArray(features) &&
+              (features as Record<string, unknown>).schemaVersion === 1 &&
+              validLimit;
+
+            if (!validStatus || !billing.platformPlan.isActive || !validConfig) {
+              isActive = false;
+            } else if (chatLimit !== null) {
+              const currentUsage = await tx.connectedChat.count({
+                where: { projectId, isActive: true }
+              });
+              isActive = currentUsage < (chatLimit as number);
+            }
+          }
         }
-      },
-      create: {
-        projectId,
-        telegramChatId,
-        type: chatType,
-        title: "title" in chat ? chat.title ?? null : null,
-        username: "username" in chat ? chat.username ?? null : null,
-        isActive,
-        lastBotStatusUpdateId: updateId,
-        lastBotStatusSequenceEpoch: sequenceEpoch
-      },
-      update: {
-        type: chatType,
-        title: "title" in chat ? chat.title ?? null : null,
-        username: "username" in chat ? chat.username ?? null : null,
-        isActive,
-        lastBotStatusUpdateId: updateId,
-        lastBotStatusSequenceEpoch: sequenceEpoch
       }
-    });
+
+      await tx.connectedChat.upsert({
+        where: {
+          projectId_telegramChatId: {
+            projectId,
+            telegramChatId
+          }
+        },
+        create: {
+          projectId,
+          telegramChatId,
+          type: chatType,
+          title: "title" in chat ? chat.title ?? null : null,
+          username: "username" in chat ? chat.username ?? null : null,
+          isActive,
+          lastBotStatusUpdateId: updateId,
+          lastBotStatusSequenceEpoch: sequenceEpoch
+        },
+        update: {
+          type: chatType,
+          title: "title" in chat ? chat.title ?? null : null,
+          username: "username" in chat ? chat.username ?? null : null,
+          isActive,
+          lastBotStatusUpdateId: updateId,
+          lastBotStatusSequenceEpoch: sequenceEpoch
+        }
+      });
+    }, { isolationLevel: "Serializable" });
   });
 
   const showPlans = async (ctx: Context, edit = false): Promise<void> => {
