@@ -4,14 +4,19 @@ import { prisma } from "@subpilot/database";
 import { decryptSecret, encryptSecret } from "@subpilot/security";
 import { buildWorkspaceInviteAcceptanceMessage } from "./invite-acceptance.js";
 import {
+  ADMIN_ROLES,
+  MANAGER_ROLES,
+  canInviteWorkspaceRole,
+  canRemoveWorkspaceMember,
+  type InvitableWorkspaceRole
+} from "./workspace-permissions.js";
+import {
   classifyTelegramRefundError,
   listPaymentProviderAvailability,
   recalculateSubscriptionPeriod,
   type CreatorMerchantType
 } from "@subpilot/payments";
 
-const MANAGER_ROLES = ["OWNER", "ADMIN", "MANAGER"] as const;
-const ADMIN_ROLES = ["OWNER", "ADMIN"] as const;
 const BOT_TOKEN_PATTERN = /^\d{5,15}:[A-Za-z0-9_-]{20,}$/;
 const BOT_TOKEN_TTL_MS = 5 * 60 * 1000;
 const TEXT_ACTION_TTL_MS = 5 * 60 * 1000;
@@ -309,8 +314,7 @@ export function createControlBot(token: string): Bot {
     const requestedRole = ctx.match[1] as "ADMIN" | "MANAGER" | "VIEWER";
     const user = await upsertTelegramUser(ctx);
     const { workspace, role: actorRole } = await getActiveWorkspace(user);
-    if ((requestedRole === "ADMIN" && actorRole !== "OWNER") ||
-        !["OWNER", "ADMIN"].includes(actorRole)) {
+    if (!canInviteWorkspaceRole(actorRole, requestedRole)) {
       await ctx.reply("У вас нет прав назначить эту роль.");
       return;
     }
@@ -1232,13 +1236,12 @@ export function createControlBot(token: string): Bot {
       const user = await upsertTelegramUser(ctx);
       const { workspace, role: actorRole } = await getActiveWorkspace(user);
 
-      if (!ADMIN_ROLES.includes(actorRole as typeof ADMIN_ROLES[number])) {
-        await ctx.reply("Приглашать участников могут только владелец или администратор пространства.");
-        return;
-      }
-
-      if (requestedRole === "ADMIN" && actorRole !== "OWNER") {
-        await ctx.reply("Назначать администраторов может только владелец пространства.");
+      if (!canInviteWorkspaceRole(actorRole, requestedRole as InvitableWorkspaceRole)) {
+        await ctx.reply(
+          actorRole === "OWNER" || actorRole === "ADMIN"
+            ? "Назначать администраторов может только владелец пространства."
+            : "Приглашать участников могут только владелец или администратор пространства."
+        );
         return;
       }
 
@@ -1329,13 +1332,15 @@ export function createControlBot(token: string): Bot {
         return;
       }
 
-      if (target.userId === user.id || target.role === "OWNER") {
-        await ctx.reply("Нельзя удалить владельца пространства или самого себя этой командой.");
-        return;
-      }
-
-      if (actorRole !== "OWNER" && target.role === "ADMIN") {
-        await ctx.reply("Администратор не может удалять других администраторов.");
+      const isSelf = target.userId === user.id;
+      if (!canRemoveWorkspaceMember(actorRole, target.role, isSelf)) {
+        if (isSelf || target.role === "OWNER") {
+          await ctx.reply("Нельзя удалить владельца пространства или самого себя этой командой.");
+        } else if (actorRole === "ADMIN" && target.role === "ADMIN") {
+          await ctx.reply("Администратор не может удалять других администраторов.");
+        } else {
+          await ctx.reply("У вас нет прав удалять этого участника.");
+        }
         return;
       }
 
