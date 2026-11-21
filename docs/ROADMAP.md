@@ -84,6 +84,7 @@ Initial research candidates for creators who are individuals: YooMoney, Crypto P
 - [x] Keep the seven-day/14% concept and calculator isolated as a research experiment; it is not connected to the default creator payment flow.
 - [ ] Build the fixed-price platform plan catalogue and workspace feature limits (primary launch revenue model).
   - [x] Define and validate versioned workspace quota configuration for projects, members, plans and connected chats.
+  - [x] Add a pure evaluator for a complete workspace usage snapshot and requested quota increments.
   - [ ] Define the initial plan tiers, commercial prices and quota values.
   - [ ] Assign a plan to each workspace and expose the current plan/usage in the control bot.
   - [ ] Enforce quotas at resource-creation and linking boundaries.
