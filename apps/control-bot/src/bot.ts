@@ -2511,19 +2511,15 @@ export function createControlBot(token: string): Bot {
       const plan = await prisma.creatorPlan.findFirst({
         where: {
           id: planId,
-          project: {
-            status: { not: "ARCHIVED" },
-            workspace: {
-              members: {
-                some: { userId: user.id, role: { in: [...MANAGER_ROLES] } }
-              }
-            }
-          }
+          project: { status: { not: "ARCHIVED" } }
         },
         select: { id: true, title: true, projectId: true }
       });
+      const project = plan
+        ? await canAccessProject(plan.projectId, user.id, MANAGER_ROLES)
+        : null;
 
-      if (!plan) {
+      if (!plan || !project) {
         await ctx.reply("Тариф не найден или у вас нет прав управления.");
         return;
       }
@@ -2577,23 +2573,20 @@ export function createControlBot(token: string): Bot {
       const plan = await prisma.creatorPlan.findFirst({
         where: {
           id: planId,
-          project: {
-            status: { not: "ARCHIVED" },
-            workspace: {
-              members: {
-                some: { userId: user.id, role: { in: [...MANAGER_ROLES] } }
-              }
-            }
-          }
+          project: { status: { not: "ARCHIVED" } }
         },
         select: {
           id: true,
           title: true,
+          projectId: true,
           chats: { select: { connectedChatId: true } }
         }
       });
+      const project = plan
+        ? await canAccessProject(plan.projectId, user.id, MANAGER_ROLES)
+        : null;
 
-      if (!plan) {
+      if (!plan || !project) {
         await ctx.reply("Тариф не найден или у вас нет прав управления.");
         return;
       }
@@ -3138,17 +3131,16 @@ export function createControlBot(token: string): Bot {
           status: "ACTIVE",
           project: {
             workspaceId: workspace.id,
-            status: { not: "ARCHIVED" },
-            workspace: {
-              members: {
-                some: { userId: user.id, role: { in: [...MANAGER_ROLES] } }
-              }
-            }
+            status: { not: "ARCHIVED" }
           }
-        }
+        },
+        select: { id: true, title: true, projectId: true }
       });
+      const project = plan
+        ? await canAccessProject(plan.projectId, user.id, MANAGER_ROLES)
+        : null;
 
-      if (!plan) {
+      if (!plan || !project || project.workspaceId !== workspace.id) {
         await ctx.reply("Тариф не найден в активном пространстве или у вас нет прав.");
         return;
       }
@@ -3182,18 +3174,16 @@ export function createControlBot(token: string): Bot {
           status: "ARCHIVED",
           project: {
             workspaceId: workspace.id,
-            status: { not: "ARCHIVED" },
-            workspace: {
-              members: {
-                some: { userId: user.id, role: { in: [...MANAGER_ROLES] } }
-              }
-            }
+            status: { not: "ARCHIVED" }
           }
         },
-        include: { project: { select: { workspaceId: true } } }
+        select: { id: true, title: true, projectId: true }
       });
+      const project = plan
+        ? await canAccessProject(plan.projectId, user.id, MANAGER_ROLES)
+        : null;
 
-      if (!plan) {
+      if (!plan || !project || project.workspaceId !== workspace.id) {
         await ctx.reply("Тариф не найден в активном пространстве или у вас нет прав.");
         return;
       }
