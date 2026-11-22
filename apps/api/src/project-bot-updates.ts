@@ -543,7 +543,7 @@ async function clearSubscriptionAccessDeliveryFailure(
   });
 }
 
-export async function deliverSubscriptionAccess(
+async function deliverSubscriptionAccessUnlocked(
   bot: Bot,
   subscriptionId: string,
   chatIds?: string[],
@@ -816,6 +816,39 @@ export async function deliverSubscriptionAccess(
   }
 
   return results;
+}
+
+/**
+ * Serialize access delivery with payment activation, administrative revocation
+ * and expiry removal. The subscription row lock is held across Telegram side
+ * effects, and the entitlement is re-read after acquiring it.
+ */
+export async function deliverSubscriptionAccess(
+  bot: Bot,
+  subscriptionId: string,
+  chatIds?: string[],
+  isLeaseOwned: () => boolean = () => true
+): Promise<{ links: string[]; alreadyJoined: string[]; failed: string[] }> {
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRawUnsafe(
+      'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+      subscriptionId
+    );
+    const now = new Date();
+    const current = await tx.subscription.findUnique({
+      where: { id: subscriptionId },
+      select: { status: true, endsAt: true }
+    });
+    if (
+      !current ||
+      current.status !== "ACTIVE" ||
+      (current.endsAt !== null && current.endsAt <= now)
+    ) {
+      return { links: [], alreadyJoined: [], failed: [] };
+    }
+
+    return deliverSubscriptionAccessUnlocked(bot, subscriptionId, chatIds, isLeaseOwned);
+  }, { maxWait: 10_000, timeout: 120_000 });
 }
 
 async function processSuccessfulStarsPayment(
