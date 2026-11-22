@@ -30,6 +30,12 @@ test("PostgreSQL lifecycle lease admits one worker and safely transfers ownershi
     assert.equal(await renewSubscriptionLifecycleLease(firstLeaseId), false);
     await releaseSubscriptionLifecycleLease(firstLeaseId);
     assert.equal(await renewSubscriptionLifecycleLease(secondLeaseId), true);
+
+    // The optional key parameter must be honored by release as well as acquire/renew.
+    const customKey = "subscription-lifecycle-test:" + randomUUID();
+    assert.equal(await acquireSubscriptionLifecycleLease(firstLeaseId, customKey), true);
+    await releaseSubscriptionLifecycleLease(firstLeaseId, customKey);
+    assert.equal(await prisma.workerLease.findUnique({ where: { key: customKey } }), null);
   } finally {
     await releaseSubscriptionLifecycleLease(firstLeaseId);
     await releaseSubscriptionLifecycleLease(secondLeaseId);

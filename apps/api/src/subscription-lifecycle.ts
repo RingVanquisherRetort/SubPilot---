@@ -15,6 +15,7 @@ import {
 import { getSubscriptionGrantTelegramChatIds } from "./subscription-grant-persistence.js";
 import { buildExpiredSubscriptionNotice } from "./subscription-messages.js";
 import { runLifecyclePassWithLease } from "./subscription-lifecycle-runner.js";
+import { claimSubscriptionExpiry } from "./subscription-expiry-transition.js";
 import { findOtherActiveSubscriptionAccessGrant } from "./subscription-access-revocation.js";
 import {
   deliverPendingOwnerNotifications,
@@ -365,27 +366,30 @@ async function expireSubscriptions(
 
   for (const subscription of due) {
     if (!isLeaseOwned()) return;
-    if (subscription.status === "ACTIVE") {
-      await prisma.$transaction(async (tx) => {
-        const expired = await tx.subscription.updateMany({
+    // An ACTIVE row was selected because it looked expired, but a payment
+    // renewal may commit before this worker reaches the conditional update.
+    // Revoke Telegram access only when this worker wins the expiry transition.
+    const expiryClaimed = subscription.status !== "ACTIVE" || await prisma.$transaction(
+      async (tx) => claimSubscriptionExpiry(
+        () => tx.subscription.updateMany({
           where: { id: subscription.id, status: "ACTIVE", endsAt: { lte: now } },
           data: { status: "EXPIRED" }
-        });
-        if (expired.count !== 1) return false;
-
-        // Persist the state transition and its owner-notification outbox rows atomically.
-        await enqueueProjectOwnerNotificationUsing(tx, {
-          projectId: subscription.projectId,
-          dedupeKey: `subscription:${subscription.id}:owner:expired`,
-          eventType: "subscription_expired",
-          messageText:
-            `🔔 Срок тарифа закончился\nПроект: «${subscription.project.name}»\n` +
-            `Тариф: «${subscription.plan.title}»\n` +
-            "SubPilot запустил автоматическое отключение доступа."
-        });
-        return true;
-      });
-    }
+        }),
+        async () => {
+          // Persist the state transition and its owner-notification outbox rows atomically.
+          await enqueueProjectOwnerNotificationUsing(tx, {
+            projectId: subscription.projectId,
+            dedupeKey: `subscription:${subscription.id}:owner:expired`,
+            eventType: "subscription_expired",
+            messageText:
+              `🔔 Срок тарифа закончился\nПроект: «${subscription.project.name}»\n` +
+              `Тариф: «${subscription.plan.title}»\n` +
+              "SubPilot запустил автоматическое отключение доступа."
+          });
+        }
+      )
+    );
+    if (!expiryClaimed) continue;
 
     const latestMetadata = subscription.payments[0]?.metadata &&
       typeof subscription.payments[0].metadata === "object" &&

@@ -38,6 +38,6 @@ export async function releaseSubscriptionLifecycleLease(
   key = SUBSCRIPTION_LIFECYCLE_LEASE_KEY
 ): Promise<void> {
   await prisma.workerLease.deleteMany({
-    where: { key: SUBSCRIPTION_LIFECYCLE_LEASE_KEY, leaseId }
+    where: { key, leaseId }
   });
 }
