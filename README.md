@@ -47,6 +47,8 @@ The following commands remain available as an advanced fallback:
 - `/start` — open the control panel.
 - `/newproject Name` — create a project in the active workspace.
 - `/projects` — list projects.
+- `/agencyportfolio` — list agency projects grouped by assigned creator (OWNER/ADMIN/MANAGER).
+- `/assigncreator PROJECT_ID TELEGRAM_ID` and `/unassigncreator PROJECT_ID` — assign/remove a responsible creator. Only OWNER/ADMIN may change assignments; the creator must be a member of the same agency.
 - `/createagency Name` — create an agency workspace.
 - `/workspaces` and `/switchworkspace ID` — list/switch workspaces.
 - `/invite [ADMIN|MANAGER|VIEWER]` — create a one-use, seven-day invite.
