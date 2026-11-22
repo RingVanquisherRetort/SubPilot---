@@ -610,13 +610,13 @@ async function deliverSubscriptionAccessUnlocked(
         }
       }
     });
-    const now = new Date();
+    const permissionCheckedAt = new Date();
     if (!isSubscriptionAccessPermissionActive({
       subscriptionStatus: subscription.status,
       subscriptionStartsAt: subscription.startsAt,
       subscriptionEndsAt: subscription.endsAt,
       grantRevokedAt: existing?.revokedAt
-    }, now)) {
+    }, permissionCheckedAt)) {
       results.blocked.push(label);
       continue;
     }
