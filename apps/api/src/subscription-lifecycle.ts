@@ -11,7 +11,6 @@ import {
   claimNextSubscriptionAccessScope,
   completeSubscriptionAccessScope,
   failSubscriptionAccessScope,
-  isTelegramInviteAlreadyRevoked,
   MAX_ACCESS_DELIVERY_ATTEMPTS
 } from "@subpilot/payments";
 import {
@@ -22,8 +21,8 @@ import {
 import { getSubscriptionGrantTelegramChatIds } from "./subscription-grant-persistence.js";
 import { buildExpiredSubscriptionNotice } from "./subscription-messages.js";
 import { runLifecyclePassWithLease } from "./subscription-lifecycle-runner.js";
-import { withSubscriptionExpiryRowLock } from "./subscription-expiry-transition.js";
-import { lockSubscriptionAccessScope, requestSubscriptionAccessReconciliation } from "@subpilot/payments";
+import { lockSubscriptionAccessScopes, requestSubscriptionAccessReconciliation } from "@subpilot/payments";
+import { reconcileSubscriptionAccessRemoval } from "./subscription-access-removal.js";
 import {
   deliverPendingOwnerNotifications,
   enqueueProjectOwnerNotification
@@ -545,23 +544,32 @@ async function expireSubscriptions(
 
   for (const subscription of due) {
     if (!isLeaseOwned()) return;
-
-    // First claim the logical expiry. A renewal that committed before this
-    // conditional update wins and prevents this worker from starting revocation.
     const hasAdminExcludedInviteRetry = subscription.accessGrants.some((grant) =>
       grant.revocationReason === "ADMIN_EXCLUDED" &&
       grant.revokedAt !== null &&
       Boolean(grant.inviteLink)
     );
-    const expiryClaimed = subscription.status !== "ACTIVE" || await prisma.$transaction(
-      async (tx) => {
+
+    // Claim expiry and publish the desired customer/chat revisions atomically.
+    // No Telegram request, or other network work, is performed in this transaction.
+    const expiryClaimed = subscription.status !== "ACTIVE" ||
+      await prisma.$transaction(async (tx) => {
         const changed = await tx.subscription.updateMany({
           where: { id: subscription.id, status: "ACTIVE", endsAt: { lte: now } },
           data: { status: "EXPIRED" }
         });
-        return changed.count === 1;
-      }
-    );
+        if (changed.count !== 1) return false;
+        const grants = await tx.subscriptionAccessGrant.findMany({
+          where: { subscriptionId: subscription.id, revokedAt: null },
+          select: { connectedChatId: true }
+        });
+        const chatIds = grants.map((grant) => grant.connectedChatId);
+        await lockSubscriptionAccessScopes(tx, subscription.customerId, chatIds);
+        await requestSubscriptionAccessReconciliation(
+          tx, subscription.customerId, chatIds, now
+        );
+        return true;
+      }, { maxWait: 10_000, timeout: 15_000 });
     if (!expiryClaimed && !hasAdminExcludedInviteRetry) continue;
 
     const latestMetadata = subscription.payments[0]?.metadata &&
@@ -570,8 +578,7 @@ async function expireSubscriptions(
       ? subscription.payments[0].metadata as Record<string, unknown>
       : {};
     const originProjectBotId = typeof latestMetadata.projectBotId === "string"
-      ? latestMetadata.projectBotId
-      : undefined;
+      ? latestMetadata.projectBotId : undefined;
     const botKey = subscription.projectId + ":" + (originProjectBotId ?? "primary");
     let bot = bots.get(botKey);
     if (bot === undefined) {
@@ -583,9 +590,7 @@ async function expireSubscriptions(
       for (const grant of subscription.accessGrants) {
         if (!isLeaseOwned()) return;
         await recordSubscriptionAccessRevocationFailure(
-          subscription.id,
-          grant.id,
-          "SOURCE_BOT_UNAVAILABLE"
+          subscription.id, grant.id, "SOURCE_BOT_UNAVAILABLE"
         );
       }
       const current = await prisma.subscription.findUnique({
@@ -603,13 +608,9 @@ async function expireSubscriptions(
           dedupeKey: "subscription:" + subscription.id + ":access-revocation-bot-unavailable",
           eventType: "access_revocation_bot_unavailable",
           messageText:
-            (current?.status === "CANCELLED"
-              ? "⚠️ Администратор досрочно отозвал доступ по тарифу «"
-              : current?.status === "EXPIRED"
-                ? "⚠️ Срок доступа по тарифу «"
-                : "⚠️ Требуется завершить отзыв доступа по тарифу «") + subscription.plan.title +
-            "» в проекте «" + subscription.project.name +
-            "», но исходный бот недоступен. Восстановите подключение исходного бота. SubPilot повторит отзыв автоматически с увеличивающимися интервалами."
+            "⚠️ Не удалось завершить отзыв доступа по тарифу «" +
+            subscription.plan.title + "» в проекте «" + subscription.project.name +
+            "»: исходный бот недоступен. Восстановите подключение исходного бота."
         });
       }
       continue;
@@ -617,6 +618,7 @@ async function expireSubscriptions(
 
     const removalFailures: string[] = [];
     let accessPreservedByAnotherSubscription = false;
+    let reconciliationPending = false;
 
     for (const grant of subscription.accessGrants) {
       if (!isLeaseOwned()) return;
@@ -624,224 +626,29 @@ async function expireSubscriptions(
         grant.connectedChat.username ??
         grant.connectedChat.telegramChatId.toString();
 
-      // An ADMIN_EXCLUDED grant is already logically closed. Retry revoking its
-      // old Telegram invite independently, even while the parent subscription
-      // remains ACTIVE or has already expired.
-      if (
-        grant.revocationReason === "ADMIN_EXCLUDED" &&
-        grant.revokedAt !== null &&
-        grant.inviteLink
-      ) {
-        try {
-          // Snapshot the exact stale invite in a short transaction. The Telegram
-          // request runs after commit, so no database connection is held open.
-          const staleInvite = await prisma.$transaction(async (tx) => {
-            await tx.$queryRawUnsafe(
-              'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
-              subscription.id
-            );
-            await tx.$queryRawUnsafe(
-              'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
-              grant.id
-            );
-            const currentGrant = await tx.subscriptionAccessGrant.findUnique({
-              where: { id: grant.id },
-              select: { inviteLink: true, revokedAt: true, revocationReason: true }
-            });
-            if (
-              !currentGrant ||
-              currentGrant.revocationReason !== "ADMIN_EXCLUDED" ||
-              currentGrant.revokedAt === null ||
-              !currentGrant.inviteLink
-            ) return null;
-            return currentGrant.inviteLink;
-          }, { maxWait: 10_000, timeout: 15_000 });
-
-          if (!staleInvite) continue;
-          if (!isLeaseOwned()) return;
-          try {
-            await bot!.api.revokeChatInviteLink(
-              grant.connectedChat.telegramChatId.toString(),
-              staleInvite
-            );
-          } catch (error) {
-            if (!isTelegramInviteAlreadyRevoked(error)) throw error;
-          }
-          if (!isLeaseOwned()) return;
-
-          // Clear only the invite we actually revoked. A concurrent explicit
-          // re-grant may already have installed a newer invite URL.
-          await prisma.subscriptionAccessGrant.updateMany({
-            where: {
-              id: grant.id,
-              inviteLink: staleInvite,
-              revokedAt: { not: null },
-              revocationReason: "ADMIN_EXCLUDED"
-            },
-            data: {
-              inviteLink: "",
-              expiresAt: new Date(0),
-              revocationAttempts: 0,
-              revocationNextAttemptAt: now,
-              revocationLastError: null
-            }
-          });
-        } catch (error) {
-          removalFailures.push(chatLabel);
-          await recordSubscriptionAccessRevocationFailure(
-            subscription.id,
-            grant.id,
-            "INVITE_REVOKE_FAILED"
-          ).catch((recordError: unknown) => {
-            console.error(
-              "Could not schedule an administrative invite-revocation retry:",
-              recordError instanceof Error ? recordError.name : "UnknownError"
-            );
-          });
-          console.error(
-            "Could not retry an administratively revoked Telegram invite:",
-            error instanceof Error ? error.name : "UnknownError"
-          );
-        }
-        continue;
-      }
-
       try {
-        const locked = await prisma.$transaction(async (tx) =>
-          withSubscriptionExpiryRowLock(tx, subscription.id, now, async (currentStatus) => {
-            await tx.$queryRawUnsafe(
-              'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
-              grant.id
-            );
-            const currentGrant = await tx.subscriptionAccessGrant.findUnique({
-              where: { id: grant.id },
-              include: { connectedChat: true }
-            });
-            if (!currentGrant || currentGrant.revokedAt) {
-              return { completed: true, preserved: false, skipped: true, leaseLost: false };
-            }
+        const result = await reconcileSubscriptionAccessRemoval({
+          bot,
+          subscriptionId: subscription.id,
+          customerId: subscription.customerId,
+          connectedChatId: grant.connectedChatId,
+          telegramUserId: subscription.customer.telegramUserId,
+          now,
+          isLifecycleLeaseOwned: isLeaseOwned
+        });
 
-            // Serialize this Telegram membership decision with renewals and
-            // deliveries from every other subscription for the same customer/chat.
-            await lockSubscriptionAccessScope(tx, subscription.customerId, currentGrant.connectedChatId);
-
-            // Re-check overlapping active entitlements under the same transaction
-            // as the Telegram calls. A renewed subscription cannot slip in after
-            // this check while the row lock is held.
-            const otherActiveGrant = await tx.subscriptionAccessGrant.findFirst({
-              where: {
-                id: { not: currentGrant.id },
-                connectedChatId: currentGrant.connectedChatId,
-                revokedAt: null,
-                subscription: {
-                  id: { not: subscription.id },
-                  customerId: subscription.customerId,
-                  status: "ACTIVE",
-                  AND: [
-                    { OR: [{ startsAt: null }, { startsAt: { lte: now } }] },
-                    { OR: [{ endsAt: null }, { endsAt: { gt: now } }] }
-                  ]
-                }
-              },
-              select: { id: true }
-            });
-
-            const chatId = currentGrant.connectedChat.telegramChatId.toString();
-            let revocationReason: "ADMIN_REVOKED" | "SUBSCRIPTION_EXPIRED" | "ADMIN_EXCLUDED" =
-              currentStatus === "CANCELLED" ? "ADMIN_REVOKED" : "SUBSCRIPTION_EXPIRED";
-            if (!isLeaseOwned()) {
-              return { completed: false, preserved: false, skipped: false, leaseLost: true };
-            }
-
-            if (currentGrant.inviteLink && currentGrant.expiresAt > now) {
-              try {
-                await bot!.api.revokeChatInviteLink(chatId, currentGrant.inviteLink);
-                if (!isLeaseOwned()) {
-                  return { completed: false, preserved: false, skipped: false, leaseLost: true };
-                }
-              } catch (error) {
-                if (!isTelegramInviteAlreadyRevoked(error)) throw error;
-              }
-            }
-
-            if (!otherActiveGrant && currentGrant.joinedAt) {
-              if (!isLeaseOwned()) {
-                return { completed: false, preserved: false, skipped: false, leaseLost: true };
-              }
-              const telegramUserId = Number(subscription.customer.telegramUserId);
-              const member = await bot!.api.getChatMember(chatId, telegramUserId);
-              if (
-                member.status === "kicked" ||
-                (member.status === "restricted" && !member.is_member)
-              ) {
-                // Preserve a ban that already exists in Telegram; it belongs to
-                // moderation, not to this subscription expiry transition.
-                revocationReason = "ADMIN_EXCLUDED";
-              } else {
-                await bot!.api.banChatMember(chatId, telegramUserId);
-                if (!isLeaseOwned()) {
-                  return { completed: false, preserved: false, skipped: false, leaseLost: true };
-                }
-                await bot!.api.unbanChatMember(chatId, telegramUserId, { only_if_banned: true });
-                if (!isLeaseOwned()) {
-                  return { completed: false, preserved: false, skipped: false, leaseLost: true };
-                }
-              }
-            }
-
-            const revoked = await tx.subscriptionAccessGrant.updateMany({
-              where: { id: currentGrant.id, revokedAt: null },
-              data: {
-                revokedAt: now,
-                revocationReason,
-                inviteLink: "",
-                expiresAt: new Date(0),
-                revocationAttempts: 0,
-                revocationNextAttemptAt: now,
-                revocationLastError: null
-              }
-            });
-            if (revoked.count === 1) {
-              await requestSubscriptionAccessReconciliation(
-                tx,
-                subscription.customerId,
-                [currentGrant.connectedChatId],
-                now
-              );
-            }
-
-            return {
-              completed: true,
-              preserved: Boolean(otherActiveGrant),
-              skipped: false,
-              leaseLost: false
-            };
-          }), { maxWait: 10_000, timeout: 60_000 }
-        );
-
-        if (!locked.shouldRevoke) {
-          // A payment extended the same subscription before access removal began.
-          continue;
-        }
-        if (locked.result?.leaseLost) return;
-        if (locked.result?.preserved) accessPreservedByAnotherSubscription = true;
-        if (!locked.result?.completed && !locked.result?.skipped) {
+        if (result === "PRESERVED_BY_OTHER_SUBSCRIPTION") {
+          accessPreservedByAnotherSubscription = true;
+        } else if (result === "FAILED") {
           removalFailures.push(chatLabel);
+        } else if (result === "LEASE_BUSY" || result === "LEASE_LOST") {
+          // A live owner or newer revision must finish before we can report success.
+          reconciliationPending = true;
         }
       } catch (error) {
         removalFailures.push(chatLabel);
-        await recordSubscriptionAccessRevocationFailure(
-          subscription.id,
-          grant.id,
-          "ACCESS_REVOCATION_FAILED"
-        ).catch((recordError: unknown) => {
-          console.error(
-            "Could not schedule an access-revocation retry:",
-            recordError instanceof Error ? recordError.name : "UnknownError"
-          );
-        });
         console.error(
-          "Could not revoke expired subscription access:",
+          "Could not reconcile expired subscription access:",
           error instanceof Error ? error.name : "UnknownError"
         );
       }
@@ -859,20 +666,16 @@ async function expireSubscriptions(
         dedupeKey: "subscription:" + subscription.id + ":access-revocation-pending",
         eventType: "access_revocation_pending",
         messageText:
-          "⚠️ SubPilot не смог завершить отзыв доступа или старых приглашений по тарифу «" +
+          "⚠️ SubPilot не смог завершить отзыв доступа по тарифу «" +
           subscription.plan.title + "» в проекте «" + subscription.project.name +
           "». Проблемные площадки: " + removalFailures.join(", ") +
-          ". Повторные попытки запланированы с увеличивающимися интервалами. Проверьте права исходного бота."
+          ". Повторные попытки запланированы; проверьте права исходного бота."
       });
     }
 
     const stillActive = current.status === "ACTIVE" &&
       (current.endsAt === null || current.endsAt > now);
-    if (stillActive) {
-      // A successful renewal may have won immediately after the worker released
-      // the row lock. Its payment handler will re-deliver any access revoked here.
-      continue;
-    }
+    if (stillActive) continue;
 
     const isExpired = current.status === "EXPIRED" ||
       (current.status === "ACTIVE" && current.endsAt !== null && current.endsAt <= now);
@@ -882,25 +685,28 @@ async function expireSubscriptions(
         dedupeKey: "subscription:" + subscription.id + ":owner:expired",
         eventType: "subscription_expired",
         messageText:
-          `🔔 Срок тарифа закончился\nПроект: «${subscription.project.name}»\n` +
-          `Тариф: «${subscription.plan.title}»\n` +
-          "SubPilot запустил автоматическое отключение доступа."
+          "🔔 Срок тарифа закончился\nПроект: «" + subscription.project.name +
+          "»\nТариф: «" + subscription.plan.title +
+          "»\nSubPilot запустил автоматическое отключение доступа."
       });
     }
 
-    if (isExpired && bot) {
+    if (isExpired) {
       await bot.api.sendMessage(
         Number(subscription.customer.telegramUserId),
         buildExpiredSubscriptionNotice(subscription.project.name, removalFailures),
         { reply_markup: createRenewalKeyboard() }
       ).catch(() => undefined);
-    } else if (current.status === "CANCELLED" && removalFailures.length === 0 && bot) {
+    } else if (current.status === "CANCELLED" &&
+      removalFailures.length === 0 && !reconciliationPending) {
       const notice = accessPreservedByAnotherSubscription
-        ? `Доступ по подписке «${subscription.plan.title}» в проекте «${subscription.project.name}» отменён администратором. Другие действующие подписки продолжают работать.`
-        : `Доступ по подписке «${subscription.plan.title}» в проекте «${subscription.project.name}» досрочно отключён администратором.`;
+        ? "Доступ по подписке «" + subscription.plan.title +
+          "» отменён администратором. Другие действующие подписки продолжают работать."
+        : "Доступ по подписке «" + subscription.plan.title +
+          "» в проекте «" + subscription.project.name +
+          "» досрочно отключён администратором.";
       await bot.api.sendMessage(
-        Number(subscription.customer.telegramUserId),
-        notice
+        Number(subscription.customer.telegramUserId), notice
       ).catch(() => undefined);
     }
   }
