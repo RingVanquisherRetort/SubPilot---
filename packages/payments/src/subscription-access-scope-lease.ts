@@ -117,6 +117,45 @@ export async function claimNextSubscriptionAccessScope(
   return rows.length === 1 ? asLease(rows[0]!) : null;
 }
 
+/**
+ * Claim one explicitly requested customer/chat scope after its desired revision
+ * has been committed. This is used by synchronous access requests; the lifecycle
+ * worker uses claimNextSubscriptionAccessScope for background work.
+ */
+export async function claimSubscriptionAccessScope(
+  db: ScopeLeaseExecutor,
+  customerId: string,
+  connectedChatId: string,
+  options: { now?: Date; leaseTtlMs?: number } = {}
+): Promise<SubscriptionAccessScopeLease | null> {
+  const now = options.now ?? new Date();
+  const ttlMs = options.leaseTtlMs ?? DEFAULT_SUBSCRIPTION_ACCESS_SCOPE_LEASE_TTL_MS;
+  if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
+    throw new RangeError("Subscription access scope lease TTL must be a positive number.");
+  }
+  const leaseExpiresAt = new Date(now.getTime() + ttlMs);
+  const leaseToken = randomUUID();
+  const rows = await db.$queryRawUnsafe<ScopeLeaseRow[]>(
+    'UPDATE "SubscriptionAccessScope" AS scope ' +
+    'SET "leaseToken" = $3, "leaseExpiresAt" = $4, ' +
+    '    "attempts" = scope."attempts" + 1, "updatedAt" = $1 ' +
+    'WHERE scope."customerId" = $5 AND scope."connectedChatId" = $6 ' +
+    '  AND scope."desiredRevision" > scope."appliedRevision" ' +
+    '  AND (scope."nextAttemptAt" IS NULL OR scope."nextAttemptAt" <= $1) ' +
+    '  AND (scope."leaseExpiresAt" IS NULL OR scope."leaseExpiresAt" <= $1) ' +
+    'RETURNING scope."id", scope."customerId", scope."connectedChatId", ' +
+    '          scope."desiredRevision", scope."appliedRevision", scope."leaseToken", ' +
+    '          scope."leaseExpiresAt", scope."attempts"',
+    now,
+    customerId,
+    leaseToken,
+    leaseExpiresAt,
+    customerId,
+    connectedChatId
+  );
+  return rows.length === 1 ? asLease(rows[0]!) : null;
+}
+
 /** Extend a lease only while its token is current and its previous TTL remains valid. */
 export async function renewSubscriptionAccessScopeLease(
   db: ScopeLeaseExecutor,
