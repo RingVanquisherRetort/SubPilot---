@@ -208,13 +208,6 @@ async function createPurchaseInvoice(
         invoiceDispatchState: "INVALID_PLAN_PRICE" as const
       };
     }
-    if (plan.isRecurring && newPlanAmountStars > 10_000) {
-      return {
-        payment: null,
-        subscription,
-        invoiceDispatchState: "RECURRING_PRICE_LIMIT" as const
-      };
-    }
     if (plan.isRecurring && plan.durationDays !== 30) {
       return {
         payment: null,
@@ -256,11 +249,9 @@ async function createPurchaseInvoice(
   if (!pending.payment) {
     const checkoutError = pending.invoiceDispatchState === "INVALID_RECURRING_PERIOD"
       ? "Автопродление Stars доступно только для тарифа на 30 дней. Исправьте длительность тарифа и повторите покупку."
-      : pending.invoiceDispatchState === "RECURRING_PRICE_LIMIT"
-        ? "Стоимость автопродления не может превышать 10 000 Stars. Измените цену тарифа и повторите покупку."
-        : pending.invoiceDispatchState === "INVALID_PLAN_PRICE"
-          ? "Цена тарифа должна быть целым положительным количеством Stars. Исправьте цену и повторите покупку."
-          : "Для этого тарифа у вас уже есть активная Stars-подписка. Управлять автопродлением можно командой /subscription. Повторный счёт не создан.";
+      : pending.invoiceDispatchState === "INVALID_PLAN_PRICE"
+        ? "Цена тарифа должна быть целым положительным количеством Stars и не превышать 10 000. Исправьте цену и повторите покупку."
+        : "Для этого тарифа у вас уже есть активная Stars-подписка. Управлять автопродлением можно командой /subscription. Повторный счёт не создан.";
     await ctx.reply(checkoutError);
     return;
   }
