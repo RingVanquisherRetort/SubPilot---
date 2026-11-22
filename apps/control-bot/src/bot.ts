@@ -892,8 +892,7 @@ export function createControlBot(token: string): Bot {
         await ctx.reply("Просматривать и восстанавливать выдачи могут только владелец или администратор проекта.");
         return;
       }
-      const failed = (await listWorkspaceFailedAccessDeliveries(project.workspaceId, new Date(), 50))
-        .filter((grant) => grant.subscription.project.id === projectId);
+      const failed = await listWorkspaceFailedAccessDeliveries(project.workspaceId, new Date(), 50, projectId);
       if (failed.length === 0) {
         await ctx.editMessageText("В этом проекте нет выдач доступа, исчерпавших лимит автоматических попыток.", {
           reply_markup: new InlineKeyboard().text("⬅️ К управлению подписками", "ui:subaccess:" + projectId)
