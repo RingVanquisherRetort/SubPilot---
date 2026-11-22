@@ -2043,12 +2043,8 @@ export function createControlBot(token: string): Bot {
     }
     try {
       const actor = await upsertTelegramUser(ctx);
-      const { workspace, role } = await getActiveWorkspace(actor);
-      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
-        await ctx.reply("Агрегированную аналитику проекта могут смотреть только владелец или администратор пространства.");
-        return;
-      }
-      const project = await canAccessProject(projectId, actor.id, ["OWNER", "ADMIN"]);
+      const { workspace } = await getActiveWorkspace(actor);
+      const project = await canAccessProject(projectId, actor.id, MANAGER_ROLES);
       if (!project || project.workspaceId !== workspace.id) {
         await ctx.reply("Проект не найден в активном пространстве или у вас нет прав.");
         return;
@@ -2096,12 +2092,8 @@ export function createControlBot(token: string): Bot {
     }
     try {
       const actor = await upsertTelegramUser(ctx);
-      const { workspace, role } = await getActiveWorkspace(actor);
-      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
-        await ctx.reply("Историю действий проекта могут смотреть только владелец или администратор пространства.");
-        return;
-      }
-      const project = await canAccessProject(projectId, actor.id, ["OWNER", "ADMIN"]);
+      const { workspace } = await getActiveWorkspace(actor);
+      const project = await canAccessProject(projectId, actor.id, MANAGER_ROLES);
       if (!project || project.workspaceId !== workspace.id) {
         await ctx.reply("Проект не найден в активном пространстве или у вас нет прав.");
         return;
