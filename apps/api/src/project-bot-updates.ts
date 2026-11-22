@@ -2366,11 +2366,13 @@ export async function handleProjectBotUpdate(
         where: {
           connectedChat: { projectId, telegramChatId },
           subscription: {
-            status: "ACTIVE",
-            customer: { telegramUserId }
+            projectId,
+            customer: { telegramUserId },
+            ...(departureKind === "VOLUNTARY_EXIT" ? { status: "ACTIVE" } : {})
           },
-          revokedAt: null,
-          ...(departureKind === "VOLUNTARY_EXIT" ? { joinedAt: { not: null } } : {})
+          ...(departureKind === "VOLUNTARY_EXIT"
+            ? { revokedAt: null, joinedAt: { not: null } }
+            : {})
         },
         select: { id: true, subscriptionId: true, connectedChatId: true }
       });
@@ -2403,42 +2405,43 @@ export async function handleProjectBotUpdate(
               select: { revokedAt: true, joinedAt: true, inviteLink: true }
             })
           ]);
-          if (
-            !currentSubscription ||
-            !currentGrant ||
-            !isSubscriptionAccessPermissionActive({
-              subscriptionStatus: currentSubscription.status,
-              subscriptionStartsAt: currentSubscription.startsAt,
-              subscriptionEndsAt: currentSubscription.endsAt,
-              grantRevokedAt: currentGrant.revokedAt
-            })
-          ) return null;
+          if (!currentSubscription || !currentGrant) return null;
 
-          if (departureKind === "VOLUNTARY_EXIT") {
-            if (!currentGrant.joinedAt) return null;
+          if (departureKind === "ADMIN_EXCLUSION") {
+            // A Telegram moderation decision applies to this person's permission
+            // for this chat even when a prior subscription has already expired or
+            // been cancelled. Keep the moderation reason dominant over any older
+            // expiry/admin reason so a later payment cannot resurrect this grant.
             const updated = await tx.subscriptionAccessGrant.updateMany({
-              where: { id: grant.id, revokedAt: null, joinedAt: { not: null } },
-              data: { joinedAt: null, inviteLink: "", expiresAt: new Date(0) }
+              where: { id: grant.id },
+              data: {
+                revokedAt: currentGrant.revokedAt ?? new Date(),
+                revocationReason: "ADMIN_EXCLUDED",
+                joinedAt: null
+              }
             });
             return updated.count === 1
-              ? { kind: "VOLUNTARY_EXIT" as const, planTitle: currentSubscription.plan.title }
+              ? {
+                  kind: "ADMIN_EXCLUSION" as const,
+                  planTitle: currentSubscription.plan.title,
+                  inviteLink: currentGrant.inviteLink
+                }
               : null;
           }
 
+          if (!isSubscriptionAccessPermissionActive({
+            subscriptionStatus: currentSubscription.status,
+            subscriptionStartsAt: currentSubscription.startsAt,
+            subscriptionEndsAt: currentSubscription.endsAt,
+            grantRevokedAt: currentGrant.revokedAt
+          }) || !currentGrant.joinedAt) return null;
+
           const updated = await tx.subscriptionAccessGrant.updateMany({
-            where: { id: grant.id, revokedAt: null },
-            data: {
-              revokedAt: new Date(),
-              revocationReason: "ADMIN_EXCLUDED",
-              joinedAt: null
-            }
+            where: { id: grant.id, revokedAt: null, joinedAt: { not: null } },
+            data: { joinedAt: null, inviteLink: "", expiresAt: new Date(0) }
           });
           return updated.count === 1
-            ? {
-                kind: "ADMIN_EXCLUSION" as const,
-                planTitle: currentSubscription.plan.title,
-                inviteLink: currentGrant.inviteLink
-              }
+            ? { kind: "VOLUNTARY_EXIT" as const, planTitle: currentSubscription.plan.title }
             : null;
         });
 
