@@ -1408,7 +1408,7 @@ export function createControlBot(token: string): Bot {
         workspaceId: workspace.id,
         actorUserId: user.id,
         projectId: fields[0],
-        creatorTelegramId: fields[1]
+        creatorTelegramId: fields[1] ?? ""
       });
       await ctx.reply(
         result.changed
