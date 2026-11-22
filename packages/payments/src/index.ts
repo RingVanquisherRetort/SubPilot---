@@ -187,6 +187,7 @@ export { lockSubscriptionAccessScope, lockSubscriptionAccessScopes } from "./sub
 export {
   requestSubscriptionAccessReconciliation,
   claimNextSubscriptionAccessScope,
+  claimSubscriptionAccessScope,
   renewSubscriptionAccessScopeLease,
   completeSubscriptionAccessScope,
   failSubscriptionAccessScope,
