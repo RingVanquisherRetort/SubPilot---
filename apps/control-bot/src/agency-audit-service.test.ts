@@ -91,6 +91,15 @@ test("agency audit history and exports obey project roles and omit raw metadata"
         slug: "audit-unassigned-" + suffix
       }
     });
+    const archivedProject = await prisma.project.create({
+      data: {
+        workspaceId: workspace.id,
+        name: "Archived project",
+        slug: "audit-archived-" + suffix,
+        creatorUserId: manager.id,
+        status: "ARCHIVED"
+      }
+    });
     await prisma.projectMember.createMany({
       data: [
         { projectId: managedProject.id, userId: manager.id, role: "MANAGER" },
@@ -143,6 +152,14 @@ test("agency audit history and exports obey project roles and omit raw metadata"
           resourceType: "CreatorPlan",
           actorUserId: owner.id,
           createdAt: new Date(now.getTime() - 1_000)
+        },
+        {
+          workspaceId: workspace.id,
+          projectId: archivedProject.id,
+          action: "ARCHIVED_PROJECT_SECRET",
+          resourceType: "CreatorPlan",
+          actorUserId: owner.id,
+          createdAt: new Date(now.getTime() - 500)
         }
       ]
     });
@@ -167,7 +184,7 @@ test("agency audit history and exports obey project roles and omit raw metadata"
       actorUserId: owner.id,
       limit: 10
     });
-    assert.equal(ownerHistory.events.length, 5);
+    assert.equal(ownerHistory.events.length, 6);
     assert.equal(ownerHistory.events.some((event) => event.projectName === "Workspace"), true);
 
     const managerExport = await exportAgencyAuditHistory({
