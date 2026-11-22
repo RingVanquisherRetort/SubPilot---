@@ -702,7 +702,7 @@ export function createControlBot(token: string): Bot {
       );
       const keyboard = new InlineKeyboard();
       items.forEach((item, index) => {
-        keyboard.text("🚫 Отозвать доступ №" + (index + 1), "sa:r:" + projectId + ":" + item.id).row();
+        keyboard.text("🚫 Отозвать доступ №" + (index + 1), "sar:" + item.id).row();
       });
       keyboard.text("⬅️ К управлению подписками", "ui:subaccess:" + projectId);
       await ctx.editMessageText(
@@ -746,7 +746,7 @@ export function createControlBot(token: string): Bot {
       const keyboard = new InlineKeyboard();
       for (const plan of plans) {
         const title = plan.title.slice(0, 24) + " · " + plan.price.toString() + " ⭐";
-        keyboard.text(title, "sap:" + (kind === "manual" ? "m" : "t") + ":" + projectId + ":" + plan.id).row();
+        keyboard.text(title, "sap:" + (kind === "manual" ? "m" : "t") + ":" + plan.id).row();
       }
       keyboard.text("⬅️ К управлению подписками", "ui:subaccess:" + projectId);
       await ctx.editMessageText(
@@ -760,21 +760,24 @@ export function createControlBot(token: string): Bot {
     }
   });
 
-  bot.callbackQuery(/^sap:(m|t):([^:]+):([^:]+)$/, async (ctx) => {
+  bot.callbackQuery(/^sap:(m|t):([^:]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.from) return;
     const kind = ctx.match[1] === "m" ? "manual" : "trial";
-    const projectId = ctx.match[2];
-    const planId = ctx.match[3];
-    if (!projectId || !planId) return;
+    const planId = ctx.match[2];
+    if (!planId) return;
     const user = await upsertTelegramUser(ctx);
-    const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
-    const plan = project
-      ? await prisma.creatorPlan.findFirst({
-          where: { id: planId, projectId, status: "ACTIVE", chats: { some: {} } },
-          select: { id: true, title: true, trialDays: true, durationDays: true }
-        })
+    const plan = await prisma.creatorPlan.findFirst({
+      where: { id: planId, status: "ACTIVE", chats: { some: {} } },
+      select: {
+        id: true, title: true, trialDays: true, durationDays: true,
+        project: { select: { id: true, workspaceId: true } }
+      }
+    });
+    const project = plan
+      ? await canAccessProject(plan.project.id, user.id, ADMIN_ROLES)
       : null;
+    const projectId = plan?.project.id;
     if (!project || !plan) {
       await ctx.reply("Тариф недоступен или права управления изменились.");
       return;
@@ -801,13 +804,17 @@ export function createControlBot(token: string): Bot {
     }
   });
 
-  bot.callbackQuery(/^sa:r:([^:]+):([^:]+)$/, async (ctx) => {
+  bot.callbackQuery(/^sar:([^:]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
-    const projectId = ctx.match[1];
-    const subscriptionId = ctx.match[2];
-    if (!projectId || !subscriptionId) return;
+    const subscriptionId = ctx.match[1];
+    if (!subscriptionId) return;
     const user = await upsertTelegramUser(ctx);
-    const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
+    const target = await prisma.subscription.findFirst({
+      where: { id: subscriptionId },
+      select: { projectId: true }
+    });
+    const projectId = target?.projectId;
+    const project = projectId ? await canAccessProject(projectId, user.id, ADMIN_ROLES) : null;
     if (!project) {
       await ctx.reply("Нет прав управлять этой подпиской.");
       return;
@@ -836,20 +843,24 @@ export function createControlBot(token: string): Bot {
       "При подтверждении SubPilot поставит отключение приглашений и членства в очередь. Другие действующие подписки клиента будут учтены.",
       {
         reply_markup: new InlineKeyboard()
-          .text("✅ Подтвердить отзыв", "sa:c:" + projectId + ":" + subscriptionId).row()
+          .text("✅ Подтвердить отзыв", "sac:" + subscriptionId).row()
           .text("Отмена", "ui:subaccess-list:" + projectId)
       }
     );
   });
 
-  bot.callbackQuery(/^sa:c:([^:]+):([^:]+)$/, async (ctx) => {
+  bot.callbackQuery(/^sac:([^:]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
-    const projectId = ctx.match[1];
-    const subscriptionId = ctx.match[2];
-    if (!projectId || !subscriptionId) return;
+    const subscriptionId = ctx.match[1];
+    if (!subscriptionId) return;
     try {
       const user = await upsertTelegramUser(ctx);
-      const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
+      const target = await prisma.subscription.findFirst({
+        where: { id: subscriptionId },
+        select: { projectId: true }
+      });
+      const projectId = target?.projectId;
+      const project = projectId ? await canAccessProject(projectId, user.id, ADMIN_ROLES) : null;
       if (!project) {
         await ctx.reply("Нет прав отзывать доступ в этом проекте.");
         return;
@@ -902,7 +913,7 @@ export function createControlBot(token: string): Bot {
       const keyboard = new InlineKeyboard();
       const rows = failed.map((grant, index) => {
         const chat = grant.connectedChat.title ?? grant.connectedChat.username ?? grant.connectedChat.telegramChatId.toString();
-        keyboard.text("↻ Повторить выдачу №" + (index + 1), "sa:d:" + projectId + ":" + grant.id).row();
+        keyboard.text("↻ Повторить выдачу №" + (index + 1), "sad:" + grant.id).row();
         return (index + 1) + ". " + grant.subscription.plan.title + " → " + chat + "\n" +
           "Telegram ID: " + grant.subscription.customer.telegramUserId.toString() + "\n" +
           "Попыток: " + grant.deliveryAttempts + " · ошибка: " + (grant.deliveryLastError ?? "не указана").slice(0, 100);
@@ -919,14 +930,18 @@ export function createControlBot(token: string): Bot {
     }
   });
 
-  bot.callbackQuery(/^sa:d:([^:]+):([^:]+)$/, async (ctx) => {
+  bot.callbackQuery(/^sad:([^:]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
-    const projectId = ctx.match[1];
-    const grantId = ctx.match[2];
-    if (!projectId || !grantId) return;
+    const grantId = ctx.match[1];
+    if (!grantId) return;
     try {
       const user = await upsertTelegramUser(ctx);
-      const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
+      const grant = await prisma.subscriptionAccessGrant.findFirst({
+        where: { id: grantId },
+        select: { subscription: { select: { projectId: true } } }
+      });
+      const projectId = grant?.subscription.projectId;
+      const project = projectId ? await canAccessProject(projectId, user.id, ADMIN_ROLES) : null;
       if (!project) {
         await ctx.reply("Нет прав повторять выдачу доступа.");
         return;
