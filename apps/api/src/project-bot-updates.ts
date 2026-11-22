@@ -2385,13 +2385,45 @@ export async function handleProjectBotUpdate(
           joinedAt: { not: null },
           revokedAt: null
         },
-        select: { id: true }
+        select: { id: true, subscriptionId: true, connectedChatId: true }
       });
 
       for (const grant of leftGrants) {
-        await prisma.subscriptionAccessGrant.updateMany({
-          where: { id: grant.id, revokedAt: null },
-          data: { joinedAt: null, inviteLink: "", expiresAt: new Date(0) }
+        await prisma.$transaction(async (tx) => {
+          await tx.$queryRawUnsafe(
+            'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+            grant.subscriptionId
+          );
+          await tx.$queryRawUnsafe(
+            'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
+            grant.id
+          );
+          const [currentSubscription, currentGrant] = await Promise.all([
+            tx.subscription.findUnique({
+              where: { id: grant.subscriptionId },
+              select: { status: true, startsAt: true, endsAt: true }
+            }),
+            tx.subscriptionAccessGrant.findUnique({
+              where: { id: grant.id },
+              select: { revokedAt: true, joinedAt: true }
+            })
+          ]);
+          if (
+            !currentSubscription ||
+            !currentGrant ||
+            !currentGrant.joinedAt ||
+            !isSubscriptionAccessPermissionActive({
+              subscriptionStatus: currentSubscription.status,
+              subscriptionStartsAt: currentSubscription.startsAt,
+              subscriptionEndsAt: currentSubscription.endsAt,
+              grantRevokedAt: currentGrant.revokedAt
+            })
+          ) return;
+
+          await tx.subscriptionAccessGrant.updateMany({
+            where: { id: grant.id, revokedAt: null, joinedAt: { not: null } },
+            data: { joinedAt: null, inviteLink: "", expiresAt: new Date(0) }
+          });
         });
       }
       await saveCursor();
@@ -2464,28 +2496,103 @@ export async function handleProjectBotUpdate(
       }
 
       if (inviteRevoked) {
-        await prisma.subscriptionAccessGrant.updateMany({
-          where: { id: grant.id, revokedAt: null },
-          data: { inviteLink: "", expiresAt: new Date(0), revokedAt: new Date() }
+        // The used invite link is revoked, but the buyer's underlying chat
+        // permission remains valid. Rotate the credential without toggling the
+        // per-chat authorization flag.
+        const permissionReset = await prisma.$transaction(async (tx) => {
+          await tx.$queryRawUnsafe(
+            'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+            grant.subscriptionId
+          );
+          await tx.$queryRawUnsafe(
+            'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
+            grant.id
+          );
+          const [currentSubscription, currentGrant] = await Promise.all([
+            tx.subscription.findUnique({
+              where: { id: grant.subscriptionId },
+              select: { status: true, startsAt: true, endsAt: true }
+            }),
+            tx.subscriptionAccessGrant.findUnique({
+              where: { id: grant.id },
+              select: { id: true, inviteLink: true, revokedAt: true, joinedAt: true }
+            })
+          ]);
+          if (
+            !currentSubscription ||
+            !currentGrant ||
+            currentGrant.inviteLink !== inviteLink ||
+            !isSubscriptionAccessPermissionActive({
+              subscriptionStatus: currentSubscription.status,
+              subscriptionStartsAt: currentSubscription.startsAt,
+              subscriptionEndsAt: currentSubscription.endsAt,
+              grantRevokedAt: currentGrant.revokedAt
+            })
+          ) return false;
+
+          const updated = await tx.subscriptionAccessGrant.updateMany({
+            where: { id: grant.id, inviteLink, revokedAt: null },
+            data: { inviteLink: "", expiresAt: new Date(0), joinedAt: null }
+          });
+          return updated.count === 1;
         });
 
-        const freshAccess = await deliverSubscriptionAccess(projectBot, grant.subscriptionId);
-        if (freshAccess.links.length > 0) {
-          await projectBot.api.sendMessage(
-            Number(grant.subscription.customer.telegramUserId),
-            "Похоже, ваша персональная ссылка была использована другим аккаунтом. Создана новая ссылка для вступления:\n" +
-            freshAccess.links.join("\n")
-          ).catch(() => undefined);
+        if (permissionReset) {
+          const freshAccess = await deliverSubscriptionAccess(projectBot, grant.subscriptionId);
+          if (freshAccess.links.length > 0) {
+            await projectBot.api.sendMessage(
+              Number(grant.subscription.customer.telegramUserId),
+              "Похоже, ваша персональная ссылка была использована другим аккаунтом. Создана новая ссылка для вступления:\n" +
+              freshAccess.links.join("\n")
+            ).catch(() => undefined);
+          }
         }
       }
       await saveCursor();
       return;
     }
 
-    await prisma.subscriptionAccessGrant.updateMany({
-      where: { id: grant.id, joinedAt: null, revokedAt: null },
-      data: { joinedAt: new Date() }
+    const joined = await prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+        grant.subscriptionId
+      );
+      await tx.$queryRawUnsafe(
+        'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
+        grant.id
+      );
+      const [currentSubscription, currentGrant] = await Promise.all([
+        tx.subscription.findUnique({
+          where: { id: grant.subscriptionId },
+          select: { status: true, startsAt: true, endsAt: true }
+        }),
+        tx.subscriptionAccessGrant.findUnique({
+          where: { id: grant.id },
+          select: { inviteLink: true, joinedAt: true, revokedAt: true }
+        })
+      ]);
+      if (
+        !currentSubscription ||
+        !currentGrant ||
+        currentGrant.inviteLink !== inviteLink ||
+        currentGrant.joinedAt !== null ||
+        !isSubscriptionAccessPermissionActive({
+          subscriptionStatus: currentSubscription.status,
+          subscriptionStartsAt: currentSubscription.startsAt,
+          subscriptionEndsAt: currentSubscription.endsAt,
+          grantRevokedAt: currentGrant.revokedAt
+        })
+      ) return false;
+
+      const updated = await tx.subscriptionAccessGrant.updateMany({
+        where: { id: grant.id, inviteLink, joinedAt: null, revokedAt: null },
+        data: { joinedAt: new Date() }
+      });
+      return updated.count === 1;
     });
+    if (!joined) {
+      await projectBot.api.revokeChatInviteLink(ctx.chat.id, inviteLink).catch(() => undefined);
+    }
     await saveCursor();
   });
 
