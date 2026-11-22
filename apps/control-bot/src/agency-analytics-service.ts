@@ -124,8 +124,8 @@ function formatRevenue(value: Map<string, {
   refundedPayments: number;
   refunds: bigint;
 }> | undefined): CurrencyRevenue[] {
-  return [...(value ?? new Map()).entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
+  const entries = value ? [...value.entries()] : [];
+  return entries.sort(([a], [b]) => a.localeCompare(b))
     .map(([currency, item]) => ({
       currency,
       payments: item.payments,
