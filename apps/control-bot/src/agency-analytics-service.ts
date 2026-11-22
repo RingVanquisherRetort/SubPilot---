@@ -438,7 +438,7 @@ export async function getAgencyAnalytics(input: {
       expiredSubscriptions,
       cancelledSubscriptions,
       churnEvents,
-      activeAtPeriodStart,
+      activeAtPeriodStart: activeAtStart,
       churnRatePercent: activeAtPeriodStart > 0
         ? Math.round((churnEvents / activeAtPeriodStart) * 10_000) / 100
         : 0,
