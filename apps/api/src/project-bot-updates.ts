@@ -104,11 +104,6 @@ async function createPurchaseInvoice(
     return;
   }
 
-  if (plan.isRecurring && plan.durationDays !== 30) {
-    await ctx.reply("Для автопродления Telegram Stars сейчас поддерживается только период 30 дней. Измените длительность тарифа или отключите автопродление.");
-    return;
-  }
-
   const activeChats = plan.chats.filter((item) => item.connectedChat.isActive);
   if (activeChats.length === 0) {
     await ctx.reply("У тарифа пока нет активных каналов или групп для выдачи доступа.");
@@ -153,7 +148,7 @@ async function createPurchaseInvoice(
       },
       orderBy: { endsAt: "desc" }
     });
-    if (plan.isRecurring && activeSubscription?.telegramStarInitialChargeId) {
+    if (activeSubscription?.telegramStarInitialChargeId) {
       return {
         payment: null,
         subscription: activeSubscription,
@@ -264,6 +259,18 @@ async function createPurchaseInvoice(
   const invoiceDescription = typeof invoiceMetadata.planDescription === "string"
     ? invoiceMetadata.planDescription
     : `Доступ к подписке «${invoiceTitle}»`;
+  // Checkout mode and restrictions come from the immutable payment snapshot,
+  // not the current plan. A plan may be edited while an invoice is pending.
+  const invoiceIsRecurring = invoiceMetadata.isRecurring === true;
+  const invoiceDurationDays = typeof invoiceMetadata.durationDays === "number"
+    ? invoiceMetadata.durationDays
+    : null;
+  if (invoiceIsRecurring && invoiceDurationDays !== 30) {
+    await ctx.reply(
+      "У сохранённого счёта некорректный период автопродления. Не оплачивайте его; обратитесь в /paysupport."
+    );
+    return;
+  }
   const invoiceAmountStars = getStarAmount(pending.payment.amount);
   if (invoiceAmountStars === null) {
     await ctx.reply("Не удалось проверить сумму ранее созданного счёта. Обратитесь к владельцу проекта.");
@@ -305,7 +312,7 @@ async function createPurchaseInvoice(
 
   let invoiceMessageId: number;
   try {
-    if (plan.isRecurring) {
+    if (invoiceIsRecurring) {
       const invoiceLink = await bot.api.createInvoiceLink(
         invoiceTitle.slice(0, 32),
         invoiceDescription.slice(0, 255),
