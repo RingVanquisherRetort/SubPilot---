@@ -111,6 +111,24 @@ function paymentStatusLabel(status: string): string {
   };
   return labels[status] ?? status.toLowerCase();
 }
+
+function parseOptionalRecurringFlag(value: string | undefined): boolean | null | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  switch (value.trim().toLowerCase()) {
+    case "да":
+    case "yes":
+    case "true":
+    case "1":
+      return true;
+    case "нет":
+    case "no":
+    case "false":
+    case "0":
+      return false;
+    default:
+      return null;
+  }
+}
 const MERCHANT_TYPE_CHOICES = [
   { key: "PERSON", value: "INDIVIDUAL", label: "Физическое лицо" },
   { key: "SELF", value: "SELF_EMPLOYED", label: "Самозанятый" },
@@ -1135,6 +1153,7 @@ export function createControlBot(token: string): Bot {
       `💎 ${plan.title}\n\n` +
       `Цена: ${plan.price.toString()} ⭐\n` +
       `Срок: ${duration}\n` +
+      `Автопродление: ${plan.isRecurring ? "каждые 30 дней" : "выключено"}\n` +
       `Статус: ${plan.status === "ACTIVE" ? "Активен" : "В архиве"}\n` +
       `Площадок: ${plan._count.chats}\n` +
       `Подписок всего: ${plan._count.subscriptions}\n\n` +
@@ -1291,7 +1310,10 @@ export function createControlBot(token: string): Bot {
     }
     setPendingTextAction(ctx.from.id, { kind: "edit_plan", projectId, planId });
     await ctx.reply(
-      `Изменяем тариф «${plan.title}». Отправьте новые данные в формате:\nНазвание | Цена в Stars | Дней\n\nТекущие данные: ${plan.title} | ${plan.price.toString()} | ${plan.durationDays ?? 0}`,
+      `Изменяем тариф «${plan.title}». Отправьте данные в формате:\nНазвание | Цена в Stars | Дней | Автопродление (да/нет)\n\n` +
+      `Текущие данные: ${plan.title} | ${plan.price.toString()} | ${plan.durationDays ?? 0} | ${plan.isRecurring ? "да" : "нет"}\n` +
+      "Последнее поле можно пропустить — сохранится текущее значение. Для автопродления нужен срок ровно 30 дней. " +
+      "Уже созданные счета и действующие подписки сохраняют прежние условия.",
       { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
     );
   });
@@ -1371,7 +1393,9 @@ export function createControlBot(token: string): Bot {
     }
     setPendingTextAction(ctx.from.id, { kind: "create_plan", projectId });
     await ctx.reply(
-      "Введите данные тарифа в одном сообщении в формате:\nНазвание | Цена в Stars | Дней\n\nПример: VIP на месяц | 499 | 30\nУкажите 0 дней для бессрочного доступа.",
+      "Введите данные тарифа в одном сообщении в формате:\nНазвание | Цена в Stars | Дней | Автопродление (да/нет, необязательно)\n\n" +
+      "Пример разового платежа: VIP | 499 | 30\nПример автопродления: VIP на месяц | 499 | 30 | да\n" +
+      "Автопродление возможно только на 30 дней. Для бессрочного доступа укажите 0 дней и не включайте автопродление.",
       { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
     );
   });
@@ -2859,21 +2883,24 @@ export function createControlBot(token: string): Bot {
   bot.command("createplan", async (ctx) => {
     const fields = String(ctx.match ?? "").split("|").map((field) => field.trim());
 
-    if (fields.length !== 4) {
+    if (fields.length !== 4 && fields.length !== 5) {
       await ctx.reply(
-        "Формат: /createplan PROJECT_ID | Название | Цена | Дней\n\n" +
-        "Пример: /createplan abc123 | VIP на месяц | 499 | 30\n" +
-        "Укажите 0 дней для бессрочного доступа."
+        "Формат: /createplan PROJECT_ID | Название | Цена | Дней | Автопродление (да/нет, необязательно)\n\n" +
+        "Пример разового тарифа: /createplan abc123 | VIP | 499 | 30\n" +
+        "Пример с автопродлением: /createplan abc123 | VIP | 499 | 30 | да\n" +
+        "Для автопродления срок должен быть ровно 30 дней. 0 дней означает бессрочный разовый доступ."
       );
       return;
     }
 
-    const [projectId, title, priceInput, durationInput] = fields;
+    const [projectId, title, priceInput, durationInput, recurringInput] = fields;
     const normalizedPrice = priceInput?.replace(",", ".");
+    const recurringFlag = parseOptionalRecurringFlag(recurringInput);
+    const isRecurring = recurringFlag ?? false;
 
     if (!projectId || !title || title.length > 80 || !normalizedPrice ||
-        !/^\d{1,5}$/.test(normalizedPrice)) {
-      await ctx.reply("Проверьте ID проекта, название и цену. Цена должна быть целым количеством Telegram Stars от 1 до 10 000.");
+        !/^\d{1,5}$/.test(normalizedPrice) || recurringFlag === null) {
+      await ctx.reply("Проверьте ID проекта, название, цену и флаг автопродления. Цена — целое количество Stars от 1 до 10 000; флаг — да или нет.");
       return;
     }
 
@@ -2881,8 +2908,11 @@ export function createControlBot(token: string): Bot {
     const durationDays = Number(durationInput);
 
     if (!Number.isFinite(priceNumber) || priceNumber < 1 || priceNumber > 10000 ||
-        !Number.isInteger(durationDays) || durationDays < 0 || durationDays > 3650) {
-      await ctx.reply("Цена должна быть больше 0, срок — целым числом от 0 до 3650 дней.");
+        !Number.isInteger(durationDays) || durationDays < 0 || durationDays > 3650 ||
+        (isRecurring && durationDays !== 30)) {
+      await ctx.reply(isRecurring
+        ? "Для автопродления Telegram Stars срок должен быть ровно 30 дней; цена — от 1 до 10 000 Stars."
+        : "Цена должна быть от 1 до 10 000 Stars, срок — целым числом от 0 до 3650 дней.");
       return;
     }
 
@@ -2918,7 +2948,7 @@ export function createControlBot(token: string): Bot {
             price: normalizedPrice,
             currency: "XTR",
             durationDays: durationDays === 0 ? null : durationDays,
-            isRecurring: false,
+            isRecurring,
             chats: {
               create: activeChats.map((chat) => ({ connectedChatId: chat.id }))
             }
@@ -2933,6 +2963,7 @@ export function createControlBot(token: string): Bot {
         `ID: ${plan.id}\n` +
         `Цена: ${plan.price.toString()} ${plan.currency}\n` +
         `Длительность: ${plan.durationDays ? `${plan.durationDays} дней` : "бессрочно"}\n` +
+        `Автопродление: ${plan.isRecurring ? "включено, каждые 30 дней" : "выключено"}\n` +
         `Каналов и групп: ${plan.chats.length}\n\n` +
         "Тариф доступен для оплаты в Telegram Stars. Покупатель может отправить боту команду /buy ID_ТАРИФА."
       );
@@ -3933,16 +3964,22 @@ export function createControlBot(token: string): Bot {
 
       if (pendingAction.kind === "create_plan") {
         const fields = input.split("|").map((field) => field.trim());
-        const [title, priceInput, durationInput] = fields;
+        const [title, priceInput, durationInput, recurringInput] = fields;
         const price = priceInput?.replace(",", ".");
         const durationDays = Number(durationInput);
+        const recurringFlag = parseOptionalRecurringFlag(recurringInput);
+        const isRecurring = recurringFlag ?? false;
 
-        if (fields.length !== 3 || !title || title.length > 80 || !price ||
+        if ((fields.length !== 3 && fields.length !== 4) || !title || title.length > 80 || !price ||
             !/^\d{1,5}$/.test(price) || Number(price) < 1 || Number(price) > 10_000 ||
-            !Number.isInteger(durationDays) || durationDays < 0 || durationDays > 3650) {
-          await ctx.reply("Проверьте формат. Нужно: Название | Цена в Stars | Дней. Цена — 1–10 000, срок — 0–3650.", {
-            reply_markup: new InlineKeyboard().text("Повторить", `ui:createplan:${pendingAction.projectId}`).row().text("В главное меню", "ui:home")
-          });
+            !Number.isInteger(durationDays) || durationDays < 0 || durationDays > 3650 ||
+            recurringFlag === null || (isRecurring && durationDays !== 30)) {
+          await ctx.reply(
+            isRecurring
+              ? "Для автопродления срок должен быть ровно 30 дней. Формат: Название | Цена | 30 | да."
+              : "Формат: Название | Цена в Stars | Дней | Автопродление (да/нет, необязательно). Цена — 1–10 000 Stars, срок — 0–3650 дней.",
+            { reply_markup: new InlineKeyboard().text("Повторить", `ui:createplan:${pendingAction.projectId}`).row().text("В главное меню", "ui:home") }
+          );
           return;
         }
 
@@ -3973,13 +4010,15 @@ export function createControlBot(token: string): Bot {
                 price,
                 currency: "XTR",
                 durationDays: durationDays === 0 ? null : durationDays,
-                isRecurring: false,
+                isRecurring,
                 chats: { create: activeChats.map((chat) => ({ connectedChatId: chat.id })) }
               }
             }),
             project.id
           );
-          await ctx.reply(`Тариф «${plan.title}» создан за ${plan.price.toString()} ⭐.`, {
+          await ctx.reply(
+            `Тариф «${plan.title}» создан за ${plan.price.toString()} ⭐. Автопродление: ${plan.isRecurring ? "включено (30 дней)" : "выключено"}.`,
+            {
             reply_markup: new InlineKeyboard().text("Посмотреть тарифы", `ui:plans:${project.id}`).row().text("К проекту", `ui:project:${project.id}`)
           });
         } catch (error) {
@@ -4090,14 +4129,16 @@ export function createControlBot(token: string): Bot {
 
       if (pendingAction.kind === "edit_plan") {
         const fields = input.split("|").map((field) => field.trim());
-        const [title, priceInput, durationInput] = fields;
+        const [title, priceInput, durationInput, recurringInput] = fields;
         const price = priceInput?.replace(",", ".");
         const durationDays = Number(durationInput);
+        const recurringFlag = parseOptionalRecurringFlag(recurringInput);
 
-        if (fields.length !== 3 || !title || title.length > 80 || !price ||
+        if ((fields.length !== 3 && fields.length !== 4) || !title || title.length > 80 || !price ||
             !/^\d{1,5}$/.test(price) || Number(price) < 1 || Number(price) > 10_000 ||
-            !Number.isInteger(durationDays) || durationDays < 0 || durationDays > 3650) {
-          await ctx.reply("Проверьте формат. Нужно: Название | Цена в Stars | Дней. Цена — 1–10 000, срок — 0–3650.", {
+            !Number.isInteger(durationDays) || durationDays < 0 || durationDays > 3650 ||
+            recurringFlag === null) {
+          await ctx.reply("Формат: Название | Цена в Stars | Дней | Автопродление (да/нет, необязательно). Цена — 1–10 000 Stars, срок — 0–3650 дней.", {
             reply_markup: new InlineKeyboard()
               .text("Повторить", `p:e:${pendingAction.projectId}:${pendingAction.planId}`)
               .row().text("В главное меню", "ui:home")
@@ -4121,15 +4162,25 @@ export function createControlBot(token: string): Bot {
             });
             return;
           }
+          const isRecurring = recurringFlag ?? plan.isRecurring;
+          if (isRecurring && durationDays !== 30) {
+            await ctx.reply("Для тарифа с автопродлением период должен быть ровно 30 дней.", {
+              reply_markup: new InlineKeyboard().text("Повторить", `p:e:${pendingAction.projectId}:${pendingAction.planId}`)
+            });
+            return;
+          }
           await prisma.creatorPlan.update({
             where: { id: plan.id },
             data: {
               title,
               price,
-              durationDays: durationDays === 0 ? null : durationDays
+              durationDays: durationDays === 0 ? null : durationDays,
+              isRecurring
             }
           });
-          await ctx.reply("Тариф обновлён. Новая цена применяется к новым покупкам; уже созданные платежи не меняются.", {
+          await ctx.reply(
+            "Тариф обновлён. Новые настройки применяются к новым покупкам; уже созданные счета и действующие подписки сохраняют прежние условия.",
+            {
             reply_markup: new InlineKeyboard()
               .text("Открыть тариф", `p:v:${project.id}:${plan.id}`)
               .row().text("К тарифам", `ui:plans:${project.id}`)
