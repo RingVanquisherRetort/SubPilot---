@@ -1,5 +1,9 @@
 import { prisma } from "@subpilot/database";
-import { recalculateSubscriptionPeriod } from "@subpilot/payments";
+import {
+  lockSubscriptionAccessScopes,
+  recalculateSubscriptionPeriod,
+  requestSubscriptionAccessReconciliation
+} from "@subpilot/payments";
 
 type Transaction = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$use" | "$extends">;
 
@@ -34,6 +38,27 @@ export async function reconcileTelegramStarsRefundUsing(
     await tx.$queryRawUnsafe(
       'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
       input.subscriptionId
+    );
+  }
+
+  const subscriptionForRefund = input.subscriptionId
+    ? await tx.subscription.findUnique({
+        where: { id: input.subscriptionId },
+        select: {
+          customerId: true,
+          status: true,
+          startsAt: true,
+          endsAt: true,
+          accessGrants: { select: { connectedChatId: true } }
+        }
+      })
+    : null;
+
+  if (subscriptionForRefund) {
+    await lockSubscriptionAccessScopes(
+      tx,
+      subscriptionForRefund.customerId,
+      subscriptionForRefund.accessGrants.map((grant) => grant.connectedChatId)
     );
   }
 
@@ -72,10 +97,7 @@ export async function reconcileTelegramStarsRefundUsing(
     return { paymentUpdated: updated.count === 1, subscriptionStatus: null, subscriptionEndsAt: null };
   }
 
-  const subscription = await tx.subscription.findUnique({
-    where: { id: input.subscriptionId },
-    select: { status: true, startsAt: true, endsAt: true }
-  });
+  const subscription = subscriptionForRefund;
   if (!subscription) {
     return { paymentUpdated: true, subscriptionStatus: null, subscriptionEndsAt: null };
   }
@@ -89,6 +111,17 @@ export async function reconcileTelegramStarsRefundUsing(
       subscriptionEndsAt: subscription.endsAt
     };
   }
+
+  const enqueueAccessReconciliation = async (): Promise<void> => {
+    const connectedChatIds = subscription.accessGrants.map((grant) => grant.connectedChatId);
+    if (connectedChatIds.length === 0) return;
+    await requestSubscriptionAccessReconciliation(
+      tx,
+      subscription.customerId,
+      connectedChatIds,
+      input.refundedAt
+    );
+  };
 
   const remainingPayments = await tx.payment.findMany({
     where: {
@@ -104,6 +137,7 @@ export async function reconcileTelegramStarsRefundUsing(
       where: { id: input.subscriptionId },
       data: { status: "EXPIRED", endsAt: input.refundedAt, cancelledAt: null }
     });
+    await enqueueAccessReconciliation();
     return {
       paymentUpdated: true,
       subscriptionStatus: "EXPIRED",
@@ -124,6 +158,7 @@ export async function reconcileTelegramStarsRefundUsing(
         data: { status: "EXPIRED" }
       });
     }
+    await enqueueAccessReconciliation();
     return {
       paymentUpdated: true,
       subscriptionStatus: shouldExpire ? "EXPIRED" : subscription.status,
@@ -141,6 +176,7 @@ export async function reconcileTelegramStarsRefundUsing(
       cancelledAt: null
     }
   });
+  await enqueueAccessReconciliation();
 
   return {
     paymentUpdated: true,
