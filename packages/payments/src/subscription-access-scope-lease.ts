@@ -93,22 +93,22 @@ export async function claimNextSubscriptionAccessScope(
   const leaseExpiresAt = new Date(now.getTime() + ttlMs);
   const leaseToken = randomUUID();
   const rows = await db.$queryRawUnsafe<ScopeLeaseRow[]>(
-    'WITH candidate AS (\\n' +
-    '  SELECT "id" FROM "SubscriptionAccessScope"\\n' +
-    '  WHERE "desiredRevision" > "appliedRevision"\\n' +
-    '    AND ("nextAttemptAt" IS NULL OR "nextAttemptAt" <= $1)\\n' +
-    '    AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= $1)\\n' +
-    '  ORDER BY COALESCE("nextAttemptAt", "createdAt"), "createdAt", "id"\\n' +
-    '  FOR UPDATE SKIP LOCKED\\n' +
-    '  LIMIT 1\\n' +
-    ')\\n' +
-    'UPDATE "SubscriptionAccessScope" AS scope\\n' +
-    'SET "leaseToken" = $2, "leaseExpiresAt" = $3,\\n' +
-    '    "attempts" = scope."attempts" + 1, "updatedAt" = $1\\n' +
-    'FROM candidate\\n' +
-    'WHERE scope."id" = candidate."id"\\n' +
-    'RETURNING scope."id", scope."customerId", scope."connectedChatId",\\n' +
-    '          scope."desiredRevision", scope."appliedRevision", scope."leaseToken",\\n' +
+    'WITH candidate AS ( ' +
+    '  SELECT "id" FROM "SubscriptionAccessScope" ' +
+    '  WHERE "desiredRevision" > "appliedRevision" ' +
+    '    AND ("nextAttemptAt" IS NULL OR "nextAttemptAt" <= $1) ' +
+    '    AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= $1) ' +
+    '  ORDER BY COALESCE("nextAttemptAt", "createdAt"), "createdAt", "id" ' +
+    '  FOR UPDATE SKIP LOCKED ' +
+    '  LIMIT 1 ' +
+    ') ' +
+    'UPDATE "SubscriptionAccessScope" AS scope ' +
+    'SET "leaseToken" = $2, "leaseExpiresAt" = $3, ' +
+    '    "attempts" = scope."attempts" + 1, "updatedAt" = $1 ' +
+    'FROM candidate ' +
+    'WHERE scope."id" = candidate."id" ' +
+    'RETURNING scope."id", scope."customerId", scope."connectedChatId", ' +
+    '          scope."desiredRevision", scope."appliedRevision", scope."leaseToken", ' +
     '          scope."leaseExpiresAt", scope."attempts"',
     now,
     leaseToken,
@@ -130,9 +130,9 @@ export async function renewSubscriptionAccessScopeLease(
   }
   const expiresAt = new Date(now.getTime() + ttlMs);
   const rows = await db.$queryRawUnsafe<Array<{ id: string }>>(
-    'UPDATE "SubscriptionAccessScope"\\n' +
-    'SET "leaseExpiresAt" = $3, "updatedAt" = $2\\n' +
-    'WHERE "id" = $1 AND "leaseToken" = $4 AND "leaseExpiresAt" > $2\\n' +
+    'UPDATE "SubscriptionAccessScope" ' +
+    'SET "leaseExpiresAt" = $3, "updatedAt" = $2 ' +
+    'WHERE "id" = $1 AND "leaseToken" = $4 AND "leaseExpiresAt" > $2 ' +
     'RETURNING "id"',
     lease.id,
     now,
@@ -153,13 +153,13 @@ export async function completeSubscriptionAccessScope(
   now = new Date()
 ): Promise<boolean> {
   const rows = await db.$queryRawUnsafe<Array<{ id: string }>>(
-    'UPDATE "SubscriptionAccessScope"\\n' +
-    'SET "appliedRevision" = GREATEST("appliedRevision", $3::bigint),\\n' +
-    '    "leaseToken" = NULL, "leaseExpiresAt" = NULL,\\n' +
-    '    "nextAttemptAt" = CASE WHEN "desiredRevision" > $3::bigint THEN $4 ELSE NULL END,\\n' +
-    '    "attempts" = CASE WHEN "desiredRevision" > $3::bigint THEN "attempts" ELSE 0 END,\\n' +
-    '    "lastErrorCode" = NULL, "updatedAt" = $4\\n' +
-    'WHERE "id" = $1 AND "leaseToken" = $2 AND "leaseExpiresAt" > $4\\n' +
+    'UPDATE "SubscriptionAccessScope" ' +
+    'SET "appliedRevision" = GREATEST("appliedRevision", $3::bigint), ' +
+    '    "leaseToken" = NULL, "leaseExpiresAt" = NULL, ' +
+    '    "nextAttemptAt" = CASE WHEN "desiredRevision" > $3::bigint THEN $4 ELSE NULL END, ' +
+    '    "attempts" = CASE WHEN "desiredRevision" > $3::bigint THEN "attempts" ELSE 0 END, ' +
+    '    "lastErrorCode" = NULL, "updatedAt" = $4 ' +
+    'WHERE "id" = $1 AND "leaseToken" = $2 AND "leaseExpiresAt" > $4 ' +
     'RETURNING "id"',
     lease.id,
     lease.leaseToken,
@@ -183,11 +183,11 @@ export async function failSubscriptionAccessScope(
     ? input.errorCode
     : "UNKNOWN";
   const rows = await db.$queryRawUnsafe<Array<{ id: string }>>(
-    'UPDATE "SubscriptionAccessScope"\\n' +
-    'SET "leaseToken" = NULL, "leaseExpiresAt" = NULL,\\n' +
-    '    "nextAttemptAt" = CASE WHEN "desiredRevision" > $3::bigint THEN $4 ELSE $5 END,\\n' +
-    '    "lastErrorCode" = $6, "updatedAt" = $4\\n' +
-    'WHERE "id" = $1 AND "leaseToken" = $2 AND "leaseExpiresAt" > $4\\n' +
+    'UPDATE "SubscriptionAccessScope" ' +
+    'SET "leaseToken" = NULL, "leaseExpiresAt" = NULL, ' +
+    '    "nextAttemptAt" = CASE WHEN "desiredRevision" > $3::bigint THEN $4 ELSE $5 END, ' +
+    '    "lastErrorCode" = $6, "updatedAt" = $4 ' +
+    'WHERE "id" = $1 AND "leaseToken" = $2 AND "leaseExpiresAt" > $4 ' +
     'RETURNING "id"',
     lease.id,
     lease.leaseToken,
