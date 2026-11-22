@@ -83,7 +83,7 @@ export async function requestSubscriptionAccessReconciliation(
  */
 export async function claimNextSubscriptionAccessScope(
   db: ScopeLeaseExecutor,
-  options: { now?: Date; leaseTtlMs?: number } = {}
+  options: { now?: Date; leaseTtlMs?: number; onlyActiveEntitlements?: boolean } = {}
 ): Promise<SubscriptionAccessScopeLease | null> {
   const now = options.now ?? new Date();
   const ttlMs = options.leaseTtlMs ?? DEFAULT_SUBSCRIPTION_ACCESS_SCOPE_LEASE_TTL_MS;
@@ -92,13 +92,26 @@ export async function claimNextSubscriptionAccessScope(
   }
   const leaseExpiresAt = new Date(now.getTime() + ttlMs);
   const leaseToken = randomUUID();
+  const activeEntitlementPredicate = options.onlyActiveEntitlements
+    ? '    AND EXISTS ( ' +
+      '      SELECT 1 FROM "SubscriptionAccessGrant" AS grant ' +
+      '      JOIN "Subscription" AS subscription ON subscription."id" = grant."subscriptionId" ' +
+      '      WHERE grant."connectedChatId" = scope."connectedChatId" ' +
+      '        AND grant."revokedAt" IS NULL ' +
+      '        AND subscription."customerId" = scope."customerId" ' +
+      '        AND subscription."status" = \'ACTIVE\' ' +
+      '        AND (subscription."startsAt" IS NULL OR subscription."startsAt" <= $1) ' +
+      '        AND (subscription."endsAt" IS NULL OR subscription."endsAt" > $1) ' +
+      '    ) '
+    : "";
   const rows = await db.$queryRawUnsafe<ScopeLeaseRow[]>(
     'WITH candidate AS ( ' +
-    '  SELECT "id" FROM "SubscriptionAccessScope" ' +
-    '  WHERE "desiredRevision" > "appliedRevision" ' +
-    '    AND ("nextAttemptAt" IS NULL OR "nextAttemptAt" <= $1) ' +
-    '    AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= $1) ' +
-    '  ORDER BY COALESCE("nextAttemptAt", "createdAt"), "createdAt", "id" ' +
+    '  SELECT scope."id" FROM "SubscriptionAccessScope" AS scope ' +
+    '  WHERE scope."desiredRevision" > scope."appliedRevision" ' +
+    '    AND (scope."nextAttemptAt" IS NULL OR scope."nextAttemptAt" <= $1) ' +
+    '    AND (scope."leaseExpiresAt" IS NULL OR scope."leaseExpiresAt" <= $1) ' +
+    activeEntitlementPredicate +
+    '  ORDER BY COALESCE(scope."nextAttemptAt", scope."createdAt"), scope."createdAt", scope."id" ' +
     '  FOR UPDATE SKIP LOCKED ' +
     '  LIMIT 1 ' +
     ') ' +
