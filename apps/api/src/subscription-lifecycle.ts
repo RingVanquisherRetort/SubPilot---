@@ -488,7 +488,9 @@ async function expireSubscriptions(
         grant.inviteLink
       ) {
         try {
-          const outcome = await prisma.$transaction(async (tx) => {
+          // Snapshot the exact stale invite in a short transaction. The Telegram
+          // request runs after commit, so no database connection is held open.
+          const staleInvite = await prisma.$transaction(async (tx) => {
             await tx.$queryRawUnsafe(
               'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
               subscription.id
@@ -506,38 +508,39 @@ async function expireSubscriptions(
               currentGrant.revocationReason !== "ADMIN_EXCLUDED" ||
               currentGrant.revokedAt === null ||
               !currentGrant.inviteLink
-            ) return "SKIPPED" as const;
+            ) return null;
+            return currentGrant.inviteLink;
+          }, { maxWait: 10_000, timeout: 15_000 });
 
-            if (!isLeaseOwned()) return "LEASE_LOST" as const;
-            try {
-              await bot!.api.revokeChatInviteLink(
-                grant.connectedChat.telegramChatId.toString(),
-                currentGrant.inviteLink
-              );
-            } catch (error) {
-              if (!isTelegramInviteAlreadyRevoked(error)) throw error;
+          if (!staleInvite) continue;
+          if (!isLeaseOwned()) return;
+          try {
+            await bot!.api.revokeChatInviteLink(
+              grant.connectedChat.telegramChatId.toString(),
+              staleInvite
+            );
+          } catch (error) {
+            if (!isTelegramInviteAlreadyRevoked(error)) throw error;
+          }
+          if (!isLeaseOwned()) return;
+
+          // Clear only the invite we actually revoked. A concurrent explicit
+          // re-grant may already have installed a newer invite URL.
+          await prisma.subscriptionAccessGrant.updateMany({
+            where: {
+              id: grant.id,
+              inviteLink: staleInvite,
+              revokedAt: { not: null },
+              revocationReason: "ADMIN_EXCLUDED"
+            },
+            data: {
+              inviteLink: "",
+              expiresAt: new Date(0),
+              revocationAttempts: 0,
+              revocationNextAttemptAt: now,
+              revocationLastError: null
             }
-            if (!isLeaseOwned()) return "LEASE_LOST" as const;
-
-            await tx.subscriptionAccessGrant.updateMany({
-              where: {
-                id: grant.id,
-                inviteLink: currentGrant.inviteLink,
-                revokedAt: { not: null },
-                revocationReason: "ADMIN_EXCLUDED"
-              },
-              data: {
-                inviteLink: "",
-                expiresAt: new Date(0),
-                revocationAttempts: 0,
-                revocationNextAttemptAt: now,
-                revocationLastError: null
-              }
-            });
-            return "REVOKED" as const;
-          }, { maxWait: 10_000, timeout: 60_000 });
-
-          if (outcome === "LEASE_LOST") return;
+          });
         } catch (error) {
           removalFailures.push(chatLabel);
           await recordSubscriptionAccessRevocationFailure(
