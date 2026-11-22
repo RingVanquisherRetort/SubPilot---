@@ -5,6 +5,19 @@
 **Reviewed implementation snapshot:** `f226305c655df2f1da388a329294db2ab142fe9b` (CI run `45074857282` passed clean and upgrade migrations, Prisma generation, typecheck and all 190 tests)
 **Production status:** Not merged; no live Telegram/provider test has been run as part of this review.
 
+## Execution update — 23 November 2026 (supersedes historical snapshot below)
+
+At working-branch baseline `ee78a0e`, CI run `45076660501` passed both jobs. Subsequent changes through `72d204d` passed both CI jobs in run `45080154480`; the later `3cccd86` ban-intent marker requires independent CI verification.
+
+- `expireSubscriptions` now claims expiry and enqueues scope revisions in a short database transaction. Telegram access removal runs via `reconcileSubscriptionAccessRemoval` using the durable customer/chat scope lease and short authorization/finalization transactions.
+- A fresh entitlement/overlap snapshot is checked *after* the scope claim, with revision checks before Telegram member operations. Finalization conditionally rejects stale lease/revision results and requeues another active grant when needed.
+- `ADMIN_EXCLUDED` cleanup revokes only the exact stale invitation and does not alter Telegram membership or sticky admin exclusions. If another active subscription exists, it queues new delivery reconciliation.
+- Crashes after a temporary Telegram ban are treated as ambiguous: `MEMBER_BAN_IN_PROGRESS`, `MEMBER_UNBAN_FAILED`, and `MEMBER_BAN_OWNERSHIP_UNCERTAIN` must never cause an automatic unban of a possible moderator ban.
+- PostgreSQL regression tests cover blocked Telegram vs concurrent payment renewal, cross-subscription overlap, stale invite cleanup, and ambiguous ban ownership.
+- **Still open:** project-bot recurring Stars state changes inside transactions (buyer toggle and late-initial receipt), durable cancellation recovery and payment/webhook races, compromised-invite and stale-join side effects that lack full scope fencing, remote moderation interleavings, and live Telegram acceptance. No P0 closure claim and no production deployment.
+
+The prior analysis below is retained as a historical record of the `f226305c` review; statements describing expiry as still on the legacy path apply to that older snapshot.
+
 ## Why this review exists
 
 The current subscription lifecycle deliberately serializes expiry and successful payment changes by locking the `Subscription` row. This prevents the simple race where expiry checks an old end date, a payment extends the same subscription, and the worker then revokes access based on stale data.
