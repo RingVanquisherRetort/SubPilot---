@@ -65,6 +65,8 @@ In agency workspaces, OWNER/ADMIN retain workspace-wide project access. Other me
 - `/createplan PROJECT_ID | Title | StarPrice | DurationDays` — create a Telegram Stars tariff. Use `0` for no fixed expiry.
 - `/plans PROJECT_ID` — list plans.
 - `/payments PROJECT_ID` — view recent payments.
+- `/agencyaudit [LIMIT]` — view agency history for every project the operator is authorized to manage.
+- `/agencyauditexport [DAYS]` — export the agency history as CSV for 1–365 days (up to 5,000 events).
 - `/refundpayment PAYMENT_ID` — issue or reconcile a Telegram Stars refund; remaining paid subscription time is recalculated when payment snapshots allow it.
 - `/testnotifications` — send four sample lifecycle notifications to your own private chat with the central bot. This smoke test does not contact project owners or subscribers.
 - `/failednotifications` and `/retrynotification ID` — inspect/requeue exhausted owner notifications in the active workspace.
