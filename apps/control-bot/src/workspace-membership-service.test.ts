@@ -9,6 +9,7 @@ test("workspace membership administration rechecks roles transactionally and aud
   const {
     WorkspaceMembershipError,
     createWorkspaceInvite,
+    listWorkspaceMembersForAdmin,
     removeWorkspaceMember,
     revokeWorkspaceInvite,
     setWorkspaceMemberRole
@@ -67,6 +68,22 @@ test("workspace membership administration rechecks roles transactionally and aud
       where: { id: viewer.id },
       data: { activeWorkspaceId: workspace.id }
     });
+
+    const directory = await listWorkspaceMembersForAdmin({
+      workspaceId: workspace.id,
+      actorUserId: admin.id
+    });
+    assert.equal(directory.workspaceName, workspace.name);
+    assert.equal(directory.members.length, 5);
+    assert.equal(directory.members.some((member) => member.telegramId === String(telegramBase + 1n)), true);
+    await assert.rejects(
+      listWorkspaceMembersForAdmin({ workspaceId: workspace.id, actorUserId: manager.id }),
+      (error: unknown) => error instanceof WorkspaceMembershipError && error.code === "PERMISSION_DENIED"
+    );
+    await assert.rejects(
+      listWorkspaceMembersForAdmin({ workspaceId: workspace.id, actorUserId: viewer.id }),
+      (error: unknown) => error instanceof WorkspaceMembershipError && error.code === "PERMISSION_DENIED"
+    );
 
     await assert.rejects(
       setWorkspaceMemberRole({
