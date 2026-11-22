@@ -143,6 +143,7 @@ export async function reconcileSubscriptionAccessRemoval(
       inviteLink: grant.inviteLink,
       expiresAt: grant.expiresAt,
       joinedAt: grant.joinedAt,
+      revocationLastError: grant.revocationLastError,
       telegramChatId: grant.connectedChat.telegramChatId.toString(),
       hasOtherActiveGrant: Boolean(otherActiveGrant)
     };
@@ -221,20 +222,40 @@ export async function reconcileSubscriptionAccessRemoval(
         snapshot.telegramChatId,
         telegramUserId
       );
-      if (
+      if (member.status === "kicked" && snapshot.revocationLastError === "MEMBER_UNBAN_FAILED") {
+        // The previous attempt may have performed our temporary ban but failed
+        // to undo it. Retry that unban instead of misclassifying our own ban as
+        // a moderator exclusion.
+        try {
+          await input.bot.api.unbanChatMember(
+            snapshot.telegramChatId,
+            telegramUserId,
+            { only_if_banned: true }
+          );
+        } catch {
+          await fail("MEMBER_UNBAN_FAILED");
+          return "FAILED";
+        }
+      } else if (
         member.status === "kicked" ||
         (member.status === "restricted" && !member.is_member)
       ) {
-        // Preserve an existing moderator ban as an explicit access denial.
+        // Preserve a ban that was already present before our temporary removal.
         revocationReason = "ADMIN_EXCLUDED";
       } else {
         await input.bot.api.banChatMember(snapshot.telegramChatId, telegramUserId);
-        if (!ownsLease()) return "LEASE_LOST";
-        await input.bot.api.unbanChatMember(
-          snapshot.telegramChatId,
-          telegramUserId,
-          { only_if_banned: true }
-        );
+        // Always attempt to undo our temporary ban even if the worker lease is
+        // lost immediately after banChatMember succeeds.
+        try {
+          await input.bot.api.unbanChatMember(
+            snapshot.telegramChatId,
+            telegramUserId,
+            { only_if_banned: true }
+          );
+        } catch {
+          await fail("MEMBER_UNBAN_FAILED");
+          return "FAILED";
+        }
         if (!ownsLease()) return "LEASE_LOST";
       }
     }
@@ -313,9 +334,6 @@ export async function reconcileSubscriptionAccessRemoval(
         select: { id: true }
       });
 
-      const completed = await completeSubscriptionAccessScope(tx, lease, now);
-      if (!completed) return { state: "STALE" as const, preserved: false };
-
       const revoked = await tx.subscriptionAccessGrant.updateMany({
         where: {
           id: snapshot.grantId,
@@ -333,6 +351,9 @@ export async function reconcileSubscriptionAccessRemoval(
         }
       });
       if (revoked.count !== 1) return { state: "STALE" as const, preserved: false };
+
+      const completed = await completeSubscriptionAccessScope(tx, lease, now);
+      if (!completed) throw new Error("ACCESS_SCOPE_LEASE_LOST_DURING_FINALIZATION");
       return {
         state: "REVOKED" as const,
         preserved: Boolean(otherActiveGrant)
