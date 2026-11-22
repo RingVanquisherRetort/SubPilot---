@@ -59,22 +59,39 @@ export function recalculateSubscriptionPeriod(
     const durationDays = payment.metadata.durationDays;
     if (durationDays !== null &&
         (typeof durationDays !== "number" || !Number.isSafeInteger(durationDays) || durationDays <= 0)) return null;
-    return { paidAt: payment.paidAt, durationDays };
+    const expirationValue = payment.metadata.subscriptionExpirationDate;
+    let providerExpiration: Date | null = null;
+    if (expirationValue !== undefined) {
+      if (typeof expirationValue !== "number" || !Number.isSafeInteger(expirationValue) || expirationValue <= 0) {
+        return null;
+      }
+      providerExpiration = new Date(expirationValue * 1000);
+      if (!Number.isFinite(providerExpiration.getTime())) return null;
+    }
+    return { paidAt: payment.paidAt, durationDays, providerExpiration };
   });
   if (periods.some((period) => period === null)) {
     return { exact: false, startsAt: fallback.startsAt, endsAt: fallback.endsAt };
   }
-  const validPeriods = periods as Array<{ paidAt: Date; durationDays: number | null }>;
+  const validPeriods = periods as Array<{
+    paidAt: Date;
+    durationDays: number | null;
+    providerExpiration: Date | null;
+  }>;
   const startsAt = validPeriods[0]?.paidAt ?? null;
   let periodEnd = startsAt;
   for (const period of validPeriods) {
     if (period.durationDays === null) return { exact: true, startsAt, endsAt: null };
     const anchor = periodEnd && periodEnd > period.paidAt ? periodEnd : period.paidAt;
-    const nextEnd = new Date(anchor.getTime() + period.durationDays * DAY_MS);
-    if (!Number.isFinite(nextEnd.getTime())) {
+    const durationEnd = new Date(anchor.getTime() + period.durationDays * DAY_MS);
+    if (!Number.isFinite(durationEnd.getTime())) {
       return { exact: false, startsAt: fallback.startsAt, endsAt: fallback.endsAt };
     }
-    periodEnd = nextEnd;
+    // Telegram's absolute subscription expiration is more precise than deriving
+    // a date from the local webhook receipt timestamp. Keep longer prior access.
+    periodEnd = period.providerExpiration && period.providerExpiration > durationEnd
+      ? period.providerExpiration
+      : durationEnd;
   }
   return { exact: true, startsAt, endsAt: periodEnd };
 }
