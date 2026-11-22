@@ -746,7 +746,7 @@ export function createControlBot(token: string): Bot {
       const keyboard = new InlineKeyboard();
       for (const plan of plans) {
         const title = plan.title.slice(0, 24) + " · " + plan.price.toString() + " ⭐";
-        keyboard.text(title, "ui:subaccess-plan:" + kind + ":" + projectId + ":" + plan.id).row();
+        keyboard.text(title, "sap:" + (kind === "manual" ? "m" : "t") + ":" + projectId + ":" + plan.id).row();
       }
       keyboard.text("⬅️ К управлению подписками", "ui:subaccess:" + projectId);
       await ctx.editMessageText(
@@ -760,13 +760,13 @@ export function createControlBot(token: string): Bot {
     }
   });
 
-  bot.callbackQuery(/^ui:subaccess-plan:(manual|trial):([^:]+):([^:]+)$/, async (ctx) => {
+  bot.callbackQuery(/^sap:(m|t):([^:]+):([^:]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     if (!ctx.from) return;
-    const kind = ctx.match[1];
+    const kind = ctx.match[1] === "m" ? "manual" : "trial";
     const projectId = ctx.match[2];
     const planId = ctx.match[3];
-    if (!kind || !projectId || !planId) return;
+    if (!projectId || !planId) return;
     const user = await upsertTelegramUser(ctx);
     const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
     const plan = project
