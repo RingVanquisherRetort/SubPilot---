@@ -87,7 +87,7 @@ These items have been inspected in source; the table does not claim that every s
 | SubPilot fixed-price workspace billing | Partially implemented: authenticated web checkout, YooKassa success webhook, period extension, full-refund reconciliation, audit logs and manual-review queue exist. Manual one-time renewal is the intended model; automatic recurring charges are out of scope. Real merchant sandbox validation and activation approval are not complete. |
 | 7-day / 14% experiment collection | Intentionally dormant; not connected to normal creator payment success. |
 | Manual subscription grants/revocation and trial handling | Implemented: `/grantaccess`, `/trialaccess`, `/activesubscriptions` and `/revokeaccess` with OWNER/ADMIN checks, audit logs, unique trial policy and worker-driven revocation. Real Telegram acceptance remains open. |
-| AuditLog application writes / audit-history UI | Not implemented; schema exists only. |
+| Audit history | Partially implemented and expanding | Existing high-impact services write AuditLog records and `/auditlog` exposes per-project history; `/agencyaudit` and `/agencyauditexport` now provide role-scoped agency history and CSV export. Exhaustive audit coverage of every state transition remains open. |
 | Subscription access-delivery dead-letter monitoring and operator recovery | Implemented: bounded retries, owner alert, workspace-scoped `/faileddeliveries` and audited `/retrydelivery`. Other delivery/notification classes still require their own live acceptance checks. |
 | Nemiling-listed monetization extensions such as donations, paid messages/conversations, gifts, promo/referral mechanics, giveaways and broadcasts | Not implemented; these remain outside the current subscription/access baseline. |
 
