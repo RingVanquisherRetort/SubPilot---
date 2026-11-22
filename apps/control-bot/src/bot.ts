@@ -93,6 +93,7 @@ import {
   recalculateSubscriptionPeriod,
   type CreatorMerchantType
 } from "@subpilot/payments";
+import { parseOptionalRecurringFlag } from "./recurring-plan-input.js";
 
 const BOT_TOKEN_PATTERN = /^\d{5,15}:[A-Za-z0-9_-]{20,}$/;
 const BOT_TOKEN_TTL_MS = 5 * 60 * 1000;
@@ -112,23 +113,6 @@ function paymentStatusLabel(status: string): string {
   return labels[status] ?? status.toLowerCase();
 }
 
-function parseOptionalRecurringFlag(value: string | undefined): boolean | null | undefined {
-  if (value === undefined || value.trim() === "") return undefined;
-  switch (value.trim().toLowerCase()) {
-    case "да":
-    case "yes":
-    case "true":
-    case "1":
-      return true;
-    case "нет":
-    case "no":
-    case "false":
-    case "0":
-      return false;
-    default:
-      return null;
-  }
-}
 const MERCHANT_TYPE_CHOICES = [
   { key: "PERSON", value: "INDIVIDUAL", label: "Физическое лицо" },
   { key: "SELF", value: "SELF_EMPLOYED", label: "Самозанятый" },
