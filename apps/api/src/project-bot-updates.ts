@@ -22,6 +22,7 @@ import { isSubscriptionAccessPermissionActive, PAID_RENEWAL_RESTORABLE_REVOCATIO
 import { classifyTelegramMembershipDeparture } from "./telegram-membership-departure.js";
 import { getAccessRevocationRetryState } from "./access-revocation-retry.js";
 import { reconcileTelegramStarsRefundUsing } from "./telegram-stars-refund-reconciliation.js";
+import type { SubscriptionAccessScopeLease } from "@subpilot/payments";
 import {
   claimSubscriptionAccessScope,
   completeSubscriptionAccessScope,
@@ -613,7 +614,8 @@ export async function deliverSubscriptionAccess(
   bot: Bot,
   subscriptionId: string,
   chatIds?: string[],
-  isLifecycleLeaseOwned: () => boolean = () => true
+  isLifecycleLeaseOwned: () => boolean = () => true,
+  preclaimedScopeLease?: SubscriptionAccessScopeLease
 ): Promise<{ links: string[]; alreadyJoined: string[]; failed: string[]; blocked: string[] }> {
   const results = {
     links: [] as string[],
@@ -695,12 +697,37 @@ export async function deliverSubscriptionAccess(
       }, now)) return { state: "BLOCKED" as const };
 
       await lockSubscriptionAccessScope(tx, currentSubscription.customerId, chat.id);
-      await requestSubscriptionAccessReconciliation(
-        tx,
-        currentSubscription.customerId,
-        [chat.id],
-        now
-      );
+      if (preclaimedScopeLease) {
+        const scope = await tx.subscriptionAccessScope.findUnique({
+          where: {
+            customerId_connectedChatId: {
+              customerId: currentSubscription.customerId,
+              connectedChatId: chat.id
+            }
+          },
+          select: {
+            desiredRevision: true,
+            leaseToken: true,
+            leaseExpiresAt: true
+          }
+        });
+        if (
+          preclaimedScopeLease.customerId !== currentSubscription.customerId ||
+          preclaimedScopeLease.connectedChatId !== chat.id ||
+          !scope ||
+          scope.leaseToken !== preclaimedScopeLease.leaseToken ||
+          scope.desiredRevision !== preclaimedScopeLease.revision ||
+          scope.leaseExpiresAt === null ||
+          scope.leaseExpiresAt <= now
+        ) return { state: "BLOCKED" as const };
+      } else {
+        await requestSubscriptionAccessReconciliation(
+          tx,
+          currentSubscription.customerId,
+          [chat.id],
+          now
+        );
+      }
       return {
         state: "READY" as const,
         customerId: currentSubscription.customerId,
@@ -709,11 +736,14 @@ export async function deliverSubscriptionAccess(
     }, { maxWait: 10_000, timeout: 15_000 });
 
     if (prepared.state === "BLOCKED" || prepared.state === "MISSING") {
+      if (preclaimedScopeLease) {
+        await completeSubscriptionAccessScope(prisma, preclaimedScopeLease).catch(() => false);
+      }
       results.blocked.push(label);
       continue;
     }
 
-    const lease = await claimSubscriptionAccessScope(
+    const lease = preclaimedScopeLease ?? await claimSubscriptionAccessScope(
       prisma,
       prepared.customerId,
       chat.id,
