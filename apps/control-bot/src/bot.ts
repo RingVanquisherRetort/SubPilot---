@@ -1436,8 +1436,12 @@ export function createControlBot(token: string): Bot {
         "\n\nПригласить участника: /invite"
       );
     } catch (error) {
-      console.error("Control bot /members failed:", error);
-      await ctx.reply("Не удалось загрузить участников.");
+      if (error instanceof WorkspaceMembershipError && error.code === "PERMISSION_DENIED") {
+        await ctx.reply("Telegram ID участников доступны только владельцу и администратору пространства.");
+      } else {
+        console.error("Control bot /members failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось загрузить участников.");
+      }
     }
   });
 
@@ -1468,8 +1472,18 @@ export function createControlBot(token: string): Bot {
         `Участник ${removed.telegramId} удалён из «${workspace.name}».`
       );
     } catch (error) {
-      console.error("Control bot /removemember failed:", error);
-      await ctx.reply("Не удалось удалить участника.");
+      if (error instanceof WorkspaceMembershipError) {
+        await ctx.reply(
+          error.code === "PERMISSION_DENIED"
+            ? "У вас нет прав удалить этого участника."
+            : error.code === "MEMBER_NOT_FOUND"
+              ? "Участник не найден в активном пространстве."
+              : "Не удалось удалить участника."
+        );
+      } else {
+        console.error("Control bot /removemember failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось удалить участника.");
+      }
     }
   });
 
@@ -1536,8 +1550,12 @@ export function createControlBot(token: string): Bot {
         revoked ? "Приглашение отозвано." : "Активное приглашение с таким ID не найдено."
       );
     } catch (error) {
-      console.error("Control bot /revokeinvite failed:", error);
-      await ctx.reply("Не удалось отозвать приглашение.");
+      if (error instanceof WorkspaceMembershipError && error.code === "PERMISSION_DENIED") {
+        await ctx.reply("Администратор не может отозвать приглашение на роль ADMIN. Эту операцию выполняет владелец.");
+      } else {
+        console.error("Control bot /revokeinvite failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось отозвать приглашение.");
+      }
     }
   });
 
