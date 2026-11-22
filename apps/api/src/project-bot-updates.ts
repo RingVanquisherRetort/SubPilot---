@@ -1005,7 +1005,11 @@ async function processSuccessfulStarsPayment(
         ...(paymentKind === "INITIAL_RECURRING"
           ? {
               telegramStarInitialChargeId: receipt.telegram_payment_charge_id,
-              telegramStarSubscriptionState: "ACTIVE"
+              // A cancellation update can be delivered before successful_payment
+              // processing finishes. Preserve that buyer decision while storing
+              // the first-charge anchor.
+              telegramStarSubscriptionState:
+                currentSubscription.telegramStarSubscriptionState === "CANCELED" ? "CANCELED" : "ACTIVE"
             }
           : paymentKind === "RECURRING_RENEWAL" &&
               currentSubscription.telegramStarSubscriptionState === "FAILED"
@@ -1417,7 +1421,6 @@ export async function handleProjectBotUpdate(
       payment.subscriptionId &&
       payment.provider === "TELEGRAM_STARS" &&
       payment.currency === "XTR" &&
-      payment.providerPaymentId !== null &&
       payment.customer.telegramUserId === BigInt(subscriptionUpdate.telegramUserId) &&
       metadata?.source === "project_bot" &&
       metadata.projectBotId === projectBotId &&
