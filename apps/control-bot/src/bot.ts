@@ -3189,13 +3189,13 @@ export function createControlBot(token: string): Bot {
       }
 
       const restored = await withWorkspaceQuotaTransaction(
-        plan.project.workspaceId,
+        project.workspaceId,
         "plansPerProject",
         (tx) => tx.creatorPlan.updateMany({
-          where: { id: plan.id, projectId: plan.projectId, status: "ARCHIVED" },
+          where: { id: plan.id, projectId: project.id, status: "ARCHIVED" },
           data: { status: "ACTIVE" }
         }),
-        plan.projectId
+        project.id
       );
       if (restored.count !== 1) {
         await ctx.reply("Тариф уже восстановлен или больше недоступен.");
