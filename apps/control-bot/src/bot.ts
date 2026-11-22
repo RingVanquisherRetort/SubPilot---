@@ -137,7 +137,9 @@ type PendingTextActionInput =
   | { kind: "new_project" }
   | { kind: "new_agency" }
   | { kind: "create_plan"; projectId: string }
-  | { kind: "edit_plan"; projectId: string; planId: string };
+  | { kind: "edit_plan"; projectId: string; planId: string }
+  | { kind: "grant_manual_subscription"; projectId: string; planId: string }
+  | { kind: "grant_trial_subscription"; projectId: string; planId: string };
 
 type PendingTextAction = PendingTextActionInput & { expiresAt: number };
 
@@ -615,6 +617,9 @@ export function createControlBot(token: string): Bot {
     if (canManageProject) {
       keyboard.text("💳 Способы оплаты", `ui:payment-methods:${projectId}`).row();
     }
+    if (ADMIN_ROLES.includes(project.accessRole as typeof ADMIN_ROLES[number])) {
+      keyboard.text("🔐 Подписки и доступ", `ui:subaccess:${projectId}`).row();
+    }
     if (project.workspaceType === "AGENCY" && ADMIN_ROLES.includes(project.accessRole as typeof ADMIN_ROLES[number])) {
       keyboard.text("👥 Доступ к проекту", `ui:projectmembers:${projectId}`).row();
     }
@@ -626,6 +631,324 @@ export function createControlBot(token: string): Bot {
       { reply_markup: keyboard }
     );
   });
+
+
+  bot.callbackQuery(/^ui:subaccess:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const projectId = ctx.match[1];
+    if (!projectId) return;
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
+      if (!project) {
+        await ctx.reply("Управление подписками доступно только владельцу или администратору проекта.");
+        return;
+      }
+      const now = new Date();
+      const activeCount = await prisma.subscription.count({
+        where: {
+          projectId,
+          status: "ACTIVE",
+          OR: [{ endsAt: null }, { endsAt: { gt: now } }]
+        }
+      });
+      const keyboard = new InlineKeyboard()
+        .text("👥 Активные подписки (" + activeCount + ")", "ui:subaccess-list:" + projectId).row()
+        .text("➕ Выдать доступ", "ui:subaccess-grant:manual:" + projectId)
+        .text("🎁 Пробный доступ", "ui:subaccess-grant:trial:" + projectId).row()
+        .text("⚠️ Проблемные выдачи", "ui:subaccess-failed:" + projectId).row()
+        .text("⬅️ К проекту", "ui:project:" + projectId);
+      await ctx.editMessageText(
+        "🔐 Подписки и доступ — «" + project.name + "»\n\n" +
+        "Активных подписок: " + activeCount + "\n\n" +
+        "Здесь можно вручную выдать доступ, оформить пробный период, посмотреть действующие подписки, отозвать доступ и восстановить неудачную выдачу приглашения.",
+        { reply_markup: keyboard }
+      );
+    } catch (error) {
+      console.error("Subscription access panel failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось открыть управление подписками.");
+    }
+  });
+
+  bot.callbackQuery(/^ui:subaccess-list:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const projectId = ctx.match[1];
+    if (!projectId) return;
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
+      if (!project) {
+        await ctx.reply("Просматривать и изменять подписки могут только владелец или администратор проекта.");
+        return;
+      }
+      const items = await listActiveProjectSubscriptions({
+        workspaceId: project.workspaceId,
+        projectId,
+        limit: 20
+      });
+      if (items.length === 0) {
+        await ctx.editMessageText("В проекте пока нет активных подписок.", {
+          reply_markup: new InlineKeyboard()
+            .text("⬅️ К управлению подписками", "ui:subaccess:" + projectId)
+        });
+        return;
+      }
+      const rows = items.map((item, index) =>
+        (index + 1) + ". " + item.plan.title + " · " +
+        (item.customer.firstName ?? "Покупатель") + "\n" +
+        "Telegram ID: " + item.customer.telegramUserId.toString() + "\n" +
+        "Тип: " + item.grantType.toLowerCase() + " · окончание: " +
+        (item.endsAt ? item.endsAt.toLocaleString("ru-RU") : "бессрочно")
+      );
+      const keyboard = new InlineKeyboard();
+      items.forEach((item, index) => {
+        keyboard.text("🚫 Отозвать доступ №" + (index + 1), "sa:r:" + projectId + ":" + item.id).row();
+      });
+      keyboard.text("⬅️ К управлению подписками", "ui:subaccess:" + projectId);
+      await ctx.editMessageText(
+        "Активные подписки «" + project.name + "» (до 20):\n\n" +
+        rows.join("\n\n") +
+        "\n\nОтзыв сначала требует подтверждения. Если у клиента есть другая действующая подписка на ту же площадку, доступ по ней сохранится.",
+        { reply_markup: keyboard }
+      );
+    } catch (error) {
+      console.error("Subscription list screen failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось загрузить активные подписки.");
+    }
+  });
+
+  bot.callbackQuery(/^ui:subaccess-grant:(manual|trial):([^:]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const kind = ctx.match[1];
+    const projectId = ctx.match[2];
+    if (!kind || !projectId) return;
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
+      if (!project) {
+        await ctx.reply("Выдавать доступ могут только владелец или администратор проекта.");
+        return;
+      }
+      const plans = await prisma.creatorPlan.findMany({
+        where: { projectId, status: "ACTIVE", chats: { some: {} } },
+        include: { _count: { select: { chats: true } } },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+        take: 20
+      });
+      if (plans.length === 0) {
+        await ctx.editMessageText("Нет активных тарифов с подключёнными площадками. Сначала настройте тариф и свяжите его с каналом или группой.", {
+          reply_markup: new InlineKeyboard()
+            .text("К тарифам", "ui:plans:" + projectId).row()
+            .text("⬅️ К управлению подписками", "ui:subaccess:" + projectId)
+        });
+        return;
+      }
+      const keyboard = new InlineKeyboard();
+      for (const plan of plans) {
+        const title = plan.title.slice(0, 24) + " · " + plan.price.toString() + " ⭐";
+        keyboard.text(title, "ui:subaccess-plan:" + kind + ":" + projectId + ":" + plan.id).row();
+      }
+      keyboard.text("⬅️ К управлению подписками", "ui:subaccess:" + projectId);
+      await ctx.editMessageText(
+        (kind === "trial" ? "Выберите тариф для пробного доступа:" : "Выберите тариф для ручной выдачи:") +
+        "\n\n" + plans.map((plan) => "• " + plan.title + " — площадок: " + plan._count.chats).join("\n"),
+        { reply_markup: keyboard }
+      );
+    } catch (error) {
+      console.error("Subscription grant plan list failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось загрузить тарифы проекта.");
+    }
+  });
+
+  bot.callbackQuery(/^ui:subaccess-plan:(manual|trial):([^:]+):([^:]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.from) return;
+    const kind = ctx.match[1];
+    const projectId = ctx.match[2];
+    const planId = ctx.match[3];
+    if (!kind || !projectId || !planId) return;
+    const user = await upsertTelegramUser(ctx);
+    const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
+    const plan = project
+      ? await prisma.creatorPlan.findFirst({
+          where: { id: planId, projectId, status: "ACTIVE", chats: { some: {} } },
+          select: { id: true, title: true, trialDays: true, durationDays: true }
+        })
+      : null;
+    if (!project || !plan) {
+      await ctx.reply("Тариф недоступен или права управления изменились.");
+      return;
+    }
+    if (kind === "manual") {
+      setPendingTextAction(ctx.from.id, { kind: "grant_manual_subscription", projectId, planId });
+      await ctx.reply(
+        "Ручная выдача по тарифу «" + plan.title + "».\n\n" +
+        "Отправьте: TELEGRAM_ID | DAYS\n" +
+        "DAYS необязателен (тогда используется срок тарифа); 0 означает бессрочный доступ. Максимум — 3650 дней.",
+        { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
+      );
+    } else {
+      setPendingTextAction(ctx.from.id, { kind: "grant_trial_subscription", projectId, planId });
+      await ctx.reply(
+        "Пробный доступ по тарифу «" + plan.title + "».\n\n" +
+        "Отправьте: TELEGRAM_ID | DAYS\n" +
+        (plan.trialDays > 0
+          ? "DAYS необязателен: будет использован настроенный пробный срок — " + plan.trialDays + " дн."
+          : "У тарифа не задан пробный срок, поэтому DAYS нужно указать явно.") +
+        "\nСрок — от 1 до 3650 дней.",
+        { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
+      );
+    }
+  });
+
+  bot.callbackQuery(/^sa:r:([^:]+):([^:]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const projectId = ctx.match[1];
+    const subscriptionId = ctx.match[2];
+    if (!projectId || !subscriptionId) return;
+    const user = await upsertTelegramUser(ctx);
+    const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
+    if (!project) {
+      await ctx.reply("Нет прав управлять этой подпиской.");
+      return;
+    }
+    const target = await prisma.subscription.findFirst({
+      where: {
+        id: subscriptionId,
+        projectId,
+        status: "ACTIVE",
+        OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }]
+      },
+      include: {
+        customer: { select: { telegramUserId: true, firstName: true } },
+        plan: { select: { title: true } }
+      }
+    });
+    if (!target) {
+      await ctx.reply("Активная подписка не найдена. Обновите список.");
+      return;
+    }
+    await ctx.editMessageText(
+      "Подтвердите досрочный отзыв доступа:\n\n" +
+      "Проект: «" + project.name + "»\n" +
+      "Тариф: «" + target.plan.title + "»\n" +
+      "Telegram ID: " + target.customer.telegramUserId.toString() + "\n\n" +
+      "При подтверждении SubPilot поставит отключение приглашений и членства в очередь. Другие действующие подписки клиента будут учтены.",
+      {
+        reply_markup: new InlineKeyboard()
+          .text("✅ Подтвердить отзыв", "sa:c:" + projectId + ":" + subscriptionId).row()
+          .text("Отмена", "ui:subaccess-list:" + projectId)
+      }
+    );
+  });
+
+  bot.callbackQuery(/^sa:c:([^:]+):([^:]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const projectId = ctx.match[1];
+    const subscriptionId = ctx.match[2];
+    if (!projectId || !subscriptionId) return;
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
+      if (!project) {
+        await ctx.reply("Нет прав отзывать доступ в этом проекте.");
+        return;
+      }
+      const result = await revokeSubscriptionAccessManually({
+        subscriptionId,
+        workspaceId: project.workspaceId,
+        actorUserId: user.id
+      });
+      await ctx.editMessageText(
+        "Досрочный отзыв принят.\nПроект: «" + result.projectName + "»\n" +
+        "Тариф: «" + result.planTitle + "»\nПодписка: " + result.subscriptionId + "\n\n" +
+        "Фоновый обработчик удалит действующие приглашения и отзовёт членство. Если у клиента есть другая активная подписка на ту же площадку, доступ по ней останется.",
+        { reply_markup: new InlineKeyboard().text("К управлению подписками", "ui:subaccess:" + projectId) }
+      );
+    } catch (error) {
+      if (error instanceof ManualSubscriptionAccessError) {
+        await ctx.reply(
+          error.code === "SUBSCRIPTION_NOT_ACTIVE"
+            ? "Подписка уже не активна."
+            : error.code === "SUBSCRIPTION_NOT_FOUND"
+              ? "Подписка не найдена в этом пространстве."
+              : "Отозвать доступ может только владелец или администратор."
+        );
+      } else {
+        console.error("Button subscription revocation failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось принять отзыв доступа.");
+      }
+    }
+  });
+
+  bot.callbackQuery(/^ui:subaccess-failed:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const projectId = ctx.match[1];
+    if (!projectId) return;
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
+      if (!project) {
+        await ctx.reply("Просматривать и восстанавливать выдачи могут только владелец или администратор проекта.");
+        return;
+      }
+      const failed = (await listWorkspaceFailedAccessDeliveries(project.workspaceId, new Date(), 50))
+        .filter((grant) => grant.subscription.project.id === projectId);
+      if (failed.length === 0) {
+        await ctx.editMessageText("В этом проекте нет выдач доступа, исчерпавших лимит автоматических попыток.", {
+          reply_markup: new InlineKeyboard().text("⬅️ К управлению подписками", "ui:subaccess:" + projectId)
+        });
+        return;
+      }
+      const keyboard = new InlineKeyboard();
+      const rows = failed.map((grant, index) => {
+        const chat = grant.connectedChat.title ?? grant.connectedChat.username ?? grant.connectedChat.telegramChatId.toString();
+        keyboard.text("↻ Повторить выдачу №" + (index + 1), "sa:d:" + projectId + ":" + grant.id).row();
+        return (index + 1) + ". " + grant.subscription.plan.title + " → " + chat + "\n" +
+          "Telegram ID: " + grant.subscription.customer.telegramUserId.toString() + "\n" +
+          "Попыток: " + grant.deliveryAttempts + " · ошибка: " + (grant.deliveryLastError ?? "не указана");
+      });
+      keyboard.text("⬅️ К управлению подписками", "ui:subaccess:" + projectId);
+      await ctx.editMessageText(
+        "Неудачные выдачи доступа «" + project.name + "»:\n\n" + rows.join("\n\n") +
+        "\n\nПовторная попытка будет поставлена в очередь и записана в журнал аудита.",
+        { reply_markup: keyboard }
+      );
+    } catch (error) {
+      console.error("Failed subscription deliveries screen failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось загрузить неудачные выдачи.");
+    }
+  });
+
+  bot.callbackQuery(/^sa:d:([^:]+):([^:]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const projectId = ctx.match[1];
+    const grantId = ctx.match[2];
+    if (!projectId || !grantId) return;
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
+      if (!project) {
+        await ctx.reply("Нет прав повторять выдачу доступа.");
+        return;
+      }
+      const restored = await retryWorkspaceFailedAccessDelivery({
+        grantId,
+        workspaceId: project.workspaceId,
+        actorUserId: user.id
+      });
+      await ctx.editMessageText(
+        restored
+          ? "Повторная выдача возвращена в очередь. Фоновый обработчик попробует создать новое приглашение."
+          : "Эта выдача уже восстановлена, отозвана или больше не относится к активной подписке.",
+        { reply_markup: new InlineKeyboard().text("К управлению подписками", "ui:subaccess:" + projectId) }
+      );
+    } catch (error) {
+      console.error("Failed subscription delivery retry failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось вернуть выдачу в очередь.");
+    }
+  });
+
 
   bot.callbackQuery(/^ui:projectmembers:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
@@ -3627,6 +3950,105 @@ export function createControlBot(token: string): Bot {
         } catch (error) {
           console.error("Button create plan failed:", error instanceof Error ? error.name : "UnknownError");
           await ctx.reply(formatWorkspaceQuotaError(error), { reply_markup: homeKeyboard() });
+        }
+        return;
+      }
+
+
+      if (pendingAction.kind === "grant_manual_subscription" ||
+          pendingAction.kind === "grant_trial_subscription") {
+        const isTrial = pendingAction.kind === "grant_trial_subscription";
+        const fields = input.split("|").map((field) => field.trim());
+        const telegramUserId = fields[0];
+        const daysText = fields[1] || undefined;
+        const parsedDays = daysText === undefined ? undefined : Number(daysText);
+        const validDuration = daysText === undefined ||
+          (/^\d+$/.test(daysText) &&
+            Number.isSafeInteger(parsedDays) &&
+            (isTrial
+              ? (parsedDays as number) >= 1 && (parsedDays as number) <= 3650
+              : (parsedDays as number) >= 0 && (parsedDays as number) <= 3650));
+        if (fields.length > 2 || !telegramUserId || !/^\d{1,20}$/.test(telegramUserId) || !validDuration) {
+          setPendingTextAction(ctx.from.id, pendingAction.kind === "grant_trial_subscription"
+            ? { kind: "grant_trial_subscription", projectId: pendingAction.projectId, planId: pendingAction.planId }
+            : { kind: "grant_manual_subscription", projectId: pendingAction.projectId, planId: pendingAction.planId });
+          await ctx.reply(
+            "Проверьте формат: TELEGRAM_ID | DAYS. " +
+            (isTrial ? "DAYS — от 1 до 3650; можно не указывать, если срок задан в тарифе." :
+              "DAYS — от 0 до 3650; 0 означает бессрочный доступ, пропуск использует срок тарифа."),
+            { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
+          );
+          return;
+        }
+        try {
+          const user = await upsertTelegramUser(ctx);
+          const project = await canAccessProject(pendingAction.projectId, user.id, ADMIN_ROLES);
+          if (!project) {
+            await ctx.reply("Проект не найден или ваши права управления изменились.", {
+              reply_markup: new InlineKeyboard().text("В главное меню", "ui:home")
+            });
+            return;
+          }
+          const durationDays = parsedDays === undefined
+            ? undefined
+            : (isTrial ? parsedDays : parsedDays === 0 ? null : parsedDays);
+          if (isTrial) {
+            const result = await grantTrialSubscriptionAccess({
+              workspaceId: project.workspaceId,
+              projectId: project.id,
+              planId: pendingAction.planId,
+              telegramUserId,
+              actorUserId: user.id,
+              ...(durationDays !== undefined && durationDays !== null ? { durationDays } : {})
+            });
+            await ctx.reply(
+              "Пробный доступ создан.\nПроект: «" + result.projectName + "»\nТариф: «" + result.planTitle + "»\n" +
+              "Telegram ID: " + result.telegramUserId + "\nОкончание: " + result.endsAt.toLocaleString("ru-RU") + "\n" +
+              "Площадок: " + result.destinations + "\nПодписка: " + result.subscriptionId + "\n\n" +
+              "Приглашения будут выданы фоновым обработчиком; платёж не создавался.",
+              { reply_markup: new InlineKeyboard().text("К управлению подписками", "ui:subaccess:" + project.id) }
+            );
+          } else {
+            const result = await grantManualSubscriptionAccess({
+              workspaceId: project.workspaceId,
+              projectId: project.id,
+              planId: pendingAction.planId,
+              telegramUserId,
+              actorUserId: user.id,
+              ...(durationDays !== undefined ? { durationDays } : {})
+            });
+            await ctx.reply(
+              "Ручной доступ поставлен в очередь.\nПроект: «" + result.projectName + "»\nТариф: «" + result.planTitle + "»\n" +
+              "Telegram ID: " + result.telegramUserId + "\nСрок: " +
+              (result.endsAt ? result.endsAt.toLocaleString("ru-RU") : "бессрочно") + "\n" +
+              "Площадок: " + result.destinations + "\nПодписка: " + result.subscriptionId + "\n\n" +
+              (result.renewedExistingGrant
+                ? "Срок существующей ручной подписки продлён."
+                : "Приглашения будут выданы фоновым обработчиком; платёж не создавался."),
+              { reply_markup: new InlineKeyboard().text("К управлению подписками", "ui:subaccess:" + project.id) }
+            );
+          }
+        } catch (error) {
+          if (error instanceof ManualSubscriptionAccessError) {
+            const messages: Record<ManualSubscriptionAccessError["code"], string> = {
+              INVALID_TELEGRAM_USER_ID: "Telegram ID должен быть положительным числом.",
+              INVALID_DURATION: "Срок должен быть от 1 до 3650 дней; для ручной выдачи 0 означает бессрочный доступ.",
+              ACTOR_NOT_AUTHORIZED: "Только владелец или администратор пространства может выдавать доступ.",
+              PROJECT_NOT_FOUND: "Проект не найден или архивирован.",
+              PLAN_NOT_AVAILABLE: "Активный тариф проекта не найден.",
+              NO_PLAN_DESTINATIONS: "У тарифа нет подключённых площадок.",
+              TRIAL_NOT_CONFIGURED: "Для тарифа не задан пробный срок. Укажите DAYS явно.",
+              TRIAL_ALREADY_USED: "Пробный доступ уже использовался или у клиента есть действующая подписка на этот тариф.",
+              SUBSCRIPTION_NOT_FOUND: "Подписка не найдена в активном пространстве.",
+              SUBSCRIPTION_NOT_ACTIVE: "Подписка уже не активна."
+            };
+            await ctx.reply(messages[error.code], {
+              reply_markup: new InlineKeyboard().text("К управлению подписками", "ui:subaccess:" + project.id)
+            });
+          } else {
+            console.error("Button manual subscription access failed:", error instanceof Error ? error.name : "UnknownError");
+            await ctx.reply("Не удалось изменить доступ. Повторите операцию из панели подписок.");
+          }
         }
         return;
       }
