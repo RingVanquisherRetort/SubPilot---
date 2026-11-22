@@ -4,7 +4,8 @@ import {
   ADMIN_ROLES,
   MANAGER_ROLES,
   canInviteWorkspaceRole,
-  canRemoveWorkspaceMember
+  canRemoveWorkspaceMember,
+  canChangeWorkspaceMemberRole
 } from "./workspace-permissions.js";
 
 test("workspace management roles and administrator roles are distinct", () => {
