@@ -776,6 +776,24 @@ export async function deliverSubscriptionAccess(
         scope.leaseExpiresAt > new Date()
       );
     };
+    const settleScope = async (): Promise<boolean> => {
+      if (!ownsLease()) return false;
+      const completed = await completeSubscriptionAccessScope(prisma, lease);
+      if (!completed) return false;
+      const finalScope = await prisma.subscriptionAccessScope.findUnique({
+        where: {
+          customerId_connectedChatId: {
+            customerId: prepared.customerId,
+            connectedChatId: chat.id
+          }
+        },
+        select: { desiredRevision: true, appliedRevision: true }
+      });
+      return Boolean(
+        finalScope &&
+        finalScope.desiredRevision === finalScope.appliedRevision
+      );
+    };
     const updateCurrentGrant = async (
       expectedInviteLink: string,
       data: {
@@ -903,7 +921,11 @@ export async function deliverSubscriptionAccess(
           deliveryFailedAt: null
         });
         if (persisted) results.alreadyJoined.push(label);
-        else results.blocked.push(label);
+        else {
+          await settleScope();
+          results.blocked.push(label);
+          continue;
+        }
       } else if (
         existing.inviteLink &&
         !existing.revokedAt &&
@@ -920,7 +942,11 @@ export async function deliverSubscriptionAccess(
           deliveryFailedAt: null
         });
         if (persisted) results.links.push(label + ": " + existing.inviteLink);
-        else results.blocked.push(label);
+        else {
+          await settleScope();
+          results.blocked.push(label);
+          continue;
+        }
       } else {
         if (existing.inviteLink && !existing.revokedAt && existing.expiresAt > now) {
           try {
@@ -949,6 +975,7 @@ export async function deliverSubscriptionAccess(
           deliveryFailedAt: null
         });
         if (!cleared) {
+          await settleScope();
           results.blocked.push(label);
           continue;
         }
@@ -984,6 +1011,7 @@ export async function deliverSubscriptionAccess(
           // Telegram does not know about the database lease. Compensate when a
           // stale worker created a credential that it can no longer persist.
           await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), invite.invite_link).catch(() => undefined);
+          await settleScope();
           results.blocked.push(label);
           continue;
         }
@@ -994,23 +1022,7 @@ export async function deliverSubscriptionAccess(
         results.failed.push(label);
         continue;
       }
-      const completed = await completeSubscriptionAccessScope(prisma, lease);
-      const settledScope = completed
-        ? await prisma.subscriptionAccessScope.findUnique({
-            where: {
-              customerId_connectedChatId: {
-                customerId: prepared.customerId,
-                connectedChatId: chat.id
-              }
-            },
-            select: { desiredRevision: true, appliedRevision: true }
-          })
-        : null;
-      if (
-        !completed ||
-        !settledScope ||
-        settledScope.desiredRevision > settledScope.appliedRevision
-      ) {
+      if (!await settleScope()) {
         results.links.length = resultCountsBefore.links;
         results.alreadyJoined.length = resultCountsBefore.alreadyJoined;
         results.blocked.length = resultCountsBefore.blocked;
