@@ -17,6 +17,7 @@ import { getSubscriptionGrantTelegramChatIds } from "./subscription-grant-persis
 import { buildExpiredSubscriptionNotice } from "./subscription-messages.js";
 import { runLifecyclePassWithLease } from "./subscription-lifecycle-runner.js";
 import { withSubscriptionExpiryRowLock } from "./subscription-expiry-transition.js";
+import { lockSubscriptionAccessScope } from "./subscription-access-scope-lock.js";
 import {
   deliverPendingOwnerNotifications,
   enqueueProjectOwnerNotification
@@ -571,6 +572,10 @@ async function expireSubscriptions(
             if (!currentGrant || currentGrant.revokedAt) {
               return { completed: true, preserved: false, skipped: true, leaseLost: false };
             }
+
+            // Serialize this Telegram membership decision with renewals and
+            // deliveries from every other subscription for the same customer/chat.
+            await lockSubscriptionAccessScope(tx, subscription.customerId, currentGrant.connectedChatId);
 
             // Re-check overlapping active entitlements under the same transaction
             // as the Telegram calls. A renewed subscription cannot slip in after
