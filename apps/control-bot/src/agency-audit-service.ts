@@ -89,12 +89,8 @@ async function loadAgencyAuditEvents(input: {
       select: { role: true }
     });
     if (!membership) throw new AgencyAuditError("ACTOR_NOT_MEMBER");
-    if (membership.role !== "OWNER" && membership.role !== "ADMIN" &&
-        membership.role !== "MANAGER") {
-      throw new AgencyAuditError("PERMISSION_DENIED");
-    }
-
-    const projectFilter = membership.role === "MANAGER"
+    const hasWorkspaceWideAccess = membership.role === "OWNER" || membership.role === "ADMIN";
+    const projectFilter = !hasWorkspaceWideAccess
       ? await tx.project.findMany({
           where: {
             workspaceId: input.workspaceId,
@@ -106,6 +102,9 @@ async function loadAgencyAuditEvents(input: {
           select: { id: true }
         })
       : null;
+    if (projectFilter && projectFilter.length === 0) {
+      throw new AgencyAuditError("PERMISSION_DENIED");
+    }
 
     const events = await tx.auditLog.findMany({
       where: {
