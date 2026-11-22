@@ -110,8 +110,8 @@ These items have been inspected in source; the table does not claim that every s
 
 ## 6. Audit order
 
-1. Complete AUD-001 and AUD-003/AUD-004.
-2. Continue the full central-bot role/callback and project-bot payment/access handler review.
-3. Verify the platform billing separation and document that workspace billing is not operational yet.
-4. Add remaining focused PostgreSQL/handler regression tests where code review identifies a concrete risk.
-5. Re-run CI on the final audited branch and update this register with evidence.
+1. Close AUD-003/AUD-004 with focused handler-level coverage and operational checks where appropriate.
+2. Resolve AUD-018 with coordinated customer/chat operations and PostgreSQL race tests before removing any current serialization.
+3. Continue the central-bot role/callback and project-bot payment/access handler review.
+4. Add focused PostgreSQL/handler regression tests where source review identifies concrete risks.
+5. Re-run CI on the final audited branch; schedule live Telegram/provider acceptance separately.
