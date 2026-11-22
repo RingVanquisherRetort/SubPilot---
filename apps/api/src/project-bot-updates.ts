@@ -1807,16 +1807,10 @@ export async function handleProjectBotUpdate(
         keyboard.text("⏹ Отключить автопродление", "star-sub:cancel:" + subscription.id).row();
         hasActions = true;
       } else if (
-        (subscription.telegramStarSubscriptionState === "CANCELED" ||
-          subscription.telegramStarSubscriptionState === "FAILED") &&
+        subscription.telegramStarSubscriptionState === "CANCELED" &&
         (!subscription.endsAt || subscription.endsAt > new Date())
       ) {
-        keyboard.text(
-          subscription.telegramStarSubscriptionState === "FAILED"
-            ? "↻ Повторно включить автопродление"
-            : "▶️ Включить автопродление",
-          "star-sub:resume:" + subscription.id
-        ).row();
+        keyboard.text("▶️ Включить автопродление", "star-sub:resume:" + subscription.id).row();
         hasActions = true;
       }
 
@@ -1824,7 +1818,9 @@ export async function handleProjectBotUpdate(
         "\nАвтопродление: " + renewalLabel +
         (subscription.telegramStarSubscriptionState === "CANCELED"
           ? "\nДоступ сохранится до конца уже оплаченного периода."
-          : "");
+          : subscription.telegramStarSubscriptionState === "FAILED"
+            ? "\nПоследнее продление не прошло. Проверьте баланс Stars и статус подписки в Telegram."
+            : "");
     });
 
     const message = "Ваши подписки:\n\n" + messages.join("\n\n");
@@ -1915,10 +1911,9 @@ export async function handleProjectBotUpdate(
         telegramStarSubscriptionState: true
       }
     });
-    const allowedResumeStates = new Set(["CANCELED", "FAILED"]);
     const stateMatches = action === "cancel"
       ? subscription?.telegramStarSubscriptionState === "ACTIVE"
-      : allowedResumeStates.has(subscription?.telegramStarSubscriptionState ?? "");
+      : subscription?.telegramStarSubscriptionState === "CANCELED";
     if (
       !subscription ||
       !subscription.telegramStarInitialChargeId ||
