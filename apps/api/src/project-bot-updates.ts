@@ -551,24 +551,36 @@ export async function recordSubscriptionAccessRevocationFailure(
       'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
       grantId
     );
-    const current = await tx.subscriptionAccessGrant.findUnique({
-      where: { id: grantId },
-      select: {
-        subscriptionId: true,
-        revokedAt: true,
-        revocationReason: true,
-        inviteLink: true,
-        revocationAttempts: true
-      }
-    });
-    if (!current || current.subscriptionId !== subscriptionId) return;
+    const [subscription, current] = await Promise.all([
+      tx.subscription.findUnique({
+        where: { id: subscriptionId },
+        select: { status: true, endsAt: true }
+      }),
+      tx.subscriptionAccessGrant.findUnique({
+        where: { id: grantId },
+        select: {
+          subscriptionId: true,
+          revokedAt: true,
+          revocationReason: true,
+          inviteLink: true,
+          revocationAttempts: true
+        }
+      })
+    ]);
+    if (!subscription || !current || current.subscriptionId !== subscriptionId) return;
 
-    // Normal expiry/admin-revoke work is pending while revokedAt is null.
-    // An ADMIN_EXCLUDED grant is logically revoked already, but an old Telegram
-    // invite still needs retry until its stored inviteLink is cleared.
-    const pending = current.revokedAt === null ||
-      (current.revocationReason === "ADMIN_EXCLUDED" && Boolean(current.inviteLink));
-    if (!pending) return;
+    // Normal expiry/admin-revoke work is retryable only while the entitlement is
+    // still due. A paid renewal may have won after the failed Telegram call.
+    // ADMIN_EXCLUDED invite cleanup remains retryable independently of parent status.
+    const subscriptionStillDue = subscription.status === "EXPIRED" ||
+      subscription.status === "CANCELLED" ||
+      (subscription.status === "ACTIVE" && subscription.endsAt !== null && subscription.endsAt <= now);
+    const pendingAdminExcludedInvite =
+      current.revocationReason === "ADMIN_EXCLUDED" &&
+      current.revokedAt !== null &&
+      Boolean(current.inviteLink);
+    const pendingNaturalRevocation = current.revokedAt === null && subscriptionStillDue;
+    if (!pendingAdminExcludedInvite && !pendingNaturalRevocation) return;
 
     const retry = getAccessRevocationRetryState(current.revocationAttempts, now, errorCode);
     await tx.subscriptionAccessGrant.update({
