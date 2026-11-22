@@ -4,7 +4,8 @@ import { MAX_ACCESS_DELIVERY_ATTEMPTS } from "@subpilot/payments";
 export async function listWorkspaceFailedAccessDeliveries(
   workspaceId: string,
   now = new Date(),
-  limit = 10
+  limit = 10,
+  projectId?: string
 ) {
   const safeLimit = Number.isSafeInteger(limit) ? Math.min(50, Math.max(1, limit)) : 10;
   return prisma.subscriptionAccessGrant.findMany({
@@ -15,7 +16,7 @@ export async function listWorkspaceFailedAccessDeliveries(
       subscription: {
         status: "ACTIVE",
         AND: [{ OR: [{ endsAt: null }, { endsAt: { gt: now } }] }],
-        project: { workspaceId }
+        project: { workspaceId, ...(projectId ? { id: projectId } : {}) }
       }
     },
     include: {
