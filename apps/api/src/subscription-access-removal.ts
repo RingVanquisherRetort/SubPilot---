@@ -160,9 +160,102 @@ export async function reconcileSubscriptionAccessRemoval(
   );
   if (!lease) return "LEASE_BUSY";
 
+  // The first snapshot was taken before the scope was claimed. Payments and
+  // overlapping subscriptions may have changed in between. Re-read every
+  // authorization input under the claimed revision before touching Telegram.
+  const currentSnapshot = await prisma.$transaction(async (tx) => {
+    await tx.$queryRawUnsafe(
+      'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+      input.subscriptionId
+    );
+    await tx.$queryRawUnsafe(
+      'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
+      snapshot.grantId
+    );
+    await lockSubscriptionAccessScope(tx, input.customerId, input.connectedChatId);
+    const [subscription, grant, scope] = await Promise.all([
+      tx.subscription.findUnique({
+        where: { id: input.subscriptionId },
+        select: { customerId: true, status: true, endsAt: true }
+      }),
+      tx.subscriptionAccessGrant.findUnique({
+        where: { id: snapshot.grantId },
+        select: {
+          connectedChatId: true,
+          revokedAt: true,
+          inviteLink: true,
+          expiresAt: true,
+          joinedAt: true,
+          revocationLastError: true
+        }
+      }),
+      tx.subscriptionAccessScope.findUnique({
+        where: { id: lease.id },
+        select: { desiredRevision: true, leaseToken: true, leaseExpiresAt: true }
+      })
+    ]);
+    const checkedAt = new Date();
+    if (
+      !subscription ||
+      subscription.customerId !== input.customerId ||
+      !isSubscriptionDueForRevocation(subscription, checkedAt) ||
+      !grant ||
+      grant.connectedChatId !== input.connectedChatId ||
+      grant.revokedAt !== null ||
+      !scope ||
+      scope.leaseToken !== lease.leaseToken ||
+      scope.leaseExpiresAt === null ||
+      scope.leaseExpiresAt <= checkedAt ||
+      scope.desiredRevision !== lease.revision
+    ) return null;
+    const otherActiveGrant = await tx.subscriptionAccessGrant.findFirst({
+      where: {
+        id: { not: snapshot.grantId },
+        connectedChatId: input.connectedChatId,
+        revokedAt: null,
+        subscription: {
+          id: { not: input.subscriptionId },
+          customerId: input.customerId,
+          status: "ACTIVE",
+          AND: [
+            { OR: [{ startsAt: null }, { startsAt: { lte: checkedAt } }] },
+            { OR: [{ endsAt: null }, { endsAt: { gt: checkedAt } }] }
+          ]
+        }
+      },
+      select: { id: true }
+    });
+    return {
+      ...snapshot,
+      subscriptionStatus: subscription.status,
+      inviteLink: grant.inviteLink,
+      expiresAt: grant.expiresAt,
+      joinedAt: grant.joinedAt,
+      revocationLastError: grant.revocationLastError,
+      hasOtherActiveGrant: Boolean(otherActiveGrant)
+    };
+  }, { maxWait: 10_000, timeout: 15_000 });
+  if (!currentSnapshot) {
+    // Completing the old generation leaves a newer revision immediately due.
+    await completeSubscriptionAccessScope(prisma, lease).catch(() => false);
+    return "SKIPPED";
+  }
+
   let ownsScopeLease = true;
   let heartbeatRunning = false;
   const ownsLease = (): boolean => ownsScopeLease && isLifecycleLeaseOwned();
+  const isCurrentRevision = async (): Promise<boolean> => {
+    if (!ownsLease()) return false;
+    const current = await prisma.subscriptionAccessScope.findUnique({
+      where: { id: lease.id },
+      select: { desiredRevision: true, leaseToken: true, leaseExpiresAt: true }
+    });
+    return ownsLease() &&
+      current?.leaseToken === lease.leaseToken &&
+      current.desiredRevision === lease.revision &&
+      current.leaseExpiresAt !== null &&
+      current.leaseExpiresAt > new Date();
+  };
   const heartbeat = setInterval(() => {
     if (!ownsScopeLease || heartbeatRunning) return;
     heartbeatRunning = true;
@@ -184,7 +277,7 @@ export async function reconcileSubscriptionAccessRemoval(
   ));
   const fail = async (errorCode: string): Promise<void> => {
     if (!ownsLease()) return;
-    await recordSubscriptionAccessRevocationFailure(input.subscriptionId, snapshot.grantId, errorCode);
+    await recordSubscriptionAccessRevocationFailure(input.subscriptionId, currentSnapshot.grantId, errorCode);
     await failSubscriptionAccessScope(prisma, lease, {
       retryAt,
       errorCode: "ACCESS_SCOPE_" + errorCode
@@ -193,15 +286,15 @@ export async function reconcileSubscriptionAccessRemoval(
 
   try {
     let revocationReason: "ADMIN_REVOKED" | "SUBSCRIPTION_EXPIRED" | "ADMIN_EXCLUDED" =
-      snapshot.subscriptionStatus === "CANCELLED" ? "ADMIN_REVOKED" : "SUBSCRIPTION_EXPIRED";
+      currentSnapshot.subscriptionStatus === "CANCELLED" ? "ADMIN_REVOKED" : "SUBSCRIPTION_EXPIRED";
 
     if (
-      snapshot.inviteLink &&
-      snapshot.expiresAt > requestedAt &&
-      ownsLease()
+      currentSnapshot.inviteLink &&
+      currentSnapshot.expiresAt > requestedAt &&
+      await isCurrentRevision()
     ) {
       try {
-        await input.bot.api.revokeChatInviteLink(snapshot.telegramChatId, snapshot.inviteLink);
+        await input.bot.api.revokeChatInviteLink(currentSnapshot.telegramChatId, currentSnapshot.inviteLink);
       } catch (error) {
         if (!isTelegramInviteAlreadyRevoked(error)) {
           await fail("INVITE_REVOKE_FAILED");
@@ -211,44 +304,34 @@ export async function reconcileSubscriptionAccessRemoval(
       if (!ownsLease()) return "LEASE_LOST";
     }
 
-    if (!snapshot.hasOtherActiveGrant && snapshot.joinedAt) {
+    if (!currentSnapshot.hasOtherActiveGrant && currentSnapshot.joinedAt) {
       const telegramUserId = Number(input.telegramUserId);
       if (!Number.isSafeInteger(telegramUserId) || telegramUserId <= 0) {
         await fail("INVALID_TELEGRAM_USER_ID");
         return "FAILED";
       }
-      if (!ownsLease()) return "LEASE_LOST";
+      if (!await isCurrentRevision()) return "LEASE_LOST";
       const member = await input.bot.api.getChatMember(
-        snapshot.telegramChatId,
+        currentSnapshot.telegramChatId,
         telegramUserId
       );
-      if (member.status === "kicked" && snapshot.revocationLastError === "MEMBER_UNBAN_FAILED") {
-        // The previous attempt may have performed our temporary ban but failed
-        // to undo it. Retry that unban instead of misclassifying our own ban as
-        // a moderator exclusion.
-        try {
-          await input.bot.api.unbanChatMember(
-            snapshot.telegramChatId,
-            telegramUserId,
-            { only_if_banned: true }
-          );
-        } catch {
-          await fail("MEMBER_UNBAN_FAILED");
-          return "FAILED";
-        }
-      } else if (
+      // A ban observed after MEMBER_UNBAN_FAILED is ambiguous: a moderator
+      // could have applied a new ban. Never automatically unban that state.
+      if (!await isCurrentRevision()) return "LEASE_LOST";
+      if (
         member.status === "kicked" ||
         (member.status === "restricted" && !member.is_member)
       ) {
         // Preserve a ban that was already present before our temporary removal.
         revocationReason = "ADMIN_EXCLUDED";
       } else {
-        await input.bot.api.banChatMember(snapshot.telegramChatId, telegramUserId);
+        if (!await isCurrentRevision()) return "LEASE_LOST";
+        await input.bot.api.banChatMember(currentSnapshot.telegramChatId, telegramUserId);
         // Always attempt to undo our temporary ban even if the worker lease is
         // lost immediately after banChatMember succeeds.
         try {
           await input.bot.api.unbanChatMember(
-            snapshot.telegramChatId,
+            currentSnapshot.telegramChatId,
             telegramUserId,
             { only_if_banned: true }
           );
@@ -269,7 +352,7 @@ export async function reconcileSubscriptionAccessRemoval(
       );
       await tx.$queryRawUnsafe(
         'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
-        snapshot.grantId
+        currentSnapshot.grantId
       );
       await lockSubscriptionAccessScope(tx, input.customerId, input.connectedChatId);
       await tx.$queryRawUnsafe(
@@ -287,7 +370,7 @@ export async function reconcileSubscriptionAccessRemoval(
           select: { status: true, endsAt: true, customerId: true }
         }),
         tx.subscriptionAccessGrant.findUnique({
-          where: { id: snapshot.grantId },
+          where: { id: currentSnapshot.grantId },
           select: { inviteLink: true, revokedAt: true }
         })
       ]);
@@ -310,7 +393,7 @@ export async function reconcileSubscriptionAccessRemoval(
         !isSubscriptionDueForRevocation(subscription, now) ||
         !grant ||
         grant.revokedAt !== null ||
-        grant.inviteLink !== snapshot.inviteLink
+        grant.inviteLink !== currentSnapshot.inviteLink
       ) {
         await completeSubscriptionAccessScope(tx, lease, now);
         return { state: "STALE" as const, preserved: false };
@@ -318,7 +401,7 @@ export async function reconcileSubscriptionAccessRemoval(
 
       const otherActiveGrant = await tx.subscriptionAccessGrant.findFirst({
         where: {
-          id: { not: snapshot.grantId },
+          id: { not: currentSnapshot.grantId },
           connectedChatId: input.connectedChatId,
           revokedAt: null,
           subscription: {
@@ -336,8 +419,8 @@ export async function reconcileSubscriptionAccessRemoval(
 
       const revoked = await tx.subscriptionAccessGrant.updateMany({
         where: {
-          id: snapshot.grantId,
-          inviteLink: snapshot.inviteLink,
+          id: currentSnapshot.grantId,
+          inviteLink: currentSnapshot.inviteLink,
           revokedAt: null
         },
         data: {
