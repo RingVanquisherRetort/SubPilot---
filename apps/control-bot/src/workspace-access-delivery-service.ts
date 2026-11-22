@@ -74,9 +74,6 @@ export async function retryWorkspaceFailedAccessDelivery(input: {
 }): Promise<boolean> {
   const now = input.now ?? new Date();
   return prisma.$transaction(async (tx) => {
-    await lockWorkspace(tx, input.workspaceId);
-    await assertWorkspaceAdmin(tx, input.workspaceId, input.actorUserId);
-
     const grant = await tx.subscriptionAccessGrant.findFirst({
       where: {
         id: input.grantId,
@@ -96,6 +93,9 @@ export async function retryWorkspaceFailedAccessDelivery(input: {
       }
     });
     if (!grant) return false;
+
+    await lockWorkspace(tx, input.workspaceId);
+    await assertWorkspaceAdmin(tx, input.workspaceId, input.actorUserId);
 
     const restored = await tx.subscriptionAccessGrant.updateMany({
       where: {
