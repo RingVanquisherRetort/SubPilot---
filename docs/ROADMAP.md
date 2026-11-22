@@ -60,6 +60,19 @@
 - [x] Add dead-letter monitoring, alerting and operator recovery for exhausted owner notifications and subscription access delivery (10-attempt ceiling, owner alert, workspace-scoped operator retry).
 - [x] Manual time-limited/lifetime grants, one-time trials, active-subscription listing and audited early revocation for workspace OWNER/ADMIN; overlapping active entitlements preserve access.
 
+### AUD-018 access coordination — branch hardening (23 November 2026)
+
+- [x] Replace normal expiry Telegram calls inside interactive transactions with short expiry/revision and finalization transactions, plus the durable customer/chat lease.
+- [x] Revalidate overlapping entitlements after claiming the lease and fence stale revocation outcomes by generation/token.
+- [x] Bring ADMIN_EXCLUDED stale-invite cleanup under the same lease without removing moderator bans.
+- [x] Persist a temporary-ban intent before the Telegram removal sequence; never auto-unban an ambiguous moderation state after a crash.
+- [x] Add PostgreSQL concurrency tests for in-flight renewal, overlapping access, excluded invites and ban ambiguity.
+- [x] Distinguish explicitly absent members from Telegram transport/permission failures before invite delivery.
+- [ ] Eliminate remaining project-bot recurring Stars Telegram API calls inside transactions and implement durable crash recovery for cancellation/re-enable.
+- [ ] Fence compromised-invite recovery, stale-join ejection and all remaining access-changing webhook side effects.
+- [ ] Add Telegram Stars webhook-vs-manual-revocation and worker crash/restart integration tests, plus live Telegram acceptance.
+- [ ] Close AUD-018 after fresh end-to-end CI and operator recovery review; **P1 and P2 monetization remain gated until then**.
+
 ## Stage 4 — Payments
 
 - [x] Define a shared provider adapter contract and registry in packages/payments.
