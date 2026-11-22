@@ -20,6 +20,9 @@
 - [ ] Smoke-test invite, role-change, removal and unauthorized callback/command scenarios with real Telegram accounts for every workspace role.
 - [x] Persist each user's active workspace.
 - [x] Enforce manager/admin permissions for project operations.
+- [x] Add project-scoped MANAGER/VIEWER access for agency projects; agency OWNER/ADMIN retain full access, responsible creators receive implicit MANAGER access only to their assigned project, and other members require explicit project membership.
+- [x] Add transactional `/projectmembers`, `/setprojectmember` and `/removeprojectmember` controls; enforce same-agency membership, audit changes and revoke project access atomically when a workspace member is removed.
+- [x] Backfill existing agency MANAGER/VIEWER workspace permissions to current projects during migration to preserve access during upgrade.
 - [x] Project creation, rename and archive/restore.
 - [x] Store a project-level creator merchant category (individual, self-employed, individual entrepreneur or legal entity) and expose it in the payment-method settings.
 - [x] Add one active project bot by token; verify with Telegram getMe and enforce one active bot per project.
@@ -116,11 +119,11 @@ Initial research candidates for creators who are individuals: YooMoney, Crypto P
 ## Stage 7 — Agency and analytics
 
 - [x] Multi-creator portfolio: assign each agency project to a responsible workspace creator and list projects grouped by creator.
-- [x] Role-based team access for workspace members (OWNER/ADMIN/MANAGER/VIEWER); project-specific member permissions are not part of this implementation.
+- [x] Role-based workspace access (OWNER/ADMIN/MANAGER/VIEWER) plus project-scoped MANAGER/VIEWER permissions for agency workspaces.
 - [x] Creator/project navigation: agency portfolio, project list and project detail selection.
 - [ ] Revenue, renewals, churn and subscriber analytics across all agency creators.
 - [ ] Audit history and exports for agency-wide reporting.
-- [ ] Live Telegram acceptance test for creator assignment, reassignment, unassignment and removal cleanup.
+- [ ] Live Telegram acceptance test for workspace roles, project-member assignment/removal, creator assignment, unauthorized project access, and cleanup after a member is removed.
 
 ## Stage 8 — International expansion
 
