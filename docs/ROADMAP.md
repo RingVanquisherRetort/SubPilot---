@@ -122,7 +122,7 @@ Initial research candidates for creators who are individuals: YooMoney, Crypto P
 - [x] Role-based workspace access (OWNER/ADMIN/MANAGER/VIEWER) plus project-scoped MANAGER/VIEWER permissions for agency workspaces.
 - [x] Creator/project navigation: agency portfolio, project list and project detail selection.
 - [ ] Revenue, renewals, churn and subscriber analytics across all agency creators.
-- [ ] Audit history and exports for agency-wide reporting.
+- [x] Agency-wide audit history and CSV exports in the central bot; OWNER/ADMIN see the full workspace feed, MANAGER sees assigned and explicitly MANAGER projects only, and VIEWER is denied.
 - [ ] Live Telegram acceptance test for workspace roles, project-member assignment/removal, creator assignment, unauthorized project access, and cleanup after a member is removed.
 
 ## Stage 8 — International expansion
