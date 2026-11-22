@@ -2,7 +2,7 @@
 
 **Status:** Open — active-scope reconciliation worker and leased invite delivery are implemented; expiry/member removal and recurring cancellation remain  
 **Reviewed branch:** `feat/subscription-lifecycle-ui`  
-**Reviewed implementation snapshot:** `cd7c02070574006b10d510fc34061ad6bfd1d6f4` (CI run `45073562936` passed: clean/upgrade migrations, Prisma generation, typecheck and 190/190 tests)  
+**Reviewed implementation snapshot:** `1079e8eb4b6ef3824db8eac398d1c22dd6bd3517` (CI run `45074169863` passed: clean/upgrade migrations, Prisma generation, typecheck and 190/190 tests)  
 **Production status:** Not merged; no live Telegram/provider test has been run as part of this review.
 
 ## Why this review exists
@@ -12,13 +12,11 @@ The current subscription lifecycle deliberately serializes expiry and successful
 The first implementation had several remote-call/transaction couplings. The invite-delivery path has now been migrated, but two important transaction spans remain:
 
 - `expireSubscriptions` still holds subscription/grant and customer/chat advisory locks while it may call `revokeChatInviteLink`, `getChatMember`, `banChatMember` and `unbanChatMember`.
-- Manual recurring-subscription revocation in `revokeSubscriptionAccessManually` still calls Telegram's `editUserStarSubscription` while the workspace and subscription transaction is open.
+- Manual recurring-subscription revocation in `revokeSubscriptionAccessManually` has been staged: credentials and the current subscription are snapshotted in a short transaction, `editUserStarSubscription` runs after commit, and a second short transaction re-authorizes, re-reads the subscription and commits cancellation/audit/revision state.
 - `deliverSubscriptionAccess` has been migrated: it snapshots and conditionally finalizes in short transactions, while `getChatMember`, `revokeChatInviteLink` and `createChatInviteLink` execute outside interactive transactions under a durable customer/chat lease.
 - The `ADMIN_EXCLUDED` stale-invite cleanup and compromised-invite/member-removal flows perform Telegram calls outside their short snapshot/finalization transactions, but are not yet all fenced by the durable scope lease.
 
 The payment/refund handlers still serialize their local entitlement mutations on the subscription row. The migrated delivery path no longer holds that row lock while waiting for Telegram. The remaining expiry/member-removal and recurring-cancellation paths can still delay other subscription mutations, and a database rollback cannot undo a Telegram API side effect that already succeeded.
-
-The payment/refund handlers lock the same subscription row. As a result, a slow Telegram response can delay a payment, refund or other subscription mutation for the duration of the transaction. A database rollback also cannot roll back a Telegram API side effect that already succeeded.
 
 ## Shared customer/chat coordination — first phase implemented
 
@@ -69,12 +67,12 @@ The migration is `20261122200000_subscription_access_scope_lease`. PostgreSQL in
 
 Desired revisions are enqueued transactionally for successful Telegram Stars payment/renewal, manual and trial grants, manual revocation, expiry revocation, Telegram Stars refund reconciliation and selected invite-recovery transitions. The lifecycle worker now consumes up to 25 due scopes per pass when a current active, non-revoked grant exists. It selects an overlapping active entitlement and the source project bot, then calls `deliverSubscriptionAccess` with the already-claimed lease. The delivery function validates the lease and current permission in short transactions; Telegram member lookup and invite revoke/create calls run outside transactions. A heartbeat renews the lease; finalization checks token and revision; a link created after permission changes is revoked as compensation and is not returned as valid access.
 
-**Important:** the worker currently handles active-grant delivery/recovery only. Expired/cancelled/admin-revoked membership removal is still performed by the legacy expiry path, and manual recurring-cancellation still invokes Telegram inside the control-bot transaction. These paths have not yet been migrated to the durable lease protocol; AUD-018 therefore remains open.
+**Important:** the active-scope worker handles active-grant delivery/recovery only. Expired/cancelled/admin-revoked membership removal is still performed by the legacy expiry path, which calls Telegram while an interactive DB transaction is open. The manual recurring-cancellation endpoint now calls Telegram between two short transactions, but the payment-webhook-vs-admin-revocation race and process recovery after Telegram confirmation but before local finalization still need dedicated tests/design. Selected admin-exclusion and compromised-invite cleanup calls are outside transactions but are not all fenced by the durable scope lease; AUD-018 therefore remains open.
 
 ### Remaining integration work
 
 - Migrate normal expiry/member removal to the durable customer/chat lease. Snapshot the current entitlement, joined/member state, overlapping active grants and moderation state in a short transaction; commit before Telegram; then perform invite revoke and membership removal outside the transaction.
-- Migrate manual recurring cancellation to a staged operation so `editUserStarSubscription` no longer runs while workspace/subscription database locks are held. Preserve fail-closed behavior: do not revoke paid access while Telegram may still renew it.
+- Add a PostgreSQL race test for a successful payment webhook arriving while staged manual revocation is awaiting Telegram. Define how to recover safely if Telegram confirms cancellation but the final DB transaction fails or the process exits.
 - Every entitlement mutation must increment the desired revision in the same transaction. Continue auditing any chat/member/invite state transition that changes the desired state.
 - Finalize only when the operation token/revision still matches. If a newer revision was committed while the external operation was in flight, do not overwrite it; schedule reconciliation toward the latest state.
 - Keep per-invite-link cleanup distinct from member-removal operations. Revoking an old link must not clear a newer link stored by a later delivery.
