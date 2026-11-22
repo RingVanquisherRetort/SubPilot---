@@ -202,6 +202,55 @@ test("PostgreSQL Telegram Stars refunds recalculate paid access and expose fully
     });
     assert.equal(finalSubscription.status, "EXPIRED");
     assert.equal(finalSubscription.endsAt?.toISOString(), finalRefundAt.toISOString());
+
+    // A refund must never reopen an entitlement that an administrator cancelled.
+    const cancelledEndsAt = new Date("2026-12-10T00:00:00.000Z");
+    const cancelledSubscription = await prisma.subscription.create({
+      data: {
+        projectId: project.id,
+        customerId: customer.id,
+        planId: plan.id,
+        status: "CANCELLED",
+        grantType: "PAID",
+        startsAt: firstPaidAt,
+        endsAt: cancelledEndsAt,
+        cancelledAt: new Date("2026-11-10T00:00:00.000Z")
+      }
+    });
+    const cancelledPayment = await prisma.payment.create({
+      data: {
+        projectId: project.id,
+        customerId: customer.id,
+        subscriptionId: cancelledSubscription.id,
+        provider: "TELEGRAM_STARS",
+        providerPaymentId: "stars-refund-cancelled-" + suffix,
+        amount: "250",
+        currency: "XTR",
+        status: "SUCCEEDED",
+        paidAt: firstPaidAt,
+        metadata: { durationDays: 30, isRecurring: false }
+      }
+    });
+    const cancelledRefundAt = new Date("2026-11-17T12:00:00.000Z");
+    const cancelledResult = await prisma.$transaction((tx) =>
+      reconcileTelegramStarsRefundUsing(tx, {
+        paymentId: cancelledPayment.id,
+        providerPaymentId: cancelledPayment.providerPaymentId!,
+        subscriptionId: cancelledSubscription.id,
+        refundedAt: cancelledRefundAt,
+        telegramUserId: customer.telegramUserId,
+        amount: cancelledPayment.amount.toString(),
+        currency: cancelledPayment.currency
+      })
+    );
+    assert.equal(cancelledResult.paymentUpdated, true);
+    assert.equal(cancelledResult.subscriptionStatus, "CANCELLED");
+    assert.equal(cancelledResult.subscriptionEndsAt?.toISOString(), cancelledEndsAt.toISOString());
+    const persistedCancelledSubscription = await prisma.subscription.findUniqueOrThrow({
+      where: { id: cancelledSubscription.id }
+    });
+    assert.equal(persistedCancelledSubscription.status, "CANCELLED");
+    assert.equal(persistedCancelledSubscription.endsAt?.toISOString(), cancelledEndsAt.toISOString());
   } finally {
     if (workspaceId) await prisma.workspace.deleteMany({ where: { id: workspaceId } });
     if (actorId) await prisma.user.deleteMany({ where: { id: actorId } });
