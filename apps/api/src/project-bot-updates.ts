@@ -849,12 +849,27 @@ async function processSuccessfulStarsPayment(
   const snapshotChatIds = Array.isArray(metadata.chatIds)
     ? metadata.chatIds.filter((value): value is string => typeof value === "string")
     : undefined;
-  const expirationFromTelegram = receipt.subscription_expiration_date
-    ? new Date(receipt.subscription_expiration_date * 1000)
-    : null;
+  const expirationTimestamp = receipt.subscription_expiration_date;
+  const expirationFromTelegram =
+    typeof expirationTimestamp === "number" &&
+    Number.isSafeInteger(expirationTimestamp) &&
+    expirationTimestamp > 0
+      ? new Date(expirationTimestamp * 1000)
+      : null;
+  if (
+    expirationTimestamp !== undefined &&
+    (!expirationFromTelegram || !Number.isFinite(expirationFromTelegram.getTime()))
+  ) {
+    await ctx.reply(
+      "Telegram прислал некорректную дату окончания подписки. Доступ автоматически не изменён. " +
+      "Сохраните квитанцию и обратитесь в /paysupport."
+    );
+    return;
+  }
+
   const recurringReceipt = receipt as typeof receipt & {
-    is_recurring?: boolean;
-    is_first_recurring?: boolean;
+    is_recurring?: true;
+    is_first_recurring?: true;
   };
   const transactionResult = await prisma.$transaction(async (tx) => {
     // Serialize all successful charges for one entitlement. Telegram may retry
@@ -987,9 +1002,7 @@ async function processSuccessfulStarsPayment(
               telegramStarInitialChargeId: receipt.telegram_payment_charge_id,
               telegramStarSubscriptionState: "ACTIVE"
             }
-          : paymentKind === "RECURRING_RENEWAL"
-            ? { telegramStarSubscriptionState: "ACTIVE" }
-            : {})
+          : {})
       }
     });
 
@@ -1794,10 +1807,16 @@ export async function handleProjectBotUpdate(
         keyboard.text("⏹ Отключить автопродление", "star-sub:cancel:" + subscription.id).row();
         hasActions = true;
       } else if (
-        subscription.telegramStarSubscriptionState === "CANCELED" &&
+        (subscription.telegramStarSubscriptionState === "CANCELED" ||
+          subscription.telegramStarSubscriptionState === "FAILED") &&
         (!subscription.endsAt || subscription.endsAt > new Date())
       ) {
-        keyboard.text("▶️ Включить автопродление", "star-sub:resume:" + subscription.id).row();
+        keyboard.text(
+          subscription.telegramStarSubscriptionState === "FAILED"
+            ? "↻ Повторно включить автопродление"
+            : "▶️ Включить автопродление",
+          "star-sub:resume:" + subscription.id
+        ).row();
         hasActions = true;
       }
 
@@ -1896,11 +1915,14 @@ export async function handleProjectBotUpdate(
         telegramStarSubscriptionState: true
       }
     });
-    const expectedState = action === "cancel" ? "ACTIVE" : "CANCELED";
+    const allowedResumeStates = new Set(["CANCELED", "FAILED"]);
+    const stateMatches = action === "cancel"
+      ? subscription?.telegramStarSubscriptionState === "ACTIVE"
+      : allowedResumeStates.has(subscription?.telegramStarSubscriptionState ?? "");
     if (
       !subscription ||
       !subscription.telegramStarInitialChargeId ||
-      subscription.telegramStarSubscriptionState !== expectedState
+      !stateMatches
     ) {
       await ctx.reply("Состояние автопродления уже изменилось или срок подписки закончился. Проверьте /subscription.");
       return;
