@@ -9,7 +9,7 @@ import {
   matchesTelegramStarsRefundReceipt
 } from "@subpilot/payments";
 import { enqueueProjectOwnerNotification, enqueueProjectOwnerNotificationUsing } from "./owner-notifications.js";
-import { hasRequiredSubscriptionChatRights } from "./telegram-chat-access.js";
+import { hasRequiredSubscriptionChatRights, isExplicitTelegramNonMemberError } from "./telegram-chat-access.js";
 import { isPaymentFromProjectBot } from "./telegram-payment-origin.js";
 import { getInvoiceDispatchState } from "./telegram-invoice-state.js";
 import { getSubscriptionGrantChatIds, getSubscriptionGrantTelegramChatIds } from "./subscription-grant-persistence.js";
@@ -906,9 +906,12 @@ export async function deliverSubscriptionAccess(
           member.status === "member" ||
           (member.status === "restricted" && member.is_member);
         isBanned = classifyTelegramMembershipDeparture(member.status, isAlreadyMember) === "ADMIN_EXCLUSION";
-      } catch {
-        // As before, a non-member lookup may fail; invite creation remains the
-        // authoritative permission check. A moderation ban is handled below.
+      } catch (error) {
+        if (!isExplicitTelegramNonMemberError(error)) {
+          await fail("MEMBERSHIP_LOOKUP_FAILED");
+          results.failed.push(label);
+          continue;
+        }
       }
       if (!ownsLease()) {
         results.failed.push(label);
