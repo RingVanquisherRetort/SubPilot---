@@ -41,7 +41,7 @@ interface ProjectMetric {
 }
 
 function amountToMinorUnits(amount: string): bigint {
-  const match = /^(\\d+)(?:\\.(\\d{1,2}))?$/.exec(amount.trim());
+  const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(amount.trim());
   if (!match) throw new Error("Invalid decimal amount returned by database.");
   return BigInt(match[1] ?? "0") * 100n + BigInt((match[2] ?? "").padEnd(2, "0"));
 }
