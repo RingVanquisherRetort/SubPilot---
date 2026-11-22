@@ -9,6 +9,7 @@ test("PostgreSQL scope lease coalesces revisions, rejects stale owners, and retr
   const {
     requestSubscriptionAccessReconciliation,
     claimNextSubscriptionAccessScope,
+    claimSubscriptionAccessScope,
     renewSubscriptionAccessScopeLease,
     completeSubscriptionAccessScope,
     failSubscriptionAccessScope
@@ -70,7 +71,8 @@ test("PostgreSQL scope lease coalesces revisions, rejects stale owners, and retr
     assert.equal(scope.desiredRevision, 2n);
     assert.equal(scope.appliedRevision, 0n);
 
-    const first = await claimNextSubscriptionAccessScope(prisma, {
+    assert.equal(await claimSubscriptionAccessScope(prisma, "not-this-customer", chat.id, { now }), null);
+    const first = await claimSubscriptionAccessScope(prisma, customer.id, chat.id, {
       now,
       leaseTtlMs: 30_000
     });
