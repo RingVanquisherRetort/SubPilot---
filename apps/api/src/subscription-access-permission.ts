@@ -20,3 +20,13 @@ export function isSubscriptionAccessPermissionActive(
   if (state.subscriptionEndsAt && state.subscriptionEndsAt <= now) return false;
   return true;
 }
+
+
+export const PAID_RENEWAL_RESTORABLE_REVOCATION_REASON = "SUBSCRIPTION_EXPIRED" as const;
+
+/** A paid renewal may restore an expiry-worker revoke, never a moderation/admin decision. */
+export function isRevocationRestorableAfterPaidRenewal(
+  reason: string | null | undefined
+): boolean {
+  return reason === PAID_RENEWAL_RESTORABLE_REVOCATION_REASON;
+}
