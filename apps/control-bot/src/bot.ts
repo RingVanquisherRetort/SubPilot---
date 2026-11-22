@@ -2092,10 +2092,7 @@ export function createControlBot(token: string): Bot {
     const projectId = fields[0] ?? "";
     const limit = fields[1] === undefined ? 10 : Number(fields[1]);
     if (!projectId || fields.length > 2 || !Number.isSafeInteger(limit) || limit < 1 || limit > 25) {
-      await ctx.reply("Формат: /auditlog PROJECT_ID [LIMIT]\nLIMIT: от 1 до 25, по умолчанию 10.");
-      "/agencyaudit [LIMIT] — история агентства по доступным проектам\\n" +
-      "/agencyauditexport [DAYS] — выгрузить историю агентства в CSV\\n" +
-      return;
+      await ctx.reply("Формат: /auditlog PROJECT_ID [LIMIT]\nLIMIT: от 1 до 25, по умолчанию 10.");\n      return;
     }
     try {
       const actor = await upsertTelegramUser(ctx);
@@ -4245,6 +4242,8 @@ export function createControlBot(token: string): Bot {
       "/createplan ID | Название | Цена | Дней — создать тариф\n" +
       "/projectstats PROJECT_ID [DAYS] — агрегированная статистика проекта\n" +
       "/auditlog PROJECT_ID [LIMIT] — история действий проекта\n" +
+      "/agencyaudit [LIMIT] — история агентства по доступным проектам\n" +
+      "/agencyauditexport [DAYS] — выгрузить историю агентства в CSV\n" +
       "/grantaccess PROJECT_ID | TELEGRAM_ID | PLAN_ID | DAYS — вручную выдать доступ\n" +
       "/trialaccess PROJECT_ID | TELEGRAM_ID | PLAN_ID | DAYS — выдать пробный доступ\n" +
       "/activesubscriptions PROJECT_ID — список активных подписок\n" +
