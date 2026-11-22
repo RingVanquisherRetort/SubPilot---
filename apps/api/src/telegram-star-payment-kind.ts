@@ -32,7 +32,7 @@ export function classifyTelegramStarsPayment(
 
   // Bot API models is_first_recurring as an optional True-only flag.
   // Later recurring charges therefore normally omit it instead of sending false.
-  return input.paymentStatus === "SUCCEEDED" && input.isFirstRecurring !== true
+  return input.paymentStatus === "SUCCEEDED" && input.isFirstRecurring === undefined
     ? "RECURRING_RENEWAL"
     : null;
 }
