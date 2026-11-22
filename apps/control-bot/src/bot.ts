@@ -10,6 +10,12 @@ import {
   type InvitableWorkspaceRole
 } from "./workspace-permissions.js";
 import { isPrivateControlChat } from "./private-control-context.js";
+import { getAccessibleProject } from "./project-access-service.js";
+import {
+  ProjectMembershipError,
+  removeProjectMemberAccess,
+  setProjectMemberAccess
+} from "./project-membership-service.js";
 import {
   AgencyPortfolioError,
   assignAgencyProjectCreator,
@@ -259,29 +265,7 @@ async function canAccessProject(
   userId: string,
   roles: readonly ("OWNER" | "ADMIN" | "MANAGER" | "VIEWER")[]
 ) {
-  return prisma.project.findFirst({
-    where: {
-      id: projectId,
-      status: { not: "ARCHIVED" },
-      workspace: {
-        members: {
-          some: {
-            userId,
-            role: { in: [...roles] }
-          }
-        }
-      }
-    },
-    select: {
-      id: true,
-      name: true,
-      workspaceId: true,
-      defaultCurrency: true,
-      countryCode: true,
-      merchantType: true,
-      creatorUser: { select: { firstName: true, lastName: true, username: true } }
-    }
-  });
+  return getAccessibleProject(projectId, userId, roles);
 }
 
 export function createControlBot(token: string): Bot {
