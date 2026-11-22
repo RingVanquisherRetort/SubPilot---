@@ -126,6 +126,35 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
     assert.equal(grant.inviteLink, "");
     assert.equal(grant.revokedAt, null);
 
+    // An explicit manual grant is an authorization action and may deliberately
+    // re-enable a previously revoked destination. Ordinary invite delivery may not.
+    await prisma.subscriptionAccessGrant.update({
+      where: {
+        subscriptionId_connectedChatId: {
+          subscriptionId: firstManual.subscriptionId,
+          connectedChatId: chat.id
+        }
+      },
+      data: {
+        inviteLink: "revoked-invite-link",
+        expiresAt: new Date(Date.now() + 60_000),
+        revokedAt: new Date()
+      }
+    });
+    const reauthorizedManual = await grantManualSubscriptionAccess(manualInput);
+    assert.equal(reauthorizedManual.subscriptionId, firstManual.subscriptionId);
+    const reauthorizedGrant = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: {
+        subscriptionId_connectedChatId: {
+          subscriptionId: firstManual.subscriptionId,
+          connectedChatId: chat.id
+        }
+      }
+    });
+    assert.equal(reauthorizedGrant.revokedAt, null);
+    assert.equal(reauthorizedGrant.inviteLink, "");
+    assert.equal(reauthorizedGrant.expiresAt.getTime(), 0);
+
     const trialInput = {
       workspaceId: workspace.id,
       projectId: project.id,
