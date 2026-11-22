@@ -94,6 +94,7 @@ async function loadAgencyAuditEvents(input: {
       ? await tx.project.findMany({
           where: {
             workspaceId: input.workspaceId,
+            status: { not: "ARCHIVED" },
             OR: [
               { creatorUserId: input.actorUserId },
               { members: { some: { userId: input.actorUserId, role: "MANAGER" } } }
