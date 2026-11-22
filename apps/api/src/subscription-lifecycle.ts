@@ -10,7 +10,8 @@ import { decryptSecret } from "@subpilot/security";
 import { isTelegramInviteAlreadyRevoked, MAX_ACCESS_DELIVERY_ATTEMPTS } from "@subpilot/payments";
 import {
   deliverSubscriptionAccess,
-  recordSubscriptionAccessDeliveryFailure
+  recordSubscriptionAccessDeliveryFailure,
+  recordSubscriptionAccessRevocationFailure
 } from "./project-bot-updates.js";
 import { getSubscriptionGrantTelegramChatIds } from "./subscription-grant-persistence.js";
 import { buildExpiredSubscriptionNotice } from "./subscription-messages.js";
@@ -347,17 +348,45 @@ async function expireSubscriptions(
   const due = await prisma.subscription.findMany({
     where: {
       OR: [
-        { status: "ACTIVE", endsAt: { lte: now } },
+        {
+          status: "ACTIVE",
+          endsAt: { lte: now },
+          accessGrants: {
+            some: { revokedAt: null, revocationNextAttemptAt: { lte: now } }
+          }
+        },
         {
           status: { in: ["EXPIRED", "CANCELLED"] },
-          accessGrants: { some: { revokedAt: null } }
+          accessGrants: {
+            some: { revokedAt: null, revocationNextAttemptAt: { lte: now } }
+          }
+        },
+        {
+          accessGrants: {
+            some: {
+              revocationReason: "ADMIN_EXCLUDED",
+              revokedAt: { not: null },
+              inviteLink: { not: "" },
+              revocationNextAttemptAt: { lte: now }
+            }
+          }
         }
       ]
     },
     include: {
       customer: true,
       accessGrants: {
-        where: { revokedAt: null },
+        where: {
+          OR: [
+            { revokedAt: null, revocationNextAttemptAt: { lte: now } },
+            {
+              revocationReason: "ADMIN_EXCLUDED",
+              revokedAt: { not: null },
+              inviteLink: { not: "" },
+              revocationNextAttemptAt: { lte: now }
+            }
+          ]
+        },
         include: { connectedChat: true }
       },
       project: { select: { id: true, name: true } },
@@ -379,6 +408,11 @@ async function expireSubscriptions(
 
     // First claim the logical expiry. A renewal that committed before this
     // conditional update wins and prevents this worker from starting revocation.
+    const hasAdminExcludedInviteRetry = subscription.accessGrants.some((grant) =>
+      grant.revocationReason === "ADMIN_EXCLUDED" &&
+      grant.revokedAt !== null &&
+      Boolean(grant.inviteLink)
+    );
     const expiryClaimed = subscription.status !== "ACTIVE" || await prisma.$transaction(
       async (tx) => {
         const changed = await tx.subscription.updateMany({
@@ -388,7 +422,7 @@ async function expireSubscriptions(
         return changed.count === 1;
       }
     );
-    if (!expiryClaimed) continue;
+    if (!expiryClaimed && !hasAdminExcludedInviteRetry) continue;
 
     const latestMetadata = subscription.payments[0]?.metadata &&
       typeof subscription.payments[0].metadata === "object" &&
@@ -406,26 +440,36 @@ async function expireSubscriptions(
     }
 
     if (!bot) {
+      for (const grant of subscription.accessGrants) {
+        if (!isLeaseOwned()) return;
+        await recordSubscriptionAccessRevocationFailure(
+          subscription.id,
+          grant.id,
+          "SOURCE_BOT_UNAVAILABLE"
+        );
+      }
       const current = await prisma.subscription.findUnique({
         where: { id: subscription.id },
         select: { status: true, endsAt: true }
       });
-      const stillDue = current && (
+      const stillDue = Boolean(current && (
         current.status === "CANCELLED" ||
         current.status === "EXPIRED" ||
         (current.status === "ACTIVE" && current.endsAt !== null && current.endsAt <= now)
-      );
-      if (stillDue) {
+      ));
+      if (stillDue || hasAdminExcludedInviteRetry) {
         await enqueueProjectOwnerNotification({
           projectId: subscription.projectId,
           dedupeKey: "subscription:" + subscription.id + ":access-revocation-bot-unavailable",
           eventType: "access_revocation_bot_unavailable",
           messageText:
-            (current.status === "CANCELLED"
+            (current?.status === "CANCELLED"
               ? "⚠️ Администратор досрочно отозвал доступ по тарифу «"
-              : "⚠️ Срок доступа по тарифу «") + subscription.plan.title +
+              : current?.status === "EXPIRED"
+                ? "⚠️ Срок доступа по тарифу «"
+                : "⚠️ Требуется завершить отзыв доступа по тарифу «") + subscription.plan.title +
             "» в проекте «" + subscription.project.name +
-            "», но исходный бот недоступен. Восстановите подключение исходного бота, чтобы SubPilot смог обработать отзыв."
+            "», но исходный бот недоступен. Восстановите подключение исходного бота. SubPilot повторит отзыв автоматически с увеличивающимися интервалами."
         });
       }
       continue;
