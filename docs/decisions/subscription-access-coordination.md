@@ -75,6 +75,8 @@ Desired revisions are enqueued transactionally for successful Telegram Stars pay
 - `MEMBER_UNBAN_FAILED` records an earlier failure. It cannot identify who imposed the ban currently visible in Telegram. Connecting this retry to expiry could clear a subsequent moderator ban.
 - Delivery must withhold both a link and an already-joined result until the worker confirms its own revision. A successor can settle a different revision. A restricted non-member is an administrative exclusion on both delivery and departure.
 - Compensation for an invite created after its grant changed is best effort. Failed cleanup in the stale-result branch has no durable per-link retry record. The active-scope worker also needs to respect the per-grant dead-letter state.
+- Two project-bot Stars paths still await `editUserStarSubscription` inside a transaction holding the subscription row lock. One handles a buyer cancelling or resuming renewal. The other handles a late initial recurring receipt on an administratively cancelled subscription. Both need durable recovery and ordering with the payment webhook, in addition to the staged control-bot operation.
+- Delivery currently continues after any `getChatMember` exception. Distinguish a confirmed non-member from a transport or permissions failure before relying on that lookup to enforce moderation.
 - The payments test entry point discovers all package test files, including the retry/backoff tests.
 
 ### Remaining integration work
