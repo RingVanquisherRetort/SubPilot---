@@ -1,5 +1,5 @@
 import { prisma } from "@subpilot/database";
-import { lockSubscriptionAccessScopes } from "@subpilot/payments";
+import { lockSubscriptionAccessScopes, requestSubscriptionAccessReconciliation } from "@subpilot/payments";
 import { Bot } from "grammy";
 import { decryptSecret } from "@subpilot/security";
 
@@ -187,6 +187,7 @@ async function ensureAccessGrantRows(
       deliveryFailedAt: null
     }
   });
+  await requestSubscriptionAccessReconciliation(tx, subscription.customerId, connectedChatIds, now);
 }
 
 export async function grantManualSubscriptionAccess(input: AccessOperationInput & {
@@ -501,6 +502,14 @@ export async function revokeSubscriptionAccessManually(
       }
     });
     if (updated.count !== 1) throw new ManualSubscriptionAccessError("SUBSCRIPTION_NOT_ACTIVE");
+
+    // The cancellation state and desired access revision commit together.
+    await requestSubscriptionAccessReconciliation(
+      tx,
+      target.customer.id,
+      targetGrants.map((grant) => grant.connectedChatId),
+      now
+    );
 
     await tx.auditLog.create({
       data: {
