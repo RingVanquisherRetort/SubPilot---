@@ -50,7 +50,10 @@ The following commands remain available as an advanced fallback:
 - `/createagency Name` — create an agency workspace.
 - `/workspaces` and `/switchworkspace ID` — list/switch workspaces.
 - `/invite [ADMIN|MANAGER|VIEWER]` — create a one-use, seven-day invite.
-- `/members`, `/removemember TELEGRAM_ID` — manage workspace members.
+- `/members` — list workspace members and Telegram IDs (OWNER/ADMIN only).
+- `/setmemberrole TELEGRAM_ID [ADMIN|MANAGER|VIEWER]` — change a member's role. Only the OWNER may assign ADMIN; ADMIN can manage MANAGER/VIEWER only.
+- `/removemember TELEGRAM_ID` — remove a member subject to the OWNER/ADMIN role policy; nobody can remove the OWNER or themself.
+- `/revokeinvite INVITE_ID` — revoke an unused workspace invitation (ADMIN cannot revoke an OWNER-issued ADMIN invitation).
 - `/connectbot PROJECT_ID` — start connecting a project bot; send the BotFather token as the next message.
 - `/chats PROJECT_ID`, `/linkchat PLAN_ID CHAT_ID`, `/unlinkchat PLAN_ID CHAT_ID` — manage plan destinations.
 - `/createplan PROJECT_ID | Title | StarPrice | DurationDays` — create a Telegram Stars tariff. Use `0` for no fixed expiry.
