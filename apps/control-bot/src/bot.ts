@@ -4003,8 +4003,12 @@ export function createControlBot(token: string): Bot {
           await ctx.reply(
             `Тариф «${plan.title}» создан за ${plan.price.toString()} ⭐. Автопродление: ${plan.isRecurring ? "включено (30 дней)" : "выключено"}.`,
             {
-            reply_markup: new InlineKeyboard().text("Посмотреть тарифы", `ui:plans:${project.id}`).row().text("К проекту", `ui:project:${project.id}`)
-          });
+              reply_markup: new InlineKeyboard()
+                .text("Посмотреть тарифы", `ui:plans:${project.id}`)
+                .row()
+                .text("К проекту", `ui:project:${project.id}`)
+            }
+          );
         } catch (error) {
           console.error("Button create plan failed:", error instanceof Error ? error.name : "UnknownError");
           await ctx.reply(formatWorkspaceQuotaError(error), { reply_markup: homeKeyboard() });
@@ -4165,10 +4169,12 @@ export function createControlBot(token: string): Bot {
           await ctx.reply(
             "Тариф обновлён. Новые настройки применяются к новым покупкам; уже созданные счета и действующие подписки сохраняют прежние условия.",
             {
-            reply_markup: new InlineKeyboard()
-              .text("Открыть тариф", `p:v:${project.id}:${plan.id}`)
-              .row().text("К тарифам", `ui:plans:${project.id}`)
-          });
+              reply_markup: new InlineKeyboard()
+                .text("Открыть тариф", `p:v:${project.id}:${plan.id}`)
+                .row()
+                .text("К тарифам", `ui:plans:${project.id}`)
+            }
+          );
         } catch (error) {
           console.error("Button edit plan failed:", error instanceof Error ? error.name : "UnknownError");
           await ctx.reply("Не удалось изменить тариф.", { reply_markup: homeKeyboard() });
