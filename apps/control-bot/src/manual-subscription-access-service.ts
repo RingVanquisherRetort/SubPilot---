@@ -149,6 +149,12 @@ async function ensureAccessGrantRows(
   connectedChatIds: string[],
   now: Date
 ): Promise<void> {
+  // Explicit manual re-grant is an authorization change. Serialize it with any
+  // in-flight invite delivery for this subscription before clearing grant revokes.
+  await tx.$queryRawUnsafe(
+    'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+    subscriptionId
+  );
   await tx.subscriptionAccessGrant.createMany({
     data: connectedChatIds.map((connectedChatId) => ({
       subscriptionId,
