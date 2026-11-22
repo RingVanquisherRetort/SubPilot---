@@ -340,7 +340,8 @@ export async function reconcileSubscriptionAccessRemoval(
       if (!await isCurrentRevision()) return "LEASE_LOST";
       if (member.status === "kicked" &&
         (currentSnapshot.revocationLastError === "MEMBER_UNBAN_FAILED" ||
-          currentSnapshot.revocationLastError === "MEMBER_BAN_OWNERSHIP_UNCERTAIN")) {
+          currentSnapshot.revocationLastError === "MEMBER_BAN_OWNERSHIP_UNCERTAIN" ||
+          currentSnapshot.revocationLastError === "MEMBER_BAN_IN_PROGRESS")) {
         // The user may still be banned by our previous failed cleanup, or by
         // a moderator who banned them afterwards. Never guess and unban.
         await fail("MEMBER_BAN_OWNERSHIP_UNCERTAIN");
@@ -353,7 +354,55 @@ export async function reconcileSubscriptionAccessRemoval(
         revocationReason = "ADMIN_EXCLUDED";
       } else {
         if (!await isCurrentRevision()) return "LEASE_LOST";
-        await input.bot.api.banChatMember(currentSnapshot.telegramChatId, telegramUserId);
+
+        // Persist an ambiguity marker before the remote ban. If this process
+        // crashes after Telegram accepts the ban but before the unban, recovery
+        // must not mistake our partially completed operation for a moderator ban
+        // or automatically clear a newer moderator decision.
+        const marked = await prisma.$transaction(async (tx) => {
+          await tx.$queryRawUnsafe(
+            'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+            input.subscriptionId
+          );
+          await tx.$queryRawUnsafe(
+            'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
+            currentSnapshot.grantId
+          );
+          await lockSubscriptionAccessScope(tx, input.customerId, input.connectedChatId);
+          const [subscription, scope, grant] = await Promise.all([
+            tx.subscription.findUnique({
+              where: { id: input.subscriptionId },
+              select: { customerId: true, status: true, endsAt: true }
+            }),
+            tx.subscriptionAccessScope.findUnique({
+              where: { id: lease.id },
+              select: { leaseToken: true, leaseExpiresAt: true, desiredRevision: true }
+            }),
+            tx.subscriptionAccessGrant.findUnique({
+              where: { id: currentSnapshot.grantId },
+              select: { revokedAt: true, joinedAt: true }
+            })
+          ]);
+          const checkedAt = new Date();
+          if (!subscription || subscription.customerId !== input.customerId ||
+            !isSubscriptionDueForRevocation(subscription, checkedAt) ||
+            !scope || scope.leaseToken !== lease.leaseToken ||
+            scope.leaseExpiresAt === null || scope.leaseExpiresAt <= checkedAt ||
+            scope.desiredRevision !== lease.revision ||
+            !grant || grant.revokedAt !== null || !grant.joinedAt) return false;
+          const markedGrant = await tx.subscriptionAccessGrant.updateMany({
+            where: { id: currentSnapshot.grantId, revokedAt: null },
+            data: { revocationLastError: "MEMBER_BAN_IN_PROGRESS" }
+          });
+          return markedGrant.count === 1;
+        }, { maxWait: 10_000, timeout: 15_000 });
+        if (!marked || !await isCurrentRevision()) return "LEASE_LOST";
+        try {
+          await input.bot.api.banChatMember(currentSnapshot.telegramChatId, telegramUserId);
+        } catch {
+          await fail("MEMBER_BAN_OWNERSHIP_UNCERTAIN");
+          return "FAILED";
+        }
         // Always attempt to undo our temporary ban even if the worker lease is
         // lost immediately after banChatMember succeeds.
         try {
