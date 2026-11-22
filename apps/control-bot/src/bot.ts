@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { Bot, InlineKeyboard, type Context } from "grammy";
+import { Bot, InputFile, InlineKeyboard, type Context } from "grammy";
 import { prisma } from "@subpilot/database";
 import { decryptSecret, encryptSecret } from "@subpilot/security";
 import { buildWorkspaceInviteAcceptanceMessage } from "./invite-acceptance.js";
@@ -73,6 +73,11 @@ import {
   getProjectAnalytics,
   listProjectAuditHistory
 } from "./project-analytics-service.js";
+import {
+  AgencyAuditError,
+  exportAgencyAuditHistory,
+  listAgencyAuditHistory
+} from "./agency-audit-service.js";
 import {
   assertWorkspaceQuotaInTransaction,
   formatWorkspaceQuotaError,
@@ -2088,6 +2093,8 @@ export function createControlBot(token: string): Bot {
     const limit = fields[1] === undefined ? 10 : Number(fields[1]);
     if (!projectId || fields.length > 2 || !Number.isSafeInteger(limit) || limit < 1 || limit > 25) {
       await ctx.reply("Формат: /auditlog PROJECT_ID [LIMIT]\nLIMIT: от 1 до 25, по умолчанию 10.");
+      "/agencyaudit [LIMIT] — история агентства по доступным проектам\\n" +
+      "/agencyauditexport [DAYS] — выгрузить историю агентства в CSV\\n" +
       return;
     }
     try {
@@ -2121,6 +2128,96 @@ export function createControlBot(token: string): Bot {
     } catch (error) {
       console.error("Control bot /auditlog failed:", error instanceof Error ? error.name : "UnknownError");
       await ctx.reply("Не удалось загрузить историю проекта.");
+    }
+  });
+
+  bot.command("agencyaudit", async (ctx) => {
+    const fields = String(ctx.match ?? "").trim().split(/\s+/).filter(Boolean);
+    const limit = fields[0] === undefined ? 20 : Number(fields[0]);
+    if (fields.length > 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
+      await ctx.reply("Формат: /agencyaudit [LIMIT]\nLIMIT: от 1 до 50, по умолчанию 20.");
+      return;
+    }
+    try {
+      const actor = await upsertTelegramUser(ctx);
+      const { workspace } = await getActiveWorkspace(actor);
+      const report = await listAgencyAuditHistory({
+        workspaceId: workspace.id,
+        actorUserId: actor.id,
+        limit
+      });
+      if (report.events.length === 0) {
+        await ctx.reply("В доступных проектах агентства пока нет записей истории действий.");
+        return;
+      }
+      const header = "История агентства «" + report.workspaceName + "» (последние " +
+        report.events.length + "):\n\n";
+      let chunk = header;
+      for (const [index, event] of report.events.entries()) {
+        const row = (index + 1) + ". " + event.createdAt.toLocaleString("ru-RU") +
+          "\nПроект: " + event.projectName +
+          "\nДействие: " + event.action +
+          "\nОбъект: " + event.resourceType +
+          (event.resourceId ? " (" + event.resourceId + ")" : "") +
+          "\nКто: " + event.actor + "\n\n";
+        if (chunk.length + row.length > 3500 && chunk !== header) {
+          await ctx.reply(chunk);
+          chunk = header;
+        }
+        chunk += row;
+      }
+      if (chunk !== header) {
+        await ctx.reply(chunk + "Служебные metadata и персональные данные не включаются.");
+      }
+    } catch (error) {
+      const message = error instanceof AgencyAuditError
+        ? error.code === "NOT_AN_AGENCY"
+          ? "Эта команда доступна только в рабочем пространстве типа «Агентство»."
+          : error.code === "PERMISSION_DENIED"
+            ? "Для просмотра истории нужны права MANAGER, ADMIN или OWNER."
+            : "Не удалось получить историю агентства."
+        : "Не удалось получить историю агентства.";
+      console.error("Control bot /agencyaudit failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply(message);
+    }
+  });
+
+  bot.command("agencyauditexport", async (ctx) => {
+    const fields = String(ctx.match ?? "").trim().split(/\s+/).filter(Boolean);
+    const days = fields[0] === undefined ? 90 : Number(fields[0]);
+    if (fields.length > 1 || !Number.isSafeInteger(days) || days < 1 || days > 365) {
+      await ctx.reply("Формат: /agencyauditexport [DAYS]\nПериод: от 1 до 365 дней, по умолчанию 90.");
+      return;
+    }
+    try {
+      const actor = await upsertTelegramUser(ctx);
+      const { workspace } = await getActiveWorkspace(actor);
+      const report = await exportAgencyAuditHistory({
+        workspaceId: workspace.id,
+        actorUserId: actor.id,
+        periodDays: days
+      });
+      const date = new Date().toISOString().slice(0, 10);
+      const filename = "subpilot-agency-audit-" + date + ".csv";
+      const caption = "История агентства «" + report.workspaceName + "» за " +
+        report.from.toLocaleDateString("ru-RU") + " — " +
+        report.to.toLocaleDateString("ru-RU") + ". Записей: " + report.eventCount +
+        (report.truncated ? ". Выгрузка ограничена первыми 5000 записями." : ".") +
+        " Metadata и персональные данные не включены.";
+      await ctx.replyWithDocument(
+        new InputFile(Buffer.from(report.csv, "utf8"), filename),
+        { caption }
+      );
+    } catch (error) {
+      const message = error instanceof AgencyAuditError
+        ? error.code === "NOT_AN_AGENCY"
+          ? "Экспорт доступен только в рабочем пространстве типа «Агентство»."
+          : error.code === "PERMISSION_DENIED"
+            ? "Для экспорта истории нужны права MANAGER, ADMIN или OWNER."
+            : "Не удалось сформировать выгрузку истории агентства."
+        : "Не удалось сформировать выгрузку истории агентства.";
+      console.error("Control bot /agencyauditexport failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply(message);
     }
   });
 
