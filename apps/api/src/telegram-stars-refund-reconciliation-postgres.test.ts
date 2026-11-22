@@ -76,7 +76,8 @@ test("PostgreSQL Telegram Stars refunds recalculate paid access and expose fully
         connectedChatId: chat.id,
         inviteLink: "",
         expiresAt: new Date(0),
-        joinedAt: retainedPaidAt
+        joinedAt: retainedPaidAt,
+        revocationNextAttemptAt: new Date(0)
       }
     });
 
