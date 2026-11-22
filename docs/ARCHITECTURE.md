@@ -156,7 +156,7 @@ The gate is a Telegram product-policy check, not merchant approval. Provider eli
 - Payment transitions use conditional database updates and are recorded in the payment and webhook-event ledgers. A verified Telegram `successful_payment` receipt can reconcile a stale invoice previously marked `CANCELLED`; charge IDs are deduplicated.
 - Access is derived from subscription entitlements; payment events alone do not grant permanent access.
 - Fixed-term subscription expiry, buyer reminders, abandoned Stars checkout cleanup, invite revocation and removal of joined members are implemented in the lifecycle worker. Failed Telegram operations remain retryable while the access grant is unrevoked. PostgreSQL lease coordination prevents concurrent lifecycle passes across API replicas.
-- AuditLog schema is present, but application write calls are not implemented yet; audit history remains a known product gap.
+- AuditLog writes are emitted by high-impact workspace and project mutation services. The central bot exposes per-project `/auditlog` history and agency-wide `/agencyaudit` plus CSV export; agency MANAGER visibility is restricted to assigned projects and explicit MANAGER project grants, while VIEWER is denied. Returned records omit raw metadata, and CSV cells are protected against spreadsheet formulas. Audit coverage of every state transition is not yet exhaustive.
 - Secrets are encrypted at rest and rotated through a controlled process.
 - Workspace/project ownership is checked in every API operation.
 - Lifecycle work currently uses a database-backed polling worker rather than Redis. PostgreSQL leases coordinate API replicas; a durable queue may still be considered later if throughput or scheduling requirements outgrow this design.
