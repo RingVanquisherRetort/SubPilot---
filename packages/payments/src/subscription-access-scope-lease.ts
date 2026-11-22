@@ -137,9 +137,9 @@ export async function claimSubscriptionAccessScope(
   const leaseToken = randomUUID();
   const rows = await db.$queryRawUnsafe<ScopeLeaseRow[]>(
     'UPDATE "SubscriptionAccessScope" AS scope ' +
-    'SET "leaseToken" = $3, "leaseExpiresAt" = $4, ' +
+    'SET "leaseToken" = $2, "leaseExpiresAt" = $3, ' +
     '    "attempts" = scope."attempts" + 1, "updatedAt" = $1 ' +
-    'WHERE scope."customerId" = $5 AND scope."connectedChatId" = $6 ' +
+    'WHERE scope."customerId" = $4 AND scope."connectedChatId" = $5 ' +
     '  AND scope."desiredRevision" > scope."appliedRevision" ' +
     '  AND (scope."nextAttemptAt" IS NULL OR scope."nextAttemptAt" <= $1) ' +
     '  AND (scope."leaseExpiresAt" IS NULL OR scope."leaseExpiresAt" <= $1) ' +
@@ -147,7 +147,6 @@ export async function claimSubscriptionAccessScope(
     '          scope."desiredRevision", scope."appliedRevision", scope."leaseToken", ' +
     '          scope."leaseExpiresAt", scope."attempts"',
     now,
-    customerId,
     leaseToken,
     leaseExpiresAt,
     customerId,
