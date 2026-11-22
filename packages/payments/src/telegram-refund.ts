@@ -68,7 +68,12 @@ export function recalculateSubscriptionPeriod(
       providerExpiration = new Date(expirationValue * 1000);
       if (!Number.isFinite(providerExpiration.getTime())) return null;
     }
-    return { paidAt: payment.paidAt, durationDays, providerExpiration };
+    return {
+      paidAt: payment.paidAt,
+      durationDays,
+      providerExpiration,
+      isRecurring: payment.metadata.isRecurring === true
+    };
   });
   if (periods.some((period) => period === null)) {
     return { exact: false, startsAt: fallback.startsAt, endsAt: fallback.endsAt };
@@ -77,6 +82,7 @@ export function recalculateSubscriptionPeriod(
     paidAt: Date;
     durationDays: number | null;
     providerExpiration: Date | null;
+    isRecurring: boolean;
   }>;
   const startsAt = validPeriods[0]?.paidAt ?? null;
   let periodEnd = startsAt;
@@ -87,11 +93,13 @@ export function recalculateSubscriptionPeriod(
     if (!Number.isFinite(durationEnd.getTime())) {
       return { exact: false, startsAt: fallback.startsAt, endsAt: fallback.endsAt };
     }
-    // Telegram's absolute subscription expiration is more precise than deriving
-    // a date from the local webhook receipt timestamp. Keep longer prior access.
-    periodEnd = period.providerExpiration && period.providerExpiration > durationEnd
-      ? period.providerExpiration
-      : durationEnd;
+    if (period.isRecurring && period.providerExpiration) {
+      // For recurring Stars, the provider's absolute expiry is authoritative.
+      // Do not add another local 30-day block when a longer paid period already exists.
+      periodEnd = period.providerExpiration > anchor ? period.providerExpiration : anchor;
+    } else {
+      periodEnd = durationEnd;
+    }
   }
   return { exact: true, startsAt, endsAt: periodEnd };
 }
