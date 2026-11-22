@@ -892,7 +892,7 @@ export function createControlBot(token: string): Bot {
         await ctx.reply("Просматривать и восстанавливать выдачи могут только владелец или администратор проекта.");
         return;
       }
-      const failed = await listWorkspaceFailedAccessDeliveries(project.workspaceId, new Date(), 50, projectId);
+      const failed = await listWorkspaceFailedAccessDeliveries(project.workspaceId, new Date(), 20, projectId);
       if (failed.length === 0) {
         await ctx.editMessageText("В этом проекте нет выдач доступа, исчерпавших лимит автоматических попыток.", {
           reply_markup: new InlineKeyboard().text("⬅️ К управлению подписками", "ui:subaccess:" + projectId)
@@ -905,12 +905,12 @@ export function createControlBot(token: string): Bot {
         keyboard.text("↻ Повторить выдачу №" + (index + 1), "sa:d:" + projectId + ":" + grant.id).row();
         return (index + 1) + ". " + grant.subscription.plan.title + " → " + chat + "\n" +
           "Telegram ID: " + grant.subscription.customer.telegramUserId.toString() + "\n" +
-          "Попыток: " + grant.deliveryAttempts + " · ошибка: " + (grant.deliveryLastError ?? "не указана");
+          "Попыток: " + grant.deliveryAttempts + " · ошибка: " + (grant.deliveryLastError ?? "не указана").slice(0, 100);
       });
       keyboard.text("⬅️ К управлению подписками", "ui:subaccess:" + projectId);
       await ctx.editMessageText(
         "Неудачные выдачи доступа «" + project.name + "»:\n\n" + rows.join("\n\n") +
-        "\n\nПовторная попытка будет поставлена в очередь и записана в журнал аудита.",
+        "\n\nПоказаны до 20 записей. Повторная попытка будет поставлена в очередь и записана в журнал аудита.",
         { reply_markup: keyboard }
       );
     } catch (error) {
