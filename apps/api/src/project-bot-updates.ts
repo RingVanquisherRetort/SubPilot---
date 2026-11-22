@@ -1963,74 +1963,71 @@ export async function handleProjectBotUpdate(
       return;
     }
 
-    const subscription = await prisma.subscription.findFirst({
-      where: {
-        id: subscriptionId,
-        projectId,
-        customerId: customer.id,
-        status: "ACTIVE",
-        OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }]
-      },
-      select: {
-        id: true,
-        endsAt: true,
-        telegramStarInitialChargeId: true,
-        telegramStarSubscriptionState: true
-      }
-    });
-    const stateMatches = action === "cancel"
-      ? subscription?.telegramStarSubscriptionState === "ACTIVE"
-      : subscription?.telegramStarSubscriptionState === "CANCELED";
-    if (
-      !subscription ||
-      !subscription.telegramStarInitialChargeId ||
-      !stateMatches
-    ) {
-      await ctx.reply("Состояние автопродления уже изменилось или срок подписки закончился. Проверьте /subscription.");
-      return;
-    }
-
     try {
-      const rawApi = projectBot.api.raw as unknown as {
-        editUserStarSubscription: (args: {
-          user_id: number;
-          telegram_payment_charge_id: string;
-          is_canceled: boolean;
-        }) => Promise<boolean>;
-      };
-      const changed = await rawApi.editUserStarSubscription({
-        user_id: ctx.from.id,
-        telegram_payment_charge_id: subscription.telegramStarInitialChargeId,
-        is_canceled: action === "cancel"
-      });
-      if (!changed) {
-        await ctx.reply("Telegram не подтвердил изменение автопродления. Попробуйте ещё раз позже.");
-        return;
-      }
-
       const nextState = action === "cancel" ? "CANCELED" : "ACTIVE";
-      const saved = await prisma.$transaction(async (tx) => {
+      const expectedState = action === "cancel" ? "ACTIVE" : "CANCELED";
+      const outcome = await prisma.$transaction(async (tx) => {
+        // Keep the row lock across Telegram and database writes. Administrative
+        // revocation, expiry and successful-payment processing use this same lock.
         await tx.$queryRawUnsafe(
           'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
-          subscription.id
+          subscriptionId
         );
+        const subscription = await tx.subscription.findFirst({
+          where: { id: subscriptionId, projectId, customerId: customer.id },
+          select: {
+            id: true,
+            status: true,
+            endsAt: true,
+            telegramStarInitialChargeId: true,
+            telegramStarSubscriptionState: true
+          }
+        });
+        const now = new Date();
+        if (!subscription || subscription.status !== "ACTIVE" ||
+            (subscription.endsAt !== null && subscription.endsAt <= now) ||
+            !subscription.telegramStarInitialChargeId ||
+            subscription.telegramStarSubscriptionState !== expectedState) {
+          return "STALE" as const;
+        }
+
+        const rawApi = projectBot.api.raw as unknown as {
+          editUserStarSubscription: (args: {
+            user_id: number;
+            telegram_payment_charge_id: string;
+            is_canceled: boolean;
+          }) => Promise<boolean>;
+        };
+        const changed = await rawApi.editUserStarSubscription({
+          user_id: ctx.from!.id,
+          telegram_payment_charge_id: subscription.telegramStarInitialChargeId,
+          is_canceled: action === "cancel"
+        });
+        if (!changed) return "TELEGRAM_REJECTED" as const;
+
         const updated = await tx.subscription.updateMany({
           where: {
             id: subscription.id,
             projectId,
             customerId: customer.id,
-            telegramStarInitialChargeId: subscription.telegramStarInitialChargeId
+            status: "ACTIVE",
+            telegramStarInitialChargeId: subscription.telegramStarInitialChargeId,
+            telegramStarSubscriptionState: expectedState
           },
           data: { telegramStarSubscriptionState: nextState }
         });
-        return updated.count === 1;
-      });
+        if (updated.count !== 1) {
+          throw new Error("Telegram renewal state changed while the subscription row was locked.");
+        }
+        return "UPDATED" as const;
+      }, { isolationLevel: "ReadCommitted", maxWait: 10_000, timeout: 30_000 });
 
-      if (!saved) {
-        await ctx.reply(
-          "Telegram принял запрос, но локальный статус не удалось обновить. " +
-          "Откройте /subscription ещё раз; состояние будет сверено по обновлению Telegram."
-        );
+      if (outcome === "STALE") {
+        await ctx.reply("Состояние подписки уже изменилось или срок закончился. Проверьте /subscription.");
+        return;
+      }
+      if (outcome === "TELEGRAM_REJECTED") {
+        await ctx.reply("Telegram не подтвердил изменение автопродления. Попробуйте ещё раз позже.");
         return;
       }
 
@@ -2046,7 +2043,6 @@ export async function handleProjectBotUpdate(
       await ctx.reply("Не удалось изменить автопродление в Telegram. Попробуйте позже или обратитесь в /paysupport.");
     }
   });
-
   projectBot.callbackQuery("buyer:help", async (ctx) => {
     if (!(await requirePrivateBuyerChat(ctx))) return;
     await ctx.answerCallbackQuery();
