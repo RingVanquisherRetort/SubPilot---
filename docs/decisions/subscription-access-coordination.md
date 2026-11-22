@@ -1,8 +1,8 @@
 # Subscription access coordination — open architecture review
 
-**Status:** Open — design and implementation required  
+**Status:** Open — durable coordinator foundation implemented; Telegram-path migration remains  
 **Reviewed branch:** `feat/subscription-lifecycle-ui`  
-**Reviewed implementation snapshot:** `cca79c14f77956c5cf6f6364465b5dae0dde0395` (CI validation for this exact snapshot is pending)  
+**Reviewed implementation snapshot:** `3d6a9d633f67ab3b7090f4e8b1fd2c2c20cf5512` (CI run `45063554127` passed: migration validation, Prisma generation, typecheck and 189/189 tests)  
 **Production status:** Not merged; no live Telegram/provider test has been run as part of this review.
 
 ## Why this review exists
@@ -47,21 +47,34 @@ This closes the previously identified gap where two different subscriptions coul
 8. Lifecycle/webhook worker lease loss must not allow a stale worker to finalize state as though it still owned the operation.
 9. All mutations that can change the desired Telegram state for the same customer/chat must participate in the same coordination protocol.
 
-## Second phase: remove remote calls from interactive transactions
+## Second phase: durable scope coordinator and out-of-transaction Telegram work
 
-Do not replace the current scope lock with an unlocked read followed by an API call. The next phase must preserve serialization while releasing database transactions before Telegram requests.
+Do not replace the current scope lock with an unlocked read followed by an API call. The second phase must preserve customer/chat serialization while releasing database transactions before Telegram requests.
 
-A viable direction to prototype:
+### Durable coordinator foundation — implemented
 
-- In a short transaction, acquire the customer/chat scope and subscription/grant rows in the agreed order, re-read all current entitlements and moderation state, then persist a desired-state revision plus a uniquely identified operation/outbox record.
-- Commit before calling Telegram.
-- Execute the Telegram operation outside the transaction while holding a durable per-scope operation lease with bounded expiry/heartbeat.
-- Finalize only when the operation token/revision still matches. If a newer revision was committed while the external operation was in flight, do not overwrite it; enqueue reconciliation toward the latest desired state.
+The selected storage primitive is `SubscriptionAccessScope`, unique by `(customerId, connectedChatId)`. It stores:
+
+- `desiredRevision` and `appliedRevision` as monotonic PostgreSQL `BIGINT` generations;
+- a unique lease token and lease expiry, so an expired or superseded worker cannot finalize;
+- retry scheduling, attempt count and a safe error code;
+- foreign keys to the project customer and connected chat, with cascade cleanup.
+
+`requestSubscriptionAccessReconciliation` increments the desired revision in the same caller-supplied transaction as an entitlement mutation. `claimNextSubscriptionAccessScope` atomically takes one due scope with `FOR UPDATE SKIP LOCKED`. Heartbeat, success and failure operations are fenced by the current token and unexpired lease. When a newer revision appears while a Telegram operation is in flight, completing the older revision leaves the scope immediately due for another pass rather than marking it settled. Failure stores only a constrained error code; raw provider or Telegram error text is not persisted.
+
+The migration is `20261122200000_subscription_access_scope_lease`. PostgreSQL integration coverage verifies revision coalescing, single-owner claims, lease renewal, a new desired revision arriving during an in-flight operation, stale-owner rejection after lease transfer, retry scheduling and error-code sanitization. CI run `45063554127` passed migration validation against clean and upgraded PostgreSQL databases, Prisma generation, typecheck and 189/189 tests.
+
+**Important:** this is the durable coordination primitive, not the completed Telegram refactor. Existing subscription delivery, expiry/member-removal and manual recurring-cancellation paths have not yet been migrated to this coordinator; they still contain interactive-transaction/network-call coupling. The scope rows are not yet a live work queue until the mutation paths and reconciliation worker are wired together.
+
+### Remaining integration work
+
+- In a short transaction, acquire the customer/chat scope and subscription/grant rows in the agreed order, re-read all current entitlements and moderation state, and increment the desired revision together with the local entitlement mutation.
+- Commit before calling Telegram. Execute the Telegram operation outside the transaction while holding the durable per-scope lease and renew it during longer work.
+- Finalize only when the operation token/revision still matches. If a newer revision was committed while the external operation was in flight, do not overwrite it; schedule reconciliation toward the latest state.
 - Keep per-invite-link cleanup distinct from member-removal operations. Revoking an old link must not clear a newer link stored by a later delivery.
 - Treat moderation exclusion as a durable deny state. Only an explicit authorized re-grant flow may change that state.
-- Define how a worker lease expiry interacts with an already in-flight Telegram request. A lease token alone cannot fence Telegram itself, because Telegram does not receive the token; a stale response must be made harmless through conditional finalization and reconciliation.
+- Define the worker's recovery behavior when its lease expires during an already in-flight Telegram request. A lease token cannot fence Telegram itself, because Telegram does not receive it; conditional finalization and a compensating reconciliation pass must make stale responses harmless.
 
-The exact durable storage model (coordination row, operation/outbox table, generation fields, or a combination) must be selected only after the concurrency tests below demonstrate the required behavior. Do not add migration fields speculatively.
 
 ## Required regression scenarios
 
