@@ -640,7 +640,7 @@ export async function deliverSubscriptionAccess(
         where: {
           projectId: subscription.projectId,
           telegramChatId: {
-            in: chatIds.filter((id) => /^-?\\d+$/.test(id)).map((id) => BigInt(id))
+            in: chatIds.filter((id) => /^-?\d+$/.test(id)).map((id) => BigInt(id))
           }
         }
       })
