@@ -2,8 +2,18 @@
 INSERT INTO "User" ("id", "telegramId", "firstName", "updatedAt")
 VALUES ('upgrade-user', 9000000001, 'Upgrade Test', CURRENT_TIMESTAMP);
 
-INSERT INTO "Workspace" ("id", "name", "slug", "createdById", "updatedAt")
-VALUES ('upgrade-workspace', 'Upgrade Workspace', 'upgrade-workspace', 'upgrade-user', CURRENT_TIMESTAMP);
+INSERT INTO "Workspace" ("id", "name", "slug", "type", "createdById", "updatedAt")
+VALUES ('upgrade-workspace', 'Upgrade Workspace', 'upgrade-workspace', 'AGENCY', 'upgrade-user', CURRENT_TIMESTAMP);
+
+INSERT INTO "User" ("id", "telegramId", "firstName", "updatedAt")
+VALUES
+  ('upgrade-manager', 9000000003, 'Upgrade Manager', CURRENT_TIMESTAMP),
+  ('upgrade-viewer', 9000000004, 'Upgrade Viewer', CURRENT_TIMESTAMP);
+
+INSERT INTO "WorkspaceMember" ("id", "workspaceId", "userId", "role")
+VALUES
+  ('upgrade-manager-membership', 'upgrade-workspace', 'upgrade-manager', 'MANAGER'),
+  ('upgrade-viewer-membership', 'upgrade-workspace', 'upgrade-viewer', 'VIEWER');
 
 INSERT INTO "Project" ("id", "workspaceId", "name", "slug", "updatedAt")
 VALUES ('upgrade-project', 'upgrade-workspace', 'Upgrade Project', 'upgrade-project', CURRENT_TIMESTAMP);
