@@ -1196,13 +1196,40 @@ async function processRefundedStarsPayment(
   }
 
   const receipt = message.refunded_payment;
-  const payment = await prisma.payment.findUnique({
+  const anchorPayment = await prisma.payment.findUnique({
     where: { id: receipt.invoice_payload },
     include: { customer: true }
   });
-  if (!payment) {
-    console.error("Telegram Stars refund update did not match a SubPilot payment.");
+  if (!anchorPayment) {
+    console.error("Telegram Stars refund update did not match a SubPilot invoice anchor.");
     return;
+  }
+
+  const anchorMetadata = anchorPayment.metadata && typeof anchorPayment.metadata === "object" &&
+    !Array.isArray(anchorPayment.metadata)
+    ? anchorPayment.metadata as Record<string, unknown>
+    : {};
+  let payment = anchorPayment;
+  if (anchorPayment.providerPaymentId !== receipt.telegram_payment_charge_id) {
+    if (anchorMetadata.isRecurring !== true || !anchorPayment.subscriptionId) {
+      console.error("Telegram Stars refund charge did not match the original payment.");
+      return;
+    }
+    const renewalPayment = await prisma.payment.findFirst({
+      where: {
+        projectId: anchorPayment.projectId,
+        customerId: anchorPayment.customerId,
+        subscriptionId: anchorPayment.subscriptionId,
+        provider: "TELEGRAM_STARS",
+        providerPaymentId: receipt.telegram_payment_charge_id
+      },
+      include: { customer: true }
+    });
+    if (!renewalPayment) {
+      console.error("Telegram Stars refund update did not match a recorded renewal charge.");
+      return;
+    }
+    payment = renewalPayment;
   }
 
   const metadata = payment.metadata && typeof payment.metadata === "object" && !Array.isArray(payment.metadata)
@@ -1211,6 +1238,7 @@ async function processRefundedStarsPayment(
   const originProjectBotId = typeof metadata.projectBotId === "string" ? metadata.projectBotId : null;
   const matches = matchesTelegramStarsRefundReceipt({
     id: payment.id,
+    originalPaymentId: typeof metadata.originalPaymentId === "string" ? metadata.originalPaymentId : null,
     provider: payment.provider,
     currency: payment.currency,
     amount: payment.amount.toString(),
