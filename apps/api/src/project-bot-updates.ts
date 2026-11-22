@@ -2515,6 +2515,7 @@ export async function handleProjectBotUpdate(
             !currentSubscription ||
             !currentGrant ||
             currentGrant.inviteLink !== inviteLink ||
+            currentGrant.joinedAt !== null ||
             !isSubscriptionAccessPermissionActive({
               subscriptionStatus: currentSubscription.status,
               subscriptionStartsAt: currentSubscription.startsAt,
