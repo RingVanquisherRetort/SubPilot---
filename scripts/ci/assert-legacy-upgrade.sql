@@ -27,6 +27,22 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'Legacy subscription grantType default was not applied';
   END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM "ProjectMember"
+    WHERE "projectId" = 'upgrade-project'
+      AND "userId" = 'upgrade-manager'
+      AND "role"::text = 'MANAGER'
+  ) THEN
+    RAISE EXCEPTION 'Legacy agency MANAGER access was not backfilled to project scope';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM "ProjectMember"
+    WHERE "projectId" = 'upgrade-project'
+      AND "userId" = 'upgrade-viewer'
+      AND "role"::text = 'VIEWER'
+  ) THEN
+    RAISE EXCEPTION 'Legacy agency VIEWER access was not backfilled to project scope';
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE "migration_name" = '20261121210000_manual_subscription_grants' AND "finished_at" IS NOT NULL) THEN
     RAISE EXCEPTION 'Latest migration is not recorded as successfully applied';
   END IF;
