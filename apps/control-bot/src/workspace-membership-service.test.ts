@@ -68,6 +68,15 @@ test("workspace membership administration rechecks roles transactionally and aud
       data: { activeWorkspaceId: workspace.id }
     });
 
+    await assert.rejects(
+      setWorkspaceMemberRole({
+        workspaceId: workspace.id,
+        actorUserId: manager.id,
+        targetTelegramId: String(telegramBase + 5n),
+        requestedRole: "MANAGER"
+      }),
+      (error: unknown) => error instanceof WorkspaceMembershipError && error.code === "PERMISSION_DENIED"
+    );
     const promoted = await setWorkspaceMemberRole({
       workspaceId: workspace.id,
       actorUserId: owner.id,
@@ -101,15 +110,6 @@ test("workspace membership administration rechecks roles transactionally and aud
         actorUserId: admin.id,
         targetTelegramId: String(telegramBase + 2n),
         requestedRole: "VIEWER"
-      }),
-      (error: unknown) => error instanceof WorkspaceMembershipError && error.code === "PERMISSION_DENIED"
-    );
-    await assert.rejects(
-      setWorkspaceMemberRole({
-        workspaceId: workspace.id,
-        actorUserId: manager.id,
-        targetTelegramId: String(telegramBase + 5n),
-        requestedRole: "MANAGER"
       }),
       (error: unknown) => error instanceof WorkspaceMembershipError && error.code === "PERMISSION_DENIED"
     );
