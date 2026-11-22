@@ -821,7 +821,8 @@ export async function deliverSubscriptionAccess(
       });
       return Boolean(
         finalScope &&
-        finalScope.desiredRevision === finalScope.appliedRevision
+        finalScope.desiredRevision === lease.revision &&
+        finalScope.appliedRevision === lease.revision
       );
     };
     const updateCurrentGrant = async (
@@ -876,11 +877,7 @@ export async function deliverSubscriptionAccess(
       return updated.count === 1;
     }, { maxWait: 10_000, timeout: 15_000 });
 
-    const resultCountsBefore = {
-      links: results.links.length,
-      alreadyJoined: results.alreadyJoined.length,
-      blocked: results.blocked.length
-    };
+    let confirmedInvite: string | null = null;
     let unpersistedInviteLink: string | null = null;
     try {
       if (!chat.isActive) {
@@ -908,7 +905,7 @@ export async function deliverSubscriptionAccess(
           member.status === "administrator" ||
           member.status === "member" ||
           (member.status === "restricted" && member.is_member);
-        isBanned = member.status === "kicked";
+        isBanned = classifyTelegramMembershipDeparture(member.status, isAlreadyMember) === "ADMIN_EXCLUSION";
       } catch {
         // As before, a non-member lookup may fail; invite creation remains the
         // authoritative permission check. A moderation ban is handled below.
@@ -951,8 +948,7 @@ export async function deliverSubscriptionAccess(
           deliveryLastError: null,
           deliveryFailedAt: null
         });
-        if (persisted) results.alreadyJoined.push(label);
-        else {
+        if (!persisted) {
           await settleScope();
           results.blocked.push(label);
           continue;
@@ -972,12 +968,12 @@ export async function deliverSubscriptionAccess(
           deliveryLastError: null,
           deliveryFailedAt: null
         });
-        if (persisted) results.links.push(label + ": " + existing.inviteLink);
-        else {
+        if (!persisted) {
           await settleScope();
           results.blocked.push(label);
           continue;
         }
+        confirmedInvite = existing.inviteLink;
       } else {
         if (existing.inviteLink && !existing.revokedAt && existing.expiresAt > now) {
           try {
@@ -1052,20 +1048,15 @@ export async function deliverSubscriptionAccess(
           continue;
         }
         unpersistedInviteLink = null;
-        results.links.push(label + ": " + invite.invite_link);
+        confirmedInvite = invite.invite_link;
       }
 
-      if (!ownsLease()) {
+      if (!await settleScope() || !ownsLease()) {
         results.failed.push(label);
         continue;
       }
-      if (!await settleScope()) {
-        results.links.length = resultCountsBefore.links;
-        results.alreadyJoined.length = resultCountsBefore.alreadyJoined;
-        results.blocked.length = resultCountsBefore.blocked;
-        results.failed.push(label);
-        continue;
-      }
+      if (confirmedInvite !== null) results.links.push(label + ": " + confirmedInvite);
+      else results.alreadyJoined.push(label);
     } catch (error) {
       if (unpersistedInviteLink) {
         await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), unpersistedInviteLink)

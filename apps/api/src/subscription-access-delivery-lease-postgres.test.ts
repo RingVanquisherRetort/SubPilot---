@@ -19,18 +19,16 @@ function deferred<T = void>(): {
   return { promise, resolve };
 }
 
-test("subscription invite delivery releases its database transaction before Telegram and compensates a superseded invite", {
-  skip: !process.env.DATABASE_URL
-}, async () => {
+async function withDeliveryFixture(run: (fixture: {
+  suffix: string;
+  subscription: { id: string };
+  customer: { id: string };
+  chat: { id: string; telegramChatId: bigint };
+}) => Promise<void>): Promise<void> {
   const suffix = randomUUID().replace(/-/g, "").slice(0, 12);
   const telegramBase = BigInt(Date.now()) * 1_000_000n + BigInt(Math.floor(Math.random() * 100_000));
   let actorId: string | undefined;
   let workspaceId: string | undefined;
-  const createStarted = deferred<void>();
-  const releaseCreate = deferred<void>();
-  let revokeCalls = 0;
-  let delivery: Promise<{ links: string[]; alreadyJoined: string[]; failed: string[]; blocked: string[] }> | undefined;
-
   try {
     const actor = await prisma.user.create({
       data: { telegramId: telegramBase, firstName: "Access delivery lease test" }
@@ -94,111 +92,181 @@ test("subscription invite delivery releases its database transaction before Tele
       }
     });
 
-    const fakeBot = {
+    await run({ suffix, subscription, customer, chat });
+  } finally {
+    if (workspaceId) await prisma.workspace.deleteMany({ where: { id: workspaceId } });
+    if (actorId) await prisma.user.deleteMany({ where: { id: actorId } });
+  }
+}
+
+test("subscription invite delivery releases its database transaction before Telegram and compensates a superseded invite", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withDeliveryFixture(async ({ suffix, subscription, customer, chat }) => {
+    const createStarted = deferred<void>();
+    const releaseCreate = deferred<void>();
+    let revokeCalls = 0;
+    let delivery: Promise<{ links: string[]; alreadyJoined: string[]; failed: string[]; blocked: string[] }> | undefined;
+
+    try {
+      const fakeBot = {
+        api: {
+          getChatMember: async () => { throw new Error("USER_NOT_PARTICIPANT"); },
+          createChatInviteLink: async () => {
+            createStarted.resolve(undefined);
+            await releaseCreate.promise;
+            return { invite_link: "https://t.me/+superseded-invite-" + suffix };
+          },
+          revokeChatInviteLink: async () => {
+            revokeCalls += 1;
+            return true;
+          }
+        }
+      } as unknown as Bot;
+
+      await prisma.$transaction((tx) =>
+        requestSubscriptionAccessReconciliation(tx, customer.id, [chat.id])
+      );
+      const preclaimedLease = await claimSubscriptionAccessScope(
+        prisma,
+        customer.id,
+        chat.id
+      );
+      assert.ok(preclaimedLease, "background worker should claim the dirty customer/chat scope");
+
+      delivery = deliverSubscriptionAccess(
+        fakeBot,
+        subscription.id,
+        [chat.telegramChatId.toString()],
+        () => true,
+        preclaimedLease
+      );
+
+      await Promise.race([
+        createStarted.promise,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Telegram invite creation was not reached")), 5_000))
+      ]);
+
+      // This entitlement mutation must commit while the Telegram request remains
+      // blocked. If delivery held an interactive transaction, this transaction
+      // would be waiting on the subscription row lock.
+      let mutationCommitted = false;
+      const mutation = prisma.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe(
+          'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+          subscription.id
+        );
+        await lockSubscriptionAccessScope(tx, customer.id, chat.id);
+        await tx.subscription.update({
+          where: { id: subscription.id },
+          data: {
+            status: "CANCELLED",
+            cancelledAt: new Date(),
+            endsAt: new Date()
+          }
+        });
+        await requestSubscriptionAccessReconciliation(
+          tx,
+          customer.id,
+          [chat.id],
+          new Date()
+        );
+      }).then(() => { mutationCommitted = true; });
+
+      const committedInTime = await Promise.race([
+        mutation.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000))
+      ]);
+      assert.equal(committedInTime, true, "subscription mutation should not wait for Telegram");
+
+      releaseCreate.resolve(undefined);
+      const result = await delivery;
+      assert.deepEqual(result.links, []);
+      assert.deepEqual(result.alreadyJoined, []);
+      assert.deepEqual(result.failed, []);
+      assert.deepEqual(result.blocked, ["Access delivery lease chat"]);
+      assert.equal(revokeCalls, 1, "stale invite must be revoked after the entitlement changes");
+
+      const [currentSubscription, currentGrant, scope] = await Promise.all([
+        prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id } }),
+        prisma.subscriptionAccessGrant.findUniqueOrThrow({
+          where: {
+            subscriptionId_connectedChatId: {
+              subscriptionId: subscription.id,
+              connectedChatId: chat.id
+            }
+          }
+        }),
+        prisma.subscriptionAccessScope.findUniqueOrThrow({
+          where: {
+            customerId_connectedChatId: {
+              customerId: customer.id,
+              connectedChatId: chat.id
+            }
+          }
+        })
+      ]);
+      assert.equal(mutationCommitted, true);
+      assert.equal(currentSubscription.status, "CANCELLED");
+      assert.equal(currentGrant.inviteLink, "");
+      assert.ok(scope.desiredRevision > scope.appliedRevision, "newer revocation revision must remain queued");
+    } finally {
+      releaseCreate.resolve(undefined);
+      if (delivery) await delivery.catch(() => undefined);
+    }
+  });
+});
+
+test("delivery withholds an invite when lifecycle ownership ends during persistence", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withDeliveryFixture(async ({ subscription, chat }) => {
+    let inviteCreated = false;
+    let lifecycleOwned = true;
+    const bot = {
       api: {
-        getChatMember: async () => { throw new Error("USER_NOT_PARTICIPANT"); },
+        getChatMember: async () => ({ status: "left" }),
         createChatInviteLink: async () => {
-          createStarted.resolve(undefined);
-          await releaseCreate.promise;
-          return { invite_link: "https://t.me/+superseded-invite-" + suffix };
+          inviteCreated = true;
+          return { invite_link: "https://t.me/+lease-loss-test" };
         },
-        revokeChatInviteLink: async () => {
-          revokeCalls += 1;
-          return true;
+        revokeChatInviteLink: async () => true
+      }
+    } as unknown as Bot;
+
+    const result = await deliverSubscriptionAccess(bot, subscription.id, [chat.telegramChatId.toString()], () => {
+      // The worker owns the lease when Telegram returns. Ownership ends during
+      // the following asynchronous database operation, before results are sent.
+      if (inviteCreated) queueMicrotask(() => { lifecycleOwned = false; });
+      return lifecycleOwned;
+    });
+    assert.equal(inviteCreated, true);
+    assert.deepEqual(result, { links: [], alreadyJoined: [], failed: ["Access delivery lease chat"], blocked: [] });
+  });
+});
+
+test("delivery withholds an invite for a restricted non-member", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withDeliveryFixture(async ({ subscription, chat }) => {
+    let createCalls = 0;
+    const bot = {
+      api: {
+        getChatMember: async () => ({ status: "restricted", is_member: false }),
+        createChatInviteLink: async () => {
+          createCalls += 1;
+          return { invite_link: "https://t.me/+restricted-test" };
         }
       }
     } as unknown as Bot;
 
-    await prisma.$transaction((tx) =>
-      requestSubscriptionAccessReconciliation(tx, customer.id, [chat.id])
-    );
-    const preclaimedLease = await claimSubscriptionAccessScope(
-      prisma,
-      customer.id,
-      chat.id
-    );
-    assert.ok(preclaimedLease, "background worker should claim the dirty customer/chat scope");
-
-    delivery = deliverSubscriptionAccess(
-      fakeBot,
-      subscription.id,
-      [chat.telegramChatId.toString()],
-      () => true,
-      preclaimedLease
-    );
-
-    await Promise.race([
-      createStarted.promise,
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Telegram invite creation was not reached")), 5_000))
-    ]);
-
-    // This entitlement mutation must commit while the Telegram request remains
-    // blocked. If delivery held an interactive transaction, this transaction
-    // would be waiting on the subscription row lock.
-    let mutationCommitted = false;
-    const mutation = prisma.$transaction(async (tx) => {
-      await tx.$queryRawUnsafe(
-        'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
-        subscription.id
-      );
-      await lockSubscriptionAccessScope(tx, customer.id, chat.id);
-      await tx.subscription.update({
-        where: { id: subscription.id },
-        data: {
-          status: "CANCELLED",
-          cancelledAt: new Date(),
-          endsAt: new Date()
-        }
-      });
-      await requestSubscriptionAccessReconciliation(
-        tx,
-        customer.id,
-        [chat.id],
-        new Date()
-      );
-    }).then(() => { mutationCommitted = true; });
-
-    const committedInTime = await Promise.race([
-      mutation.then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000))
-    ]);
-    assert.equal(committedInTime, true, "subscription mutation should not wait for Telegram");
-
-    releaseCreate.resolve(undefined);
-    const result = await delivery;
+    const result = await deliverSubscriptionAccess(bot, subscription.id, [chat.telegramChatId.toString()]);
     assert.deepEqual(result.links, []);
-    assert.deepEqual(result.alreadyJoined, []);
-    assert.deepEqual(result.failed, []);
-    assert.deepEqual(result.blocked, ["Access delivery lease chat"]);
-    assert.equal(revokeCalls, 1, "stale invite must be revoked after the entitlement changes");
-
-    const [currentSubscription, currentGrant, scope] = await Promise.all([
-      prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id } }),
-      prisma.subscriptionAccessGrant.findUniqueOrThrow({
-        where: {
-          subscriptionId_connectedChatId: {
-            subscriptionId: subscription.id,
-            connectedChatId: chat.id
-          }
-        }
-      }),
-      prisma.subscriptionAccessScope.findUniqueOrThrow({
-        where: {
-          customerId_connectedChatId: {
-            customerId: customer.id,
-            connectedChatId: chat.id
-          }
-        }
-      })
-    ]);
-    assert.equal(mutationCommitted, true);
-    assert.equal(currentSubscription.status, "CANCELLED");
-    assert.equal(currentGrant.inviteLink, "");
-    assert.ok(scope.desiredRevision > scope.appliedRevision, "newer revocation revision must remain queued");
-  } finally {
-    releaseCreate.resolve(undefined);
-    if (delivery) await delivery.catch(() => undefined);
-    if (workspaceId) await prisma.workspace.deleteMany({ where: { id: workspaceId } });
-    if (actorId) await prisma.user.deleteMany({ where: { id: actorId } });
-  }
+    assert.deepEqual(result.failed, ["Access delivery lease chat"]);
+    assert.equal(createCalls, 0);
+    const grant = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { subscriptionId_connectedChatId: { subscriptionId: subscription.id, connectedChatId: chat.id } }
+    });
+    assert.equal(grant.deliveryLastError, "SUBSCRIBER_ADMIN_BANNED");
+  });
 });

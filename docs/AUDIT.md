@@ -2,7 +2,7 @@
 
 **Audit branch:** `feat/subscription-lifecycle-ui`  
 **Repository:** `RingVanquisherRetort/SubPilot---`  
-**Code snapshot reviewed:** `1079e8eb4b6ef3824db8eac398d1c22dd6bd3517` (leased invite delivery, active-scope worker and staged recurring cancellation; CI run `45074169863` passed)
+**Code snapshot reviewed:** `f226305c655df2f1da388a329294db2ab142fe9b` (CI run `45074857282`, 190/190 tests, clean and legacy PostgreSQL migrations, Prisma generation and typecheck).
 **Base branch:** `main` is intentionally untouched.  
 **Purpose:** close the previously requested implementation audit and repair existing behavior; this register is not a new feature roadmap.
 
@@ -85,7 +85,7 @@ These items have been inspected in source; the table does not claim that every s
 |---|---|
 | External creator payment adapters (YooMoney, YooKassa, Prodamus, Robokassa, CloudPayments, Crypto Pay, etc.) | Not implemented. Catalog and adapter contracts are scaffolding only. |
 | Manual payment-confirmation workflow | Not implemented. |
-| Recurring Telegram Stars billing | Not implemented. Current Stars flow is one-time checkout. |
+| Recurring Telegram Stars billing | The code handles recurring charges, renewals and cancellation. Recovery after an interrupted manual cancellation and live Telegram acceptance remain open. |
 | SubPilot fixed-price workspace billing | Partially implemented: authenticated web checkout, YooKassa success webhook, period extension, full-refund reconciliation, audit logs and manual-review queue exist. Manual one-time renewal is the intended model; automatic recurring charges are out of scope. Real merchant sandbox validation and activation approval are not complete. |
 | 7-day / 14% experiment collection | Intentionally dormant; not connected to normal creator payment success. |
 | Manual subscription grants/revocation and trial handling | Implemented: `/grantaccess`, `/trialaccess`, `/activesubscriptions` and `/revokeaccess` with OWNER/ADMIN checks, audit logs, unique trial policy and worker-driven revocation. Real Telegram acceptance remains open. |

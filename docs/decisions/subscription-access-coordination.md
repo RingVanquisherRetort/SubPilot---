@@ -2,21 +2,21 @@
 
 **Status:** Open — active-scope reconciliation worker and leased invite delivery are implemented; expiry/member removal and recurring cancellation remain  
 **Reviewed branch:** `feat/subscription-lifecycle-ui`  
-**Reviewed implementation snapshot:** `1079e8eb4b6ef3824db8eac398d1c22dd6bd3517` (CI run `45074169863` passed: clean/upgrade migrations, Prisma generation, typecheck and 190/190 tests)  
+**Reviewed implementation snapshot:** `f226305c655df2f1da388a329294db2ab142fe9b` (CI run `45074857282` passed clean and upgrade migrations, Prisma generation, typecheck and all 190 tests)
 **Production status:** Not merged; no live Telegram/provider test has been run as part of this review.
 
 ## Why this review exists
 
 The current subscription lifecycle deliberately serializes expiry and successful payment changes by locking the `Subscription` row. This prevents the simple race where expiry checks an old end date, a payment extends the same subscription, and the worker then revokes access based on stale data.
 
-The first implementation had several remote-call/transaction couplings. The invite-delivery path has now been migrated, but two important transaction spans remain:
+The first implementation had several remote-call/transaction couplings. The invite-delivery path has now been migrated, and the paths now have different transaction boundaries:
 
 - `expireSubscriptions` still holds subscription/grant and customer/chat advisory locks while it may call `revokeChatInviteLink`, `getChatMember`, `banChatMember` and `unbanChatMember`.
 - Manual recurring-subscription revocation in `revokeSubscriptionAccessManually` has been staged: credentials and the current subscription are snapshotted in a short transaction, `editUserStarSubscription` runs after commit, and a second short transaction re-authorizes, re-reads the subscription and commits cancellation/audit/revision state.
 - `deliverSubscriptionAccess` has been migrated: it snapshots and conditionally finalizes in short transactions, while `getChatMember`, `revokeChatInviteLink` and `createChatInviteLink` execute outside interactive transactions under a durable customer/chat lease.
 - The `ADMIN_EXCLUDED` stale-invite cleanup and compromised-invite/member-removal flows perform Telegram calls outside their short snapshot/finalization transactions, but are not yet all fenced by the durable scope lease.
 
-The payment/refund handlers still serialize their local entitlement mutations on the subscription row. The migrated delivery path no longer holds that row lock while waiting for Telegram. The remaining expiry/member-removal and recurring-cancellation paths can still delay other subscription mutations, and a database rollback cannot undo a Telegram API side effect that already succeeded.
+The payment/refund handlers still serialize their local entitlement mutations on the subscription row. The migrated delivery path no longer holds that row lock while waiting for Telegram. Expiry/member removal can still delay subscription mutations. Recurring cancellation can leave local state behind if the process stops after Telegram confirms cancellation.
 
 ## Shared customer/chat coordination — first phase implemented
 
@@ -68,6 +68,14 @@ The migration is `20261122200000_subscription_access_scope_lease`. PostgreSQL in
 Desired revisions are enqueued transactionally for successful Telegram Stars payment/renewal, manual and trial grants, manual revocation, expiry revocation, Telegram Stars refund reconciliation and selected invite-recovery transitions. The lifecycle worker now consumes up to 25 due scopes per pass when a current active, non-revoked grant exists. It selects an overlapping active entitlement and the source project bot, then calls `deliverSubscriptionAccess` with the already-claimed lease. The delivery function validates the lease and current permission in short transactions; Telegram member lookup and invite revoke/create calls run outside transactions. A heartbeat renews the lease; finalization checks token and revision; a link created after permission changes is revoked as compensation and is not returned as valid access.
 
 **Important:** the active-scope worker handles active-grant delivery/recovery only. Expired/cancelled/admin-revoked membership removal is still performed by the legacy expiry path, which calls Telegram while an interactive DB transaction is open. The manual recurring-cancellation endpoint now calls Telegram between two short transactions, but the payment-webhook-vs-admin-revocation race and process recovery after Telegram confirmation but before local finalization still need dedicated tests/design. Selected admin-exclusion and compromised-invite cleanup calls are outside transactions but are not all fenced by the durable scope lease; AUD-018 therefore remains open.
+
+### Findings from the f226305c review
+
+- `reconcileSubscriptionAccessRemoval` has no callers or direct integration tests. The running expiry job still executes the old transaction. The unused function snapshots overlapping permissions before claiming a lease, so it can claim a newer revision and act on the earlier snapshot. Its final database check cannot undo a completed removal.
+- `MEMBER_UNBAN_FAILED` records an earlier failure. It cannot identify who imposed the ban currently visible in Telegram. Connecting this retry to expiry could clear a subsequent moderator ban.
+- Delivery must withhold both a link and an already-joined result until the worker confirms its own revision. A successor can settle a different revision. A restricted non-member is an administrative exclusion on both delivery and departure.
+- Compensation for an invite created after its grant changed is best effort. Failed cleanup in the stale-result branch has no durable per-link retry record. The active-scope worker also needs to respect the per-grant dead-letter state.
+- The payments test entry point discovers all package test files, including the retry/backoff tests.
 
 ### Remaining integration work
 
