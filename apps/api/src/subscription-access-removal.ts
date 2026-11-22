@@ -446,9 +446,27 @@ export async function reconcileSubscriptionAccessRemoval(
           }
         });
         if (cleaned.count !== 1) return { state: "STALE" as const, preserved: false };
-        await requestSubscriptionAccessReconciliation(
-          tx, input.customerId, [input.connectedChatId], now
-        );
+        const otherCurrentEntitlement = await tx.subscriptionAccessGrant.findFirst({
+          where: {
+            id: { not: currentSnapshot.grantId },
+            connectedChatId: input.connectedChatId,
+            revokedAt: null,
+            subscription: {
+              customerId: input.customerId,
+              status: "ACTIVE",
+              AND: [
+                { OR: [{ startsAt: null }, { startsAt: { lte: now } }] },
+                { OR: [{ endsAt: null }, { endsAt: { gt: now } }] }
+              ]
+            }
+          },
+          select: { id: true }
+        });
+        if (otherCurrentEntitlement) {
+          await requestSubscriptionAccessReconciliation(
+            tx, input.customerId, [input.connectedChatId], now
+          );
+        }
         const completed = await completeSubscriptionAccessScope(tx, lease, now);
         if (!completed) throw new Error("ACCESS_SCOPE_LEASE_LOST_DURING_FINALIZATION");
         return { state: "CLEANED" as const, preserved: false };
