@@ -102,7 +102,12 @@ export async function retryWorkspaceFailedAccessDelivery(input: {
         id: grant.id,
         deliveryAttempts: { gte: MAX_ACCESS_DELIVERY_ATTEMPTS },
         deliveryFailedAt: { not: null },
-        revokedAt: null
+        revokedAt: null,
+        subscription: {
+          status: "ACTIVE",
+          AND: [{ OR: [{ endsAt: null }, { endsAt: { gt: now } }] }],
+          project: { workspaceId: input.workspaceId }
+        }
       },
       data: {
         deliveryAttempts: 0,
