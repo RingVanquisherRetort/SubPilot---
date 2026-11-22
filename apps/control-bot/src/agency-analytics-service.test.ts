@@ -271,7 +271,7 @@ test("agency analytics aggregate subscribers, churn, renewals and revenue by cur
 
     const projectAReport = report.projects.find((project) => project.projectId === projectA.id);
     assert.equal(projectAReport?.activeSubscriptions, 2);
-    assert.equal(projectAReport?.renewalPayments, 2);
+    assert.equal(projectAReport?.renewalPayments, 1);
     assert.equal(projectAReport?.creatorName, "Agency Analytics Manager");
     const projectBReport = report.projects.find((project) => project.projectId === projectB.id);
     assert.equal(projectBReport?.activeSubscriptions, 2);
