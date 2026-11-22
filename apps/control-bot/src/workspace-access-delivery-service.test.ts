@@ -8,7 +8,8 @@ test("workspace access-delivery dead letters are scoped, auditable and manually 
   const { prisma } = await import("@subpilot/database");
   const {
     listWorkspaceFailedAccessDeliveries,
-    retryWorkspaceFailedAccessDelivery
+    retryWorkspaceFailedAccessDelivery,
+    WorkspaceAccessDeliveryError
   } = await import("./workspace-access-delivery-service.js");
   const { recordSubscriptionAccessDeliveryFailure } =
     await import("../../api/src/project-bot-updates.js");
@@ -16,6 +17,7 @@ test("workspace access-delivery dead letters are scoped, auditable and manually 
   const suffix = randomUUID().replace(/-/g, "").slice(0, 12);
   const telegramBase = BigInt(Date.now()) * 1_000_000n + BigInt(Math.floor(Math.random() * 100_000));
   let actorId: string | undefined;
+  let managerId: string | undefined;
   let workspaceId: string | undefined;
   let grantId: string | undefined;
 
@@ -24,12 +26,21 @@ test("workspace access-delivery dead letters are scoped, auditable and manually 
       data: { telegramId: telegramBase, firstName: "Access delivery operator test" }
     });
     actorId = actor.id;
+    const manager = await prisma.user.create({
+      data: { telegramId: telegramBase + 1n, firstName: "Access delivery manager test" }
+    });
+    managerId = manager.id;
     const workspace = await prisma.workspace.create({
       data: {
         name: "Access delivery test " + suffix,
         slug: "access-delivery-" + suffix,
         createdById: actor.id,
-        members: { create: { userId: actor.id, role: "OWNER" } }
+        members: {
+          create: [
+            { userId: actor.id, role: "OWNER" },
+            { userId: manager.id, role: "MANAGER" }
+          ]
+        }
       }
     });
     workspaceId = workspace.id;
@@ -122,6 +133,16 @@ test("workspace access-delivery dead letters are scoped, auditable and manually 
       actorUserId: actor.id
     }), false);
 
+    await assert.rejects(
+      retryWorkspaceFailedAccessDelivery({
+        grantId: grant.id,
+        workspaceId: workspace.id,
+        actorUserId: manager.id
+      }),
+      (error: unknown) => error instanceof WorkspaceAccessDeliveryError &&
+        error.code === "ACTOR_NOT_AUTHORIZED"
+    );
+
     const restored = await retryWorkspaceFailedAccessDelivery({
       grantId: grant.id,
       workspaceId: workspace.id,
@@ -153,5 +174,6 @@ test("workspace access-delivery dead letters are scoped, auditable and manually 
     }
     if (workspaceId) await prisma.workspace.deleteMany({ where: { id: workspaceId } });
     if (actorId) await prisma.user.deleteMany({ where: { id: actorId } });
+    if (managerId) await prisma.user.deleteMany({ where: { id: managerId } });
   }
 });
