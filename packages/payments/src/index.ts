@@ -183,3 +183,13 @@ export { getAccessDeliveryFailureState, MAX_ACCESS_DELIVERY_ATTEMPTS } from "./a
 export type { AccessDeliveryFailureState } from "./access-delivery-retry.js";
 
 export { lockSubscriptionAccessScope, lockSubscriptionAccessScopes } from "./subscription-access-scope-lock.js";
+
+export {
+  requestSubscriptionAccessReconciliation,
+  claimNextSubscriptionAccessScope,
+  renewSubscriptionAccessScopeLease,
+  completeSubscriptionAccessScope,
+  failSubscriptionAccessScope,
+  DEFAULT_SUBSCRIPTION_ACCESS_SCOPE_LEASE_TTL_MS
+} from "./subscription-access-scope-lease.js";
+export type { SubscriptionAccessScopeLease } from "./subscription-access-scope-lease.js";
