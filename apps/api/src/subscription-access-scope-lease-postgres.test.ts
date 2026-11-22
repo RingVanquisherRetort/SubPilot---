@@ -93,7 +93,13 @@ test("PostgreSQL scope lease coalesces revisions, rejects stale owners, and retr
     await prisma.$transaction((tx) =>
       requestSubscriptionAccessReconciliation(tx, customer.id, [chat.id], new Date(now.getTime() + 2_000))
     );
-    // A stale worker must not extend its lease after a payment or entitlement\n    // mutation advances the desired revision. The newer generation stays due.\n    assert.equal(await renewSubscriptionAccessScopeLease(prisma, first, {\n      now: new Date(now.getTime() + 2_500),\n      leaseTtlMs: 30_000\n    }), false);\n    const completedOldRevision = await completeSubscriptionAccessScope(
+    // A stale worker must not extend its lease after a payment or entitlement
+    // mutation advances the desired revision. The newer generation stays due.
+    assert.equal(await renewSubscriptionAccessScopeLease(prisma, first, {
+      now: new Date(now.getTime() + 2_500),
+      leaseTtlMs: 30_000
+    }), false);
+    const completedOldRevision = await completeSubscriptionAccessScope(
       prisma,
       first,
       new Date(now.getTime() + 3_000)
