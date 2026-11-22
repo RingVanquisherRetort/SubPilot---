@@ -49,7 +49,7 @@
 - [x] Add payment history and Telegram Stars refund commands.
 - [x] Add button-driven project navigation, plan creation, channel/payment views and workspace/team navigation.
 - [x] Add button-driven plan editing (title, Stars price, duration) and plan-to-chat linking/unlinking.
-- [ ] Add advanced access-management controls beyond the current subscription lifecycle.
+- [x] Add advanced access-management controls beyond the current subscription lifecycle: button-driven owner/admin panel for active subscriptions, manual/trial grants, confirmed early revocation and failed-delivery recovery.
 - [x] Add scheduled expiry and access-revocation worker.
 - [x] Send renewal reminders to buyers approximately three days and one day before expiry.
 - [x] Queue new-subscriber, three-day, one-day and expiry notifications for project authors and agency owners.
