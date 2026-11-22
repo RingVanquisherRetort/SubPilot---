@@ -1377,7 +1377,7 @@ export async function handleProjectBotUpdate(
         subscriptionId: true,
         provider: true,
         currency: true,
-        status: true,
+        providerPaymentId: true,
         metadata: true,
         customer: { select: { telegramUserId: true } }
       }
@@ -1394,7 +1394,7 @@ export async function handleProjectBotUpdate(
       payment.subscriptionId &&
       payment.provider === "TELEGRAM_STARS" &&
       payment.currency === "XTR" &&
-      payment.status === "SUCCEEDED" &&
+      payment.providerPaymentId !== null &&
       payment.customer.telegramUserId === BigInt(subscriptionUpdate.telegramUserId) &&
       metadata?.source === "project_bot" &&
       metadata.projectBotId === projectBotId &&
@@ -1410,6 +1410,7 @@ export async function handleProjectBotUpdate(
           select: {
             projectId: true,
             customerId: true,
+            telegramStarInitialChargeId: true,
             telegramStarSubscriptionLastUpdateId: true,
             telegramStarSubscriptionSequenceEpoch: true
           }
@@ -1418,6 +1419,7 @@ export async function handleProjectBotUpdate(
           !current ||
           current.projectId !== projectId ||
           current.customerId !== payment.customerId ||
+          current.telegramStarInitialChargeId !== payment.providerPaymentId ||
           !shouldProcessTelegramUpdate(
             updateId,
             current.telegramStarSubscriptionLastUpdateId === null
