@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isSubscriptionAccessPermissionActive } from "./subscription-access-permission.js";
+import {
+  isSubscriptionAccessPermissionActive,
+  isRevocationRestorableAfterPaidRenewal
+} from "./subscription-access-permission.js";
 
 const now = new Date("2026-11-22T12:00:00.000Z");
 const activeSubscription = {
@@ -44,4 +47,14 @@ test("future subscriptions do not authorize early invite delivery", () => {
     ...activeSubscription,
     subscriptionStartsAt: new Date(now.getTime() + 1)
   }, now), false);
+});
+
+
+test("a paid renewal restores only grants revoked by natural subscription expiry", () => {
+  assert.equal(isRevocationRestorableAfterPaidRenewal("SUBSCRIPTION_EXPIRED"), true);
+  assert.equal(isRevocationRestorableAfterPaidRenewal("ADMIN_REVOKED"), false);
+  assert.equal(isRevocationRestorableAfterPaidRenewal("ADMIN_EXCLUDED"), false);
+  assert.equal(isRevocationRestorableAfterPaidRenewal("LEGACY_UNKNOWN"), false);
+  assert.equal(isRevocationRestorableAfterPaidRenewal(null), false);
+  assert.equal(isRevocationRestorableAfterPaidRenewal(undefined), false);
 });
