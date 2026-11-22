@@ -1051,7 +1051,7 @@ export function createControlBot(token: string): Bot {
     const keyboard = new InlineKeyboard();
     for (const plan of plans) {
       keyboard.text(
-        `${plan.title.slice(0, 26)} · ${plan.price.toString()} ⭐`,
+        `${plan.isRecurring ? "↻ " : ""}${plan.title.slice(0, 24)} · ${plan.price.toString()} ⭐`,
         `p:v:${projectId}:${plan.id}`
       ).row();
     }
@@ -2988,8 +2988,9 @@ export function createControlBot(token: string): Bot {
       const lines = plans.map((plan, index) => {
         const duration = plan.durationDays ? `${plan.durationDays} дн.` : "без срока";
         const chats = plan.chats.filter((item) => item.connectedChat.isActive).length;
+        const renewal = plan.isRecurring ? "автопродление каждые 30 дней" : "разовая оплата";
         return `${index + 1}. ${plan.title} — ${plan.price.toString()} ${plan.currency}\n` +
-          `Статус: ${plan.status.toLowerCase()} · ${duration} · площадок: ${chats}\nID: ${plan.id}`;
+          `Статус: ${plan.status.toLowerCase()} · ${duration} · ${renewal} · площадок: ${chats}\nID: ${plan.id}`;
       });
 
       await ctx.reply(`Тарифы проекта «${project.name}»:\n\n` + lines.join("\n\n"));
