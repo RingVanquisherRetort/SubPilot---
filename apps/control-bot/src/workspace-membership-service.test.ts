@@ -197,7 +197,7 @@ test("workspace membership administration rechecks roles transactionally and aud
     await assert.rejects(
       createWorkspaceInvite({
         workspaceId: workspace.id,
-        actorUserId: manager.id,
+        actorUserId: viewer.id,
         requestedRole: "VIEWER"
       }),
       (error: unknown) => error instanceof WorkspaceMembershipError && error.code === "PERMISSION_DENIED"
