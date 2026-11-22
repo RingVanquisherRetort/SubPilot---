@@ -231,10 +231,19 @@ export async function grantManualSubscriptionAccess(input: AccessOperationInput 
         'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
         existing.id
       );
+      const lockedExisting = await tx.subscription.findFirst({
+        where: {
+          id: existing.id,
+          status: "ACTIVE",
+          OR: [{ endsAt: null }, { endsAt: { gt: now } }]
+        },
+        select: { endsAt: true }
+      });
+      if (!lockedExisting) throw new ManualSubscriptionAccessError("SUBSCRIPTION_NOT_ACTIVE");
       await lockSubscriptionAccessScopes(tx, customer.id, connectedChatIds);
-      endsAt = durationDays === null || existing.endsAt === null
+      endsAt = durationDays === null || lockedExisting.endsAt === null
         ? null
-        : new Date(Math.max(now.getTime(), existing.endsAt.getTime()) +
+        : new Date(Math.max(now.getTime(), lockedExisting.endsAt.getTime()) +
             durationDays * 24 * 60 * 60 * 1000);
       const updated = await tx.subscription.update({
         where: { id: existing.id },
