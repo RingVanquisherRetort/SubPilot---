@@ -200,6 +200,14 @@ async function createPurchaseInvoice(
       };
     }
 
+    if (plan.isRecurring && plan.durationDays !== 30) {
+      return {
+        payment: null,
+        subscription,
+        invoiceDispatchState: "INVALID_RECURRING_PERIOD" as const
+      };
+    }
+
     const payment = await tx.payment.create({
       data: {
         projectId,
@@ -231,10 +239,9 @@ async function createPurchaseInvoice(
   });
 
   if (!pending.payment) {
-    await ctx.reply(
-      "Для этого тарифа у вас уже есть активная Stars-подписка. Управлять автопродлением можно командой /subscription. " +
-      "Повторный счёт не создан."
-    );
+    await ctx.reply(pending.invoiceDispatchState === "INVALID_RECURRING_PERIOD"
+      ? "Автопродление Stars доступно только для тарифа на 30 дней. Исправьте длительность тарифа и повторите покупку."
+      : "Для этого тарифа у вас уже есть активная Stars-подписка. Управлять автопродлением можно командой /subscription. Повторный счёт не создан.");
     return;
   }
 
