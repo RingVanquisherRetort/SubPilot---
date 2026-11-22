@@ -103,6 +103,11 @@ async function createPurchaseInvoice(
     return;
   }
 
+  if (plan.isRecurring && plan.durationDays !== 30) {
+    await ctx.reply("Для автопродления Telegram Stars сейчас поддерживается только период 30 дней. Измените длительность тарифа или отключите автопродление.");
+    return;
+  }
+
   const activeChats = plan.chats.filter((item) => item.connectedChat.isActive);
   if (activeChats.length === 0) {
     await ctx.reply("У тарифа пока нет активных каналов или групп для выдачи доступа.");
@@ -210,6 +215,7 @@ async function createPurchaseInvoice(
           planTitle: plan.title,
           planDescription: plan.description,
           durationDays: plan.durationDays,
+          isRecurring: plan.isRecurring,
           chatIds: activeChats.map((item) => item.connectedChat.telegramChatId.toString()),
           termsVersion: "2026-11-20",
           termsAcceptedAt: now.toISOString()
@@ -280,16 +286,35 @@ async function createPurchaseInvoice(
     return;
   }
 
-  let invoiceMessage: Awaited<ReturnType<typeof ctx.api.sendInvoice>>;
+  let invoiceMessageId: number;
   try {
-    invoiceMessage = await ctx.api.sendInvoice(
-      ctx.chat.id,
-      invoiceTitle.slice(0, 32),
-      invoiceDescription.slice(0, 255),
-      pending.payment.id,
-      "XTR",
-      [{ label: invoiceTitle.slice(0, 32), amount: invoiceAmountStars }]
-    );
+    if (plan.isRecurring) {
+      const invoiceLink = await bot.api.createInvoiceLink(
+        invoiceTitle.slice(0, 32),
+        invoiceDescription.slice(0, 255),
+        pending.payment.id,
+        "XTR",
+        [{ label: invoiceTitle.slice(0, 32), amount: invoiceAmountStars }],
+        { subscription_period: 2_592_000 }
+      );
+      const sent = await ctx.api.sendMessage(
+        ctx.chat.id,
+        "Ежемесячная подписка «" + invoiceTitle + "». Telegram будет автоматически списывать " +
+          invoiceAmountStars + " ⭐ каждые 30 дней, пока автопродление не будет отменено.",
+        { reply_markup: new InlineKeyboard().url("Оплатить и включить автопродление", invoiceLink) }
+      );
+      invoiceMessageId = sent.message_id;
+    } else {
+      const sent = await ctx.api.sendInvoice(
+        ctx.chat.id,
+        invoiceTitle.slice(0, 32),
+        invoiceDescription.slice(0, 255),
+        pending.payment.id,
+        "XTR",
+        [{ label: invoiceTitle.slice(0, 32), amount: invoiceAmountStars }]
+      );
+      invoiceMessageId = sent.message_id;
+    }
   } catch (error) {
     // Telegram may have received the request even when the client did not receive a definitive response.
     // Keep the payment pending and suppress retries until its normal 24-hour expiry rather than risk two invoices.
@@ -312,7 +337,7 @@ async function createPurchaseInvoice(
         metadata: {
           ...invoiceMetadata,
           invoiceDispatchStartedAt: dispatchStartedAt,
-          invoiceMessageId: invoiceMessage.message_id,
+          invoiceMessageId,
           invoiceSentAt: new Date().toISOString()
         }
       }
