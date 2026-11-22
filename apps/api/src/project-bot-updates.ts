@@ -153,6 +153,14 @@ async function createPurchaseInvoice(
       },
       orderBy: { endsAt: "desc" }
     });
+    if (plan.isRecurring && activeSubscription?.telegramStarInitialChargeId) {
+      return {
+        payment: null,
+        subscription: activeSubscription,
+        invoiceDispatchState: "RECURRING_ACTIVE" as const
+      };
+    }
+
     const pendingSubscription = activeSubscription ? null : await tx.subscription.findFirst({
       where: { projectId, customerId: customer.id, planId: plan.id, status: "PENDING" },
       orderBy: { createdAt: "desc" }
@@ -226,6 +234,14 @@ async function createPurchaseInvoice(
 
     return { payment, subscription, invoiceDispatchState: "NOT_STARTED" as const };
   });
+
+  if (!pending.payment) {
+    await ctx.reply(
+      "Для этого тарифа у вас уже есть активная Stars-подписка. Управлять автопродлением можно командой /subscription. " +
+      "Повторный счёт не создан."
+    );
+    return;
+  }
 
   if (pending.invoiceDispatchState !== "NOT_STARTED") {
     const message = pending.invoiceDispatchState === "SENT"
