@@ -777,11 +777,11 @@ export function createControlBot(token: string): Bot {
     const project = plan
       ? await canAccessProject(plan.project.id, user.id, ADMIN_ROLES)
       : null;
-    const projectId = plan?.project.id;
     if (!project || !plan) {
       await ctx.reply("Тариф недоступен или права управления изменились.");
       return;
     }
+    const projectId = project.id;
     if (kind === "manual") {
       setPendingTextAction(ctx.from.id, { kind: "grant_manual_subscription", projectId, planId });
       await ctx.reply(
@@ -809,12 +809,16 @@ export function createControlBot(token: string): Bot {
     const subscriptionId = ctx.match[1];
     if (!subscriptionId) return;
     const user = await upsertTelegramUser(ctx);
-    const target = await prisma.subscription.findFirst({
+    const subscriptionScope = await prisma.subscription.findFirst({
       where: { id: subscriptionId },
       select: { projectId: true }
     });
-    const projectId = target?.projectId;
-    const project = projectId ? await canAccessProject(projectId, user.id, ADMIN_ROLES) : null;
+    if (!subscriptionScope) {
+      await ctx.reply("Подписка не найдена.");
+      return;
+    }
+    const projectId = subscriptionScope.projectId;
+    const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
     if (!project) {
       await ctx.reply("Нет прав управлять этой подпиской.");
       return;
@@ -855,12 +859,16 @@ export function createControlBot(token: string): Bot {
     if (!subscriptionId) return;
     try {
       const user = await upsertTelegramUser(ctx);
-      const target = await prisma.subscription.findFirst({
+      const subscriptionScope = await prisma.subscription.findFirst({
         where: { id: subscriptionId },
         select: { projectId: true }
       });
-      const projectId = target?.projectId;
-      const project = projectId ? await canAccessProject(projectId, user.id, ADMIN_ROLES) : null;
+      if (!subscriptionScope) {
+        await ctx.reply("Подписка не найдена.");
+        return;
+      }
+      const projectId = subscriptionScope.projectId;
+      const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
       if (!project) {
         await ctx.reply("Нет прав отзывать доступ в этом проекте.");
         return;
@@ -940,8 +948,12 @@ export function createControlBot(token: string): Bot {
         where: { id: grantId },
         select: { subscription: { select: { projectId: true } } }
       });
-      const projectId = grant?.subscription.projectId;
-      const project = projectId ? await canAccessProject(projectId, user.id, ADMIN_ROLES) : null;
+      if (!grant) {
+        await ctx.reply("Выдача доступа не найдена.");
+        return;
+      }
+      const projectId = grant.subscription.projectId;
+      const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
       if (!project) {
         await ctx.reply("Нет прав повторять выдачу доступа.");
         return;
