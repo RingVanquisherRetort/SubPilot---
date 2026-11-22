@@ -3863,7 +3863,8 @@ export function createControlBot(token: string): Bot {
       "/renameproject ID Название — переименовать проект\n" +
       "/archiveproject ID — архивировать проект\n" +
       "/restoreproject ID — восстановить проект\n" +
-      "/createplan ID | Название | Цена | Дней — создать тариф\n" +      "/projectstats PROJECT_ID [DAYS] — агрегированная статистика проекта\n" +
+      "/createplan ID | Название | Цена | Дней — создать тариф\n" +
+      "/projectstats PROJECT_ID [DAYS] — агрегированная статистика проекта\n" +
       "/auditlog PROJECT_ID [LIMIT] — история действий проекта\n" +
       "/grantaccess PROJECT_ID | TELEGRAM_ID | PLAN_ID | DAYS — вручную выдать доступ\n" +
       "/trialaccess PROJECT_ID | TELEGRAM_ID | PLAN_ID | DAYS — выдать пробный доступ\n" +
