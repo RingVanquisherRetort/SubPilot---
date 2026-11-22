@@ -4326,7 +4326,7 @@ export function createControlBot(token: string): Bot {
       "/restoreproject ID — восстановить проект\n" +
       "/createplan ID | Название | Цена | Дней — создать тариф\n" +
       "/projectstats PROJECT_ID [DAYS] — агрегированная статистика проекта\n" +
-      "/agencystats [DAYS] — сводная аналитика агентства по доступным проектам\\n" +
+      "/agencystats [DAYS] — сводная аналитика агентства по доступным проектам\n" +
       "/auditlog PROJECT_ID [LIMIT] — история действий проекта\n" +
       "/agencyaudit [LIMIT] — история агентства по доступным проектам\n" +
       "/agencyauditexport [DAYS] — выгрузить историю агентства в CSV\n" +
