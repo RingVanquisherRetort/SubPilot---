@@ -42,7 +42,7 @@ test("agency audit history and exports obey project roles and omit raw metadata"
           create: [
             { userId: owner.id, role: "OWNER" },
             { userId: manager.id, role: "MANAGER" },
-            { userId: viewer.id, role: "MANAGER" }
+            { userId: viewer.id, role: "VIEWER" }
           ]
         }
       }
@@ -92,7 +92,8 @@ test("agency audit history and exports obey project roles and omit raw metadata"
     await prisma.projectMember.createMany({
       data: [
         { projectId: managedProject.id, userId: manager.id, role: "MANAGER" },
-        { projectId: viewerProject.id, userId: viewer.id, role: "VIEWER" }
+        { projectId: viewerProject.id, userId: viewer.id, role: "VIEWER" },
+        { projectId: viewerProject.id, userId: manager.id, role: "VIEWER" }
       ]
     });
 
