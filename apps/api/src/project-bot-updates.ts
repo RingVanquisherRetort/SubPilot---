@@ -2513,12 +2513,12 @@ export async function handleProjectBotUpdate(
       return;
     }
 
+    // Also resolve revoked grants: a delayed chat_member update may arrive
+    // after an admin exclusion but before Telegram confirms the old invite revoke.
     const grant = await prisma.subscriptionAccessGrant.findFirst({
       where: {
         inviteLink,
-        connectedChat: { projectId, telegramChatId },
-        joinedAt: null,
-        revokedAt: null
+        connectedChat: { projectId, telegramChatId }
       },
       include: {
         subscription: { include: { customer: true } }
@@ -2631,7 +2631,7 @@ export async function handleProjectBotUpdate(
       return;
     }
 
-    const joined = await prisma.$transaction(async (tx) => {
+    const membershipTransition = await prisma.$transaction(async (tx) => {
       await tx.$queryRawUnsafe(
         'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
         grant.subscriptionId
@@ -2643,34 +2643,136 @@ export async function handleProjectBotUpdate(
       const [currentSubscription, currentGrant] = await Promise.all([
         tx.subscription.findUnique({
           where: { id: grant.subscriptionId },
-          select: { status: true, startsAt: true, endsAt: true }
+          select: {
+            customerId: true,
+            status: true,
+            startsAt: true,
+            endsAt: true
+          }
         }),
         tx.subscriptionAccessGrant.findUnique({
           where: { id: grant.id },
-          select: { inviteLink: true, joinedAt: true, revokedAt: true }
+          select: { inviteLink: true, joinedAt: true, revokedAt: true, revocationReason: true }
         })
       ]);
-      if (
-        !currentSubscription ||
-        !currentGrant ||
-        currentGrant.inviteLink !== inviteLink ||
-        currentGrant.joinedAt !== null ||
-        !isSubscriptionAccessPermissionActive({
-          subscriptionStatus: currentSubscription.status,
-          subscriptionStartsAt: currentSubscription.startsAt,
-          subscriptionEndsAt: currentSubscription.endsAt,
-          grantRevokedAt: currentGrant.revokedAt
-        })
-      ) return false;
+      if (!currentSubscription || !currentGrant || currentGrant.inviteLink !== inviteLink) {
+        return { allowed: false, removeMember: false, shouldRevokeInvite: true };
+      }
 
-      const updated = await tx.subscriptionAccessGrant.updateMany({
-        where: { id: grant.id, inviteLink, joinedAt: null, revokedAt: null },
-        data: { joinedAt: new Date() }
+      const permissionActive = isSubscriptionAccessPermissionActive({
+        subscriptionStatus: currentSubscription.status,
+        subscriptionStartsAt: currentSubscription.startsAt,
+        subscriptionEndsAt: currentSubscription.endsAt,
+        grantRevokedAt: currentGrant.revokedAt
       });
-      return updated.count === 1;
+      if (permissionActive) {
+        if (currentGrant.joinedAt === null) {
+          await tx.subscriptionAccessGrant.updateMany({
+            where: { id: grant.id, inviteLink, joinedAt: null, revokedAt: null },
+            data: { joinedAt: new Date() }
+          });
+        }
+        return { allowed: true, removeMember: false, shouldRevokeInvite: false };
+      }
+
+      // A different active subscription may still authorize this user in the same
+      // chat. A stale/revoked link cannot create that right, but it also must not
+      // eject a member who is covered by another current entitlement.
+      const otherActiveGrant = await tx.subscriptionAccessGrant.findFirst({
+        where: {
+          id: { not: grant.id },
+          connectedChatId: grant.connectedChatId,
+          revokedAt: null,
+          subscription: {
+            id: { not: grant.subscriptionId },
+            projectId,
+            customerId: currentSubscription.customerId,
+            status: "ACTIVE",
+            AND: [
+              { OR: [{ startsAt: null }, { startsAt: { lte: new Date() } }] },
+              { OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }] }
+            ]
+          }
+        },
+        select: { id: true }
+      });
+      return {
+        allowed: false,
+        removeMember: !otherActiveGrant,
+        shouldRevokeInvite: true
+      };
     });
-    if (!joined) {
-      await projectBot.api.revokeChatInviteLink(ctx.chat.id, inviteLink).catch(() => undefined);
+
+    if (membershipTransition.shouldRevokeInvite) {
+      let inviteRevoked = false;
+      try {
+        await projectBot.api.revokeChatInviteLink(ctx.chat.id, inviteLink);
+        inviteRevoked = true;
+      } catch (error) {
+        inviteRevoked = isTelegramInviteAlreadyRevoked(error);
+        if (!inviteRevoked) {
+          console.error(
+            "Could not revoke an invite used without a current access permission:",
+            error instanceof Error ? error.name : "UnknownError"
+          );
+        }
+      }
+
+      if (inviteRevoked) {
+        await prisma.$transaction(async (tx) => {
+          await tx.$queryRawUnsafe(
+            'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+            grant.subscriptionId
+          );
+          await tx.$queryRawUnsafe(
+            'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
+            grant.id
+          );
+          await tx.subscriptionAccessGrant.updateMany({
+            where: { id: grant.id, inviteLink },
+            data: { inviteLink: "", expiresAt: new Date(0) }
+          });
+        });
+      }
+    }
+
+    if (membershipTransition.removeMember) {
+      let unintendedMemberRemoved = false;
+      try {
+        await projectBot.api.banChatMember(ctx.chat.id, newMember.user.id);
+        await projectBot.api.unbanChatMember(ctx.chat.id, newMember.user.id, { only_if_banned: true });
+        unintendedMemberRemoved = true;
+      } catch (error) {
+        console.error(
+          "Could not remove a Telegram member who joined without an active access permission:",
+          error instanceof Error ? error.name : "UnknownError"
+        );
+      }
+
+      if (!unintendedMemberRemoved || !membershipTransition.shouldRevokeInvite) {
+        await enqueueProjectOwnerNotification({
+          projectId,
+          dedupeKey: "security:stale-invite-entry:" + grant.id + ":" + newMember.user.id,
+          eventType: "access_security_issue",
+          messageText:
+            "⚠️ Пользователь попытался войти по приглашению без действующего права доступа. Площадка: " +
+            ("title" in ctx.chat ? ctx.chat.title : String(ctx.chat.id)) +
+            ". Telegram ID: " + newMember.user.id + ". " +
+            (unintendedMemberRemoved
+              ? "Пользователь удалён из площадки."
+              : "Не удалось подтвердить удаление пользователя — требуется ручная проверка.")
+        }).catch(() => undefined);
+      }
+    } else if (!membershipTransition.allowed && !membershipTransition.shouldRevokeInvite) {
+      await enqueueProjectOwnerNotification({
+        projectId,
+        dedupeKey: "security:unauthorized-entry-preserved:" + grant.id + ":" + newMember.user.id,
+        eventType: "access_security_issue",
+        messageText:
+          "⚠️ Обнаружен вход по старой ссылке без права в этой подписке, но у пользователя есть другое действующее право доступа на эту площадку. " +
+          "Площадка: " + ("title" in ctx.chat ? ctx.chat.title : String(ctx.chat.id)) +
+          ". Telegram ID: " + newMember.user.id
+      }).catch(() => undefined);
     }
     await saveCursor();
   });
