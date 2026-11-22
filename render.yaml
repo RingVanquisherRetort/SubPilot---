@@ -1,0 +1,76 @@
+services:
+  - type: web
+    name: subpilot-api
+    runtime: node
+    region: frankfurt
+    plan: starter
+    buildCommand: corepack enable && pnpm install && pnpm --filter @subpilot/database db:generate
+    startCommand: pnpm --filter @subpilot/api start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: subpilot-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: subpilot-redis
+          type: keyvalue
+          property: connectionString
+      - key: SECRETS_ENCRYPTION_KEY
+        generateValue: true
+      - key: PUBLIC_API_URL
+        fromService:
+          name: subpilot-api
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: CONTROL_BOT_TOKEN
+        sync: false
+      - key: PLATFORM_ADMIN_TELEGRAM_IDS
+        sync: false
+
+  - type: worker
+    name: subpilot-control-bot
+    runtime: node
+    region: frankfurt
+    plan: starter
+    buildCommand: corepack enable && pnpm install && pnpm --filter @subpilot/database db:generate
+    startCommand: pnpm --filter @subpilot/control-bot start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: subpilot-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: subpilot-redis
+          type: keyvalue
+          property: connectionString
+      - key: SECRETS_ENCRYPTION_KEY
+        fromService:
+          name: subpilot-api
+          type: web
+          envVarKey: SECRETS_ENCRYPTION_KEY
+      - key: CONTROL_BOT_TOKEN
+        sync: false
+      - key: PLATFORM_ADMIN_TELEGRAM_IDS
+        sync: false
+
+  - type: keyvalue
+    name: subpilot-redis
+    region: frankfurt
+    plan: 256mb
+    ipAllowList: []
+
+databases:
+  - name: subpilot-db
+    region: frankfurt
+    plan: basic-256mb
+    databaseName: subpilot
+    user: subpilot
