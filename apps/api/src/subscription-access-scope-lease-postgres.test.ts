@@ -167,6 +167,27 @@ test("PostgreSQL scope lease coalesces revisions, rejects stale owners, and retr
     assert.equal(settled.leaseToken, null);
     assert.equal(settled.nextAttemptAt, null);
     assert.equal(settled.attempts, 0);
+
+    // The active-entitlement worker must not claim a scope that has no current
+    // unrevoked subscription grant. The generic claim path remains available
+    // for the separate expiry/revocation worker.
+    const filterRequestedAt = new Date();
+    await prisma.$transaction((tx) =>
+      requestSubscriptionAccessReconciliation(tx, customer.id, [chat.id], filterRequestedAt)
+    );
+    assert.equal(await claimNextSubscriptionAccessScope(prisma, {
+      now: new Date(filterRequestedAt.getTime() + 1),
+      onlyActiveEntitlements: true
+    }), null);
+    const unrestricted = await claimNextSubscriptionAccessScope(prisma, {
+      now: new Date(filterRequestedAt.getTime() + 1)
+    });
+    assert.ok(unrestricted);
+    assert.equal(await completeSubscriptionAccessScope(
+      prisma,
+      unrestricted,
+      new Date(filterRequestedAt.getTime() + 2)
+    ), true);
   } finally {
     if (scopeId) await prisma.subscriptionAccessScope.deleteMany({ where: { id: scopeId } });
     if (workspaceId) await prisma.workspace.deleteMany({ where: { id: workspaceId } });
