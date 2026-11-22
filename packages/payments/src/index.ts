@@ -181,3 +181,5 @@ export type { YooKassaCredentials, YooKassaAdapterOptions } from "./yookassa-ada
 
 export { getAccessDeliveryFailureState, MAX_ACCESS_DELIVERY_ATTEMPTS } from "./access-delivery-retry.js";
 export type { AccessDeliveryFailureState } from "./access-delivery-retry.js";
+
+export { lockSubscriptionAccessScope, lockSubscriptionAccessScopes } from "./subscription-access-scope-lock.js";
