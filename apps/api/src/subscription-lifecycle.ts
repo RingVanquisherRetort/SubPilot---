@@ -17,7 +17,7 @@ import { getSubscriptionGrantTelegramChatIds } from "./subscription-grant-persis
 import { buildExpiredSubscriptionNotice } from "./subscription-messages.js";
 import { runLifecyclePassWithLease } from "./subscription-lifecycle-runner.js";
 import { withSubscriptionExpiryRowLock } from "./subscription-expiry-transition.js";
-import { lockSubscriptionAccessScope } from "./subscription-access-scope-lock.js";
+import { lockSubscriptionAccessScope } from "@subpilot/payments";
 import {
   deliverPendingOwnerNotifications,
   enqueueProjectOwnerNotification
