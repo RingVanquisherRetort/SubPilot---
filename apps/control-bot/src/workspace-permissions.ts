@@ -22,3 +22,17 @@ export function canRemoveWorkspaceMember(
   if (actorRole === "ADMIN" && targetRole === "ADMIN") return false;
   return true;
 }
+
+export function canChangeWorkspaceMemberRole(
+  actorRole: WorkspaceRole,
+  targetRole: WorkspaceRole,
+  isSelf: boolean,
+  requestedRole: InvitableWorkspaceRole
+): boolean {
+  if (isSelf || targetRole === "OWNER") return false;
+  if (actorRole === "OWNER") return true;
+  if (actorRole !== "ADMIN") return false;
+  // An administrator may manage non-admin members but cannot appoint,
+  // demote or otherwise modify another administrator.
+  return targetRole !== "ADMIN" && requestedRole !== "ADMIN";
+}
