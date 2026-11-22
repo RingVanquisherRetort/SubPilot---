@@ -2,6 +2,15 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T extends void ? undefined : T) => void;
+} {
+  let resolve!: (value: T extends void ? undefined : T) => void;
+  const promise = new Promise<T>((done) => { resolve = done as typeof resolve; });
+  return { promise, resolve };
+}
+
 test("manual grants and trials are audited, scoped, and revoke without fabricating payments", {
   skip: !process.env.DATABASE_URL
 }, async () => {
@@ -280,16 +289,48 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
       telegramPaymentChargeId: string;
       encryptedBotToken: string;
     } | undefined;
-    const recurringRevocation = await revokeSubscriptionAccessManually({
+    const cancellationStarted = deferred<void>();
+    const releaseCancellation = deferred<void>();
+    const recurringRevocationPromise = revokeSubscriptionAccessManually({
       subscriptionId: recurringSubscription.id,
       workspaceId: workspace.id,
       actorUserId: owner.id
     }, {
       cancelTelegramRenewal: async (request) => {
         cancellationRequest = request;
+        cancellationStarted.resolve(undefined);
+        await releaseCancellation.promise;
         return true;
       }
     });
+    await Promise.race([
+      cancellationStarted.promise,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Telegram cancellation was not reached")), 5_000))
+    ]);
+
+    // The Telegram call is deliberately blocked. Another transaction must still
+    // be able to lock and update the subscription row while that external call runs.
+    let concurrentMutationCommitted = false;
+    const concurrentMutation = prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+        recurringSubscription.id
+      );
+      await tx.subscription.update({
+        where: { id: recurringSubscription.id },
+        data: { reminder1dAt: new Date() }
+      });
+    }).then(() => { concurrentMutationCommitted = true; });
+    const committedBeforeTelegramReturned = await Promise.race([
+      concurrentMutation.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000))
+    ]);
+
+    releaseCancellation.resolve(undefined);
+    await concurrentMutation;
+    const recurringRevocation = await recurringRevocationPromise;
+    assert.equal(committedBeforeTelegramReturned, true, "the DB row lock must be released before waiting for Telegram");
+    assert.equal(concurrentMutationCommitted, true);
     assert.equal(recurringRevocation.recurringRenewalCancelled, true);
     assert.equal(cancellationRequest?.telegramUserId, recurringCustomer.telegramUserId);
     assert.equal(cancellationRequest?.telegramPaymentChargeId, initialChargeId);
