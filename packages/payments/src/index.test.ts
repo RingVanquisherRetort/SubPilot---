@@ -409,3 +409,29 @@ test("refunded_payment service updates must match the original buyer, bot, invoi
   assert.equal(matchesTelegramStarsRefundReceipt(payment, receipt, 123456789, "different_bot"), false);
   assert.equal(matchesTelegramStarsRefundReceipt(payment, { ...receipt, telegram_payment_charge_id: "other_charge" }, 123456789, "project_bot_1"), false);
 });
+
+test("recurring renewal refunds match the original invoice payload and the renewal charge ledger row", () => {
+  const renewalPayment = {
+    id: "renewal_payment_456",
+    originalPaymentId: "payment_123",
+    provider: "TELEGRAM_STARS",
+    currency: "XTR",
+    amount: "499.00",
+    providerPaymentId: "charge_456",
+    customerTelegramUserId: "123456789",
+    originProjectBotId: "project_bot_1"
+  };
+  const renewalReceipt = {
+    invoice_payload: "payment_123",
+    currency: "XTR",
+    total_amount: 499,
+    telegram_payment_charge_id: "charge_456"
+  };
+
+  assert.equal(matchesTelegramStarsRefundReceipt(
+    renewalPayment, renewalReceipt, 123456789, "project_bot_1"
+  ), true);
+  assert.equal(matchesTelegramStarsRefundReceipt(
+    renewalPayment, { ...renewalReceipt, invoice_payload: "another_invoice" }, 123456789, "project_bot_1"
+  ), false);
+});
