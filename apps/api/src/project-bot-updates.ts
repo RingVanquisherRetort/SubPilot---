@@ -19,6 +19,7 @@ import { shouldProcessTelegramUpdate } from "./telegram-update-order.js";
 import { shouldActivateConnectedChat } from "./connected-chat-quota.js";
 import { parseTelegramStarSubscriptionUpdate } from "./telegram-star-subscription-update.js";
 import { classifyTelegramStarsPayment } from "./telegram-star-payment-kind.js";
+import { isSubscriptionAccessPermissionActive } from "./subscription-access-permission.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
@@ -560,7 +561,7 @@ async function deliverSubscriptionAccessUnlocked(
   subscriptionId: string,
   chatIds?: string[],
   isLeaseOwned: () => boolean = () => true
-): Promise<{ links: string[]; alreadyJoined: string[]; failed: string[] }> {
+): Promise<{ links: string[]; alreadyJoined: string[]; failed: string[]; blocked: string[] }> {
   const subscription = await tx.subscription.findUnique({
     where: { id: subscriptionId },
     include: {
@@ -582,7 +583,8 @@ async function deliverSubscriptionAccessUnlocked(
   const results = {
     links: [] as string[],
     alreadyJoined: [] as string[],
-    failed: [] as string[]
+    failed: [] as string[],
+    blocked: [] as string[]
   };
   const targetChats = chatIds
     ? await tx.connectedChat.findMany({
@@ -598,11 +600,14 @@ async function deliverSubscriptionAccessUnlocked(
   for (const chat of targetChats) {
     if (!isLeaseOwned()) return results;
     const label = chat.title ?? chat.username ?? chat.telegramChatId.toString();
-    if (!chat.isActive) {
-      await recordSubscriptionAccessDeliveryFailureUsing(tx, subscription.id, chat.id, "CONNECTED_CHAT_INACTIVE");
-      results.failed.push(label);
-      continue;
-    }
+
+    // Lock and validate the concrete chat permission before any Telegram API call.
+    // An active billing subscription cannot recreate a missing or revoked grant.
+    await tx.$queryRawUnsafe(
+      'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "subscriptionId" = $1 AND "connectedChatId" = $2 FOR UPDATE',
+      subscription.id,
+      chat.id
+    );
     const existing = await tx.subscriptionAccessGrant.findUnique({
       where: {
         subscriptionId_connectedChatId: {
@@ -611,6 +616,22 @@ async function deliverSubscriptionAccessUnlocked(
         }
       }
     });
+    const now = new Date();
+    if (!isSubscriptionAccessPermissionActive({
+      subscriptionStatus: subscription.status,
+      subscriptionStartsAt: subscription.startsAt,
+      subscriptionEndsAt: subscription.endsAt,
+      grantRevokedAt: existing?.revokedAt
+    }, now)) {
+      results.blocked.push(label);
+      continue;
+    }
+
+    if (!chat.isActive) {
+      await recordSubscriptionAccessDeliveryFailureUsing(tx, subscription.id, chat.id, "CONNECTED_CHAT_INACTIVE");
+      results.failed.push(label);
+      continue;
+    }
 
     const telegramUserId = Number(subscription.customer.telegramUserId);
     let isAlreadyMember = false;
@@ -652,25 +673,17 @@ async function deliverSubscriptionAccessUnlocked(
       }
 
       if (!isLeaseOwned()) return results;
-      await tx.subscriptionAccessGrant.upsert({
+      await tx.subscriptionAccessGrant.update({
         where: {
           subscriptionId_connectedChatId: {
             subscriptionId: subscription.id,
             connectedChatId: chat.id
           }
         },
-        create: {
-          subscriptionId: subscription.id,
-          connectedChatId: chat.id,
-          inviteLink: "",
-          expiresAt: new Date(0),
-          joinedAt: now
-        },
-        update: {
+        data: {
           inviteLink: "",
           expiresAt: new Date(0),
           joinedAt: now,
-          revokedAt: null,
           deliveryAttempts: 0,
           deliveryNextAttemptAt: now,
           deliveryLastError: null,
@@ -734,24 +747,17 @@ async function deliverSubscriptionAccessUnlocked(
 
       // Persist a pending delivery row before creating the replacement invite.
       if (!isLeaseOwned()) return results;
-      await tx.subscriptionAccessGrant.upsert({
+      await tx.subscriptionAccessGrant.update({
         where: {
           subscriptionId_connectedChatId: {
             subscriptionId: subscription.id,
             connectedChatId: chat.id
           }
         },
-        create: {
-          subscriptionId: subscription.id,
-          connectedChatId: chat.id,
-          inviteLink: "",
-          expiresAt: new Date(0)
-        },
-        update: {
+        data: {
           inviteLink: "",
           expiresAt: new Date(0),
-          joinedAt: null,
-          revokedAt: null
+          joinedAt: null
         }
       });
 
@@ -780,24 +786,17 @@ async function deliverSubscriptionAccessUnlocked(
         await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), invite.invite_link).catch(() => undefined);
         return results;
       }
-      await tx.subscriptionAccessGrant.upsert({
+      await tx.subscriptionAccessGrant.update({
         where: {
           subscriptionId_connectedChatId: {
             subscriptionId: subscription.id,
             connectedChatId: chat.id
           }
         },
-        create: {
-          subscriptionId: subscription.id,
-          connectedChatId: chat.id,
-          inviteLink: invite.invite_link,
-          expiresAt
-        },
-        update: {
+        data: {
           inviteLink: invite.invite_link,
           expiresAt,
           joinedAt: null,
-          revokedAt: null,
           deliveryAttempts: 0,
           deliveryNextAttemptAt: new Date(),
           deliveryLastError: null,
@@ -840,7 +839,7 @@ export async function deliverSubscriptionAccess(
   subscriptionId: string,
   chatIds?: string[],
   isLeaseOwned: () => boolean = () => true
-): Promise<{ links: string[]; alreadyJoined: string[]; failed: string[] }> {
+): Promise<{ links: string[]; alreadyJoined: string[]; failed: string[]; blocked: string[] }> {
   return prisma.$transaction(async (tx) => {
     await tx.$queryRawUnsafe(
       'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
@@ -856,7 +855,7 @@ export async function deliverSubscriptionAccess(
       current.status !== "ACTIVE" ||
       (current.endsAt !== null && current.endsAt <= now)
     ) {
-      return { links: [], alreadyJoined: [], failed: [] };
+      return { links: [], alreadyJoined: [], failed: [], blocked: [] };
     }
 
     return deliverSubscriptionAccessUnlocked(tx, bot, subscriptionId, chatIds, isLeaseOwned);
