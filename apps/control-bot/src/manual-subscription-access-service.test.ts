@@ -236,6 +236,20 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
     assert.equal(stillActive.status, "ACTIVE");
     assert.equal(stillActive.telegramStarSubscriptionState, "ACTIVE");
 
+    // The original charge can later be refunded while a recurring chain still
+    // exists and subsequent renewal periods remain paid. Its bot metadata is
+    // still the authority for disabling future Telegram renewals.
+    await prisma.payment.update({
+      where: {
+        subscriptionId_provider_providerPaymentId: {
+          subscriptionId: recurringSubscription.id,
+          provider: "TELEGRAM_STARS",
+          providerPaymentId: initialChargeId
+        }
+      },
+      data: { status: "REFUNDED", refundedAt: new Date() }
+    });
+
     let cancellationRequest: {
       telegramUserId: bigint;
       telegramPaymentChargeId: string;
