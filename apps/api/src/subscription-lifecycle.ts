@@ -348,13 +348,7 @@ async function expireSubscriptions(
   const due = await prisma.subscription.findMany({
     where: {
       OR: [
-        {
-          status: "ACTIVE",
-          endsAt: { lte: now },
-          accessGrants: {
-            some: { revokedAt: null, revocationNextAttemptAt: { lte: now } }
-          }
-        },
+        { status: "ACTIVE", endsAt: { lte: now } },
         {
           status: { in: ["EXPIRED", "CANCELLED"] },
           accessGrants: {
