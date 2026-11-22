@@ -35,7 +35,7 @@ export async function withSubscriptionExpiryRowLock<T>(
   tx: Transaction,
   subscriptionId: string,
   now: Date,
-  revokeAccess: () => Promise<T>
+  revokeAccess: (currentStatus: string) => Promise<T>
 ): Promise<LockedSubscriptionExpiryResult<T>> {
   await tx.$queryRawUnsafe(
     'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
@@ -56,5 +56,5 @@ export async function withSubscriptionExpiryRowLock<T>(
   );
 
   if (!isDue) return { shouldRevoke: false };
-  return { shouldRevoke: true, result: await revokeAccess() };
+  return { shouldRevoke: true, result: await revokeAccess(current!.status) };
 }
