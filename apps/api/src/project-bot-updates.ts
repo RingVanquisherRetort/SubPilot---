@@ -2737,19 +2737,72 @@ export async function handleProjectBotUpdate(
     }
 
     if (membershipTransition.removeMember) {
-      let unintendedMemberRemoved = false;
-      try {
-        await projectBot.api.banChatMember(ctx.chat.id, newMember.user.id);
-        await projectBot.api.unbanChatMember(ctx.chat.id, newMember.user.id, { only_if_banned: true });
-        unintendedMemberRemoved = true;
-      } catch (error) {
-        console.error(
-          "Could not remove a Telegram member who joined without an active access permission:",
-          error instanceof Error ? error.name : "UnknownError"
+      // Re-check under the same locks immediately before ejecting the user. An
+      // explicit manual re-grant or a second active subscription may have won
+      // after the stale invite was first classified.
+      const stillUnauthorized = await prisma.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe(
+          'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+          grant.subscriptionId
         );
+        await tx.$queryRawUnsafe(
+          'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
+          grant.id
+        );
+        const [currentSubscription, currentGrant] = await Promise.all([
+          tx.subscription.findUnique({
+            where: { id: grant.subscriptionId },
+            select: { customerId: true, status: true, startsAt: true, endsAt: true }
+          }),
+          tx.subscriptionAccessGrant.findUnique({
+            where: { id: grant.id },
+            select: { revokedAt: true }
+          })
+        ]);
+        if (!currentSubscription || !currentGrant) return true;
+        if (isSubscriptionAccessPermissionActive({
+          subscriptionStatus: currentSubscription.status,
+          subscriptionStartsAt: currentSubscription.startsAt,
+          subscriptionEndsAt: currentSubscription.endsAt,
+          grantRevokedAt: currentGrant.revokedAt
+        })) return false;
+
+        const otherActiveGrant = await tx.subscriptionAccessGrant.findFirst({
+          where: {
+            id: { not: grant.id },
+            connectedChatId: grant.connectedChatId,
+            revokedAt: null,
+            subscription: {
+              id: { not: grant.subscriptionId },
+              projectId,
+              customerId: currentSubscription.customerId,
+              status: "ACTIVE",
+              AND: [
+                { OR: [{ startsAt: null }, { startsAt: { lte: new Date() } }] },
+                { OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }] }
+              ]
+            }
+          },
+          select: { id: true }
+        });
+        return !otherActiveGrant;
+      });
+
+      let unintendedMemberRemoved = false;
+      if (stillUnauthorized) {
+        try {
+          await projectBot.api.banChatMember(ctx.chat.id, newMember.user.id);
+          await projectBot.api.unbanChatMember(ctx.chat.id, newMember.user.id, { only_if_banned: true });
+          unintendedMemberRemoved = true;
+        } catch (error) {
+          console.error(
+            "Could not remove a Telegram member who joined without an active access permission:",
+            error instanceof Error ? error.name : "UnknownError"
+          );
+        }
       }
 
-      if (!unintendedMemberRemoved || !membershipTransition.shouldRevokeInvite) {
+      if (stillUnauthorized && !unintendedMemberRemoved) {
         await enqueueProjectOwnerNotification({
           projectId,
           dedupeKey: "security:stale-invite-entry:" + grant.id + ":" + newMember.user.id,
@@ -2757,22 +2810,10 @@ export async function handleProjectBotUpdate(
           messageText:
             "⚠️ Пользователь попытался войти по приглашению без действующего права доступа. Площадка: " +
             ("title" in ctx.chat ? ctx.chat.title : String(ctx.chat.id)) +
-            ". Telegram ID: " + newMember.user.id + ". " +
-            (unintendedMemberRemoved
-              ? "Пользователь удалён из площадки."
-              : "Не удалось подтвердить удаление пользователя — требуется ручная проверка.")
+            ". Telegram ID: " + newMember.user.id +
+            ". Не удалось подтвердить удаление пользователя — требуется ручная проверка."
         }).catch(() => undefined);
       }
-    } else if (!membershipTransition.allowed && !membershipTransition.shouldRevokeInvite) {
-      await enqueueProjectOwnerNotification({
-        projectId,
-        dedupeKey: "security:unauthorized-entry-preserved:" + grant.id + ":" + newMember.user.id,
-        eventType: "access_security_issue",
-        messageText:
-          "⚠️ Обнаружен вход по старой ссылке без права в этой подписке, но у пользователя есть другое действующее право доступа на эту площадку. " +
-          "Площадка: " + ("title" in ctx.chat ? ctx.chat.title : String(ctx.chat.id)) +
-          ". Telegram ID: " + newMember.user.id
-      }).catch(() => undefined);
     }
     await saveCursor();
   });
