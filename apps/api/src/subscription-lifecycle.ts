@@ -443,6 +443,10 @@ async function expireSubscriptions(
       try {
         const locked = await prisma.$transaction(async (tx) =>
           withSubscriptionExpiryRowLock(tx, subscription.id, now, async () => {
+            await tx.$queryRawUnsafe(
+              'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
+              grant.id
+            );
             const currentGrant = await tx.subscriptionAccessGrant.findUnique({
               where: { id: grant.id },
               include: { connectedChat: true }
