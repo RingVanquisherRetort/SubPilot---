@@ -4043,7 +4043,7 @@ export function createControlBot(token: string): Bot {
               SUBSCRIPTION_NOT_ACTIVE: "Подписка уже не активна."
             };
             await ctx.reply(messages[error.code], {
-              reply_markup: new InlineKeyboard().text("К управлению подписками", "ui:subaccess:" + project.id)
+              reply_markup: new InlineKeyboard().text("К управлению подписками", "ui:subaccess:" + pendingAction.projectId)
             });
           } else {
             console.error("Button manual subscription access failed:", error instanceof Error ? error.name : "UnknownError");
