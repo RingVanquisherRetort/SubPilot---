@@ -15,6 +15,9 @@
 - [x] Workspace selector and agency membership.
 - [x] Create agency workspace from the central bot.
 - [x] Invite teammates with role-scoped, one-use Telegram deep links that expire after seven days.
+- [x] Enforce the full OWNER/ADMIN/MANAGER/VIEWER permission matrix for role changes; only owners can appoint administrators, admins can manage managers/viewers, and self/owner role changes are blocked.
+- [x] Perform workspace role changes, member removal, invite creation/revocation and Telegram-ID member-directory reads through workspace-row-locked transactions with fresh actor-role validation; audit sensitive mutations and restrict `/members` to OWNER/ADMIN.
+- [ ] Smoke-test invite, role-change, removal and unauthorized callback/command scenarios with real Telegram accounts for every workspace role.
 - [x] Persist each user's active workspace.
 - [x] Enforce manager/admin permissions for project operations.
 - [x] Project creation, rename and archive/restore.
