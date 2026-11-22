@@ -176,6 +176,7 @@ async function ensureAccessGrantRows(
       expiresAt: new Date(0),
       joinedAt: null,
       revokedAt: null,
+      revocationReason: null,
       deliveryAttempts: 0,
       deliveryNextAttemptAt: now,
       deliveryLastError: null,
