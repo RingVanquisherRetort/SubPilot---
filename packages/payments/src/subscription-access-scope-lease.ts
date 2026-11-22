@@ -184,7 +184,7 @@ export async function claimSubscriptionAccessScope(
 /** Extend a lease only while its token is current and its previous TTL remains valid. */
 export async function renewSubscriptionAccessScopeLease(
   db: ScopeLeaseExecutor,
-  lease: Pick<SubscriptionAccessScopeLease, "id" | "leaseToken">,
+  lease: Pick<SubscriptionAccessScopeLease, "id" | "leaseToken" | "revision">,
   options: { now?: Date; leaseTtlMs?: number } = {}
 ): Promise<boolean> {
   const now = options.now ?? new Date();
@@ -196,12 +196,13 @@ export async function renewSubscriptionAccessScopeLease(
   const rows = await db.$queryRawUnsafe<Array<{ id: string }>>(
     'UPDATE "SubscriptionAccessScope" ' +
     'SET "leaseExpiresAt" = $3, "updatedAt" = $2 ' +
-    'WHERE "id" = $1 AND "leaseToken" = $4 AND "leaseExpiresAt" > $2 ' +
+    'WHERE "id" = $1 AND "leaseToken" = $4 AND "leaseExpiresAt" > $2 AND "desiredRevision" = $5::bigint ' +
     'RETURNING "id"',
     lease.id,
     now,
     expiresAt,
-    lease.leaseToken
+    lease.leaseToken,
+    lease.revision
   );
   return rows.length === 1;
 }
