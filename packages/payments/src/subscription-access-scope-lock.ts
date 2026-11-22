@@ -17,7 +17,7 @@ export async function lockSubscriptionAccessScope(
 ): Promise<void> {
   const key = "subpilot:subscription-access:" + customerId + ":" + connectedChatId;
   await tx.$queryRawUnsafe(
-    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+    "SELECT 1::int AS locked FROM (SELECT pg_advisory_xact_lock(hashtextextended($1, 0))) AS scope_lock",
     key
   );
 }
