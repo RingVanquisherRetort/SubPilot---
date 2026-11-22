@@ -871,7 +871,7 @@ async function processSuccessfulStarsPayment(
         endsAt: currentSubscription.endsAt,
         isInitialActivation: false,
         isRenewal: false,
-        paymentRecordId: payment.id,
+        paymentRejected: true,
         paymentWasProcessed: false
       };
     }
@@ -887,7 +887,7 @@ async function processSuccessfulStarsPayment(
           endsAt: currentSubscription.endsAt,
           isInitialActivation: false,
           isRenewal: false,
-          paymentRecordId: payment.id,
+          paymentRejected: false,
           paymentWasProcessed: false
         };
       }
@@ -954,7 +954,7 @@ async function processSuccessfulStarsPayment(
           endsAt: currentSubscription.endsAt,
           isInitialActivation: false,
           isRenewal: false,
-          paymentRecordId: payment.id,
+          paymentRejected: false,
           paymentWasProcessed: false
         };
       }
@@ -1047,11 +1047,19 @@ async function processSuccessfulStarsPayment(
       endsAt,
       isInitialActivation,
       isRenewal: paymentKind === "RECURRING_RENEWAL",
-      paymentRecordId,
+      paymentRejected: false,
       paymentWasProcessed: true
     };
   });
-  const { endsAt, isInitialActivation, isRenewal, paymentRecordId, paymentWasProcessed } = transactionResult;
+  const { endsAt, isInitialActivation, isRenewal, paymentRejected, paymentWasProcessed } = transactionResult;
+
+  if (paymentRejected) {
+    await ctx.reply(
+      "Telegram прислал квитанцию с несовпадающими признаками рекуррентного платежа. " +
+      "Доступ автоматически не менялся. Сохраните квитанцию и обратитесь в /paysupport."
+    );
+    return;
+  }
 
   const queueNewSubscriberNotification = async (accessEndsAt: Date | null): Promise<void> => {
     const buyerName = [payment.customer.firstName, payment.customer.lastName]
