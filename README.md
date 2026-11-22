@@ -108,7 +108,7 @@ Each connected project bot exposes a button-first buyer interface:
 - **Select a tariff** — opens a one-time Stars invoice or a recurring Stars invoice link.
 - Renewal reminders include a **Renew subscription** button.
 
-The `/plans`, `/buy PLAN_ID` and `/subscription` commands remain available as fallbacks. Recurring Stars plans currently require a 30-day duration; Telegram controls the renewal schedule. Buyers can disable or re-enable future renewals from `/subscription`. Disabling renewal preserves access until the already-paid Telegram subscription period expires.
+The `/plans`, `/buy PLAN_ID` and `/subscription` commands remain available as fallbacks. Recurring Stars plans currently require a 30-day duration and a price no higher than 10,000 Stars; Telegram controls the renewal schedule. Buyers can disable or re-enable future renewals from `/subscription`. Disabling renewal preserves access until the already-paid Telegram subscription period expires.
 
 For digital subscriptions sold inside Telegram, invoices use `XTR`. Recurring invoices are generated as Telegram invoice links with the 30-day subscription period. Before accepting an initial payment, SubPilot checks the pending payment, buyer Telegram ID, amount and currency. Every later successful recurring charge is stored as its own payment ledger record and applied once using the Telegram charge ID. Subscription expiry is synchronized from Telegram's successful-payment update.
 
