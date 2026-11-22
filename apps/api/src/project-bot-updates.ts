@@ -465,24 +465,18 @@ async function recordSubscriptionAccessDeliveryFailureUsing(
     where: key,
     select: { deliveryAttempts: true }
   });
+  // Failure tracking must never create an access grant. A missing permission
+  // remains missing; only an explicit authorization flow may create/re-enable it.
+  if (!current) return;
+
   const state = getAccessDeliveryFailureState(
-    current?.deliveryAttempts ?? 0,
+    current.deliveryAttempts,
     now,
     safeErrorCode
   );
-  await tx.subscriptionAccessGrant.upsert({
+  await tx.subscriptionAccessGrant.update({
     where: key,
-    create: {
-      subscriptionId,
-      connectedChatId,
-      inviteLink: "",
-      expiresAt: new Date(0),
-      deliveryAttempts: state.attempts,
-      deliveryNextAttemptAt: state.nextAttemptAt,
-      deliveryLastError: state.lastError,
-      deliveryFailedAt: state.failedAt
-    },
-    update: {
+    data: {
       deliveryAttempts: state.attempts,
       deliveryNextAttemptAt: state.nextAttemptAt,
       deliveryLastError: state.lastError,
