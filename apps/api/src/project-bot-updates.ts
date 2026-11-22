@@ -22,7 +22,7 @@ import { isSubscriptionAccessPermissionActive, PAID_RENEWAL_RESTORABLE_REVOCATIO
 import { classifyTelegramMembershipDeparture } from "./telegram-membership-departure.js";
 import { getAccessRevocationRetryState } from "./access-revocation-retry.js";
 import { reconcileTelegramStarsRefundUsing } from "./telegram-stars-refund-reconciliation.js";
-import { lockSubscriptionAccessScope, lockSubscriptionAccessScopes } from "@subpilot/payments";
+import { lockSubscriptionAccessScope, lockSubscriptionAccessScopes, requestSubscriptionAccessReconciliation } from "@subpilot/payments";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
@@ -1284,6 +1284,17 @@ async function processSuccessfulStarsPayment(
       });
     }
 
+    // Commit a new desired-access generation atomically with the paid entitlement.
+    // The reconciliation worker will perform Telegram side effects after commit.
+    if (!accessSuppressedByAdminRevocation && connectedChatIds.length > 0) {
+      await requestSubscriptionAccessReconciliation(
+        tx,
+        currentSubscription.customerId,
+        connectedChatIds,
+        now
+      );
+    }
+
     return {
       endsAt,
       isInitialActivation,
@@ -2435,6 +2446,13 @@ export async function handleProjectBotUpdate(
                 joinedAt: null
               }
             });
+            if (updated.count === 1) {
+              await requestSubscriptionAccessReconciliation(
+                tx,
+                currentSubscription.customerId,
+                [grant.connectedChatId]
+              );
+            }
             return updated.count === 1
               ? {
                   kind: "ADMIN_EXCLUSION" as const,
