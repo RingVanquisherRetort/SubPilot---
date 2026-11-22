@@ -94,14 +94,14 @@ export async function claimNextSubscriptionAccessScope(
   const leaseToken = randomUUID();
   const activeEntitlementPredicate = options.onlyActiveEntitlements
     ? '    AND EXISTS ( ' +
-      '      SELECT 1 FROM "SubscriptionAccessGrant" AS grant ' +
-      '      JOIN "Subscription" AS subscription ON subscription."id" = grant."subscriptionId" ' +
-      '      WHERE grant."connectedChatId" = scope."connectedChatId" ' +
-      '        AND grant."revokedAt" IS NULL ' +
-      '        AND subscription."customerId" = scope."customerId" ' +
-      '        AND subscription."status" = \'ACTIVE\' ' +
-      '        AND (subscription."startsAt" IS NULL OR subscription."startsAt" <= $1) ' +
-      '        AND (subscription."endsAt" IS NULL OR subscription."endsAt" > $1) ' +
+      '      SELECT 1 FROM "SubscriptionAccessGrant" AS access_grant ' +
+      '      JOIN "Subscription" AS sub_row ON sub_row."id" = access_grant."subscriptionId" ' +
+      '      WHERE access_grant."connectedChatId" = scope."connectedChatId" ' +
+      '        AND access_grant."revokedAt" IS NULL ' +
+      '        AND sub_row."customerId" = scope."customerId" ' +
+      '        AND sub_row."status" = \'ACTIVE\' ' +
+      '        AND (sub_row."startsAt" IS NULL OR sub_row."startsAt" <= $1) ' +
+      '        AND (sub_row."endsAt" IS NULL OR sub_row."endsAt" > $1) ' +
       '    ) '
     : "";
   const rows = await db.$queryRawUnsafe<ScopeLeaseRow[]>(
