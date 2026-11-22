@@ -32,7 +32,11 @@ export function classifyTelegramStarsPayment(
 
   // Bot API models is_first_recurring as an optional True-only flag.
   // Later recurring charges therefore normally omit it instead of sending false.
-  return input.paymentStatus === "SUCCEEDED" && input.isFirstRecurring === undefined
-    ? "RECURRING_RENEWAL"
-    : null;
+  // The persisted first-charge anchor proves that this recurring chain
+  // was initialized successfully. Its ledger row may later be refunded while
+  // Telegram can still deliver a valid subsequent renewal.
+  return input.isFirstRecurring === undefined &&
+    ["SUCCEEDED", "REFUNDING", "REFUNDED"].includes(input.paymentStatus)
+      ? "RECURRING_RENEWAL"
+      : null;
 }
