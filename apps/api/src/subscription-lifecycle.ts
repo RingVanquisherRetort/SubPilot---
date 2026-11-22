@@ -594,6 +594,7 @@ async function expireSubscriptions(
             });
 
             const chatId = currentGrant.connectedChat.telegramChatId.toString();
+            let revocationReason = currentStatus === "CANCELLED" ? "ADMIN_REVOKED" : "SUBSCRIPTION_EXPIRED";
             if (!isLeaseOwned()) {
               return { completed: false, preserved: false, skipped: false, leaseLost: true };
             }
@@ -614,13 +615,23 @@ async function expireSubscriptions(
                 return { completed: false, preserved: false, skipped: false, leaseLost: true };
               }
               const telegramUserId = Number(subscription.customer.telegramUserId);
-              await bot!.api.banChatMember(chatId, telegramUserId);
-              if (!isLeaseOwned()) {
-                return { completed: false, preserved: false, skipped: false, leaseLost: true };
-              }
-              await bot!.api.unbanChatMember(chatId, telegramUserId, { only_if_banned: true });
-              if (!isLeaseOwned()) {
-                return { completed: false, preserved: false, skipped: false, leaseLost: true };
+              const member = await bot!.api.getChatMember(chatId, telegramUserId);
+              if (
+                member.status === "kicked" ||
+                (member.status === "restricted" && !member.is_member)
+              ) {
+                // Preserve a ban that already exists in Telegram; it belongs to
+                // moderation, not to this subscription expiry transition.
+                revocationReason = "ADMIN_EXCLUDED";
+              } else {
+                await bot!.api.banChatMember(chatId, telegramUserId);
+                if (!isLeaseOwned()) {
+                  return { completed: false, preserved: false, skipped: false, leaseLost: true };
+                }
+                await bot!.api.unbanChatMember(chatId, telegramUserId, { only_if_banned: true });
+                if (!isLeaseOwned()) {
+                  return { completed: false, preserved: false, skipped: false, leaseLost: true };
+                }
               }
             }
 
@@ -628,7 +639,7 @@ async function expireSubscriptions(
               where: { id: currentGrant.id, revokedAt: null },
               data: {
                 revokedAt: now,
-                revocationReason: currentStatus === "CANCELLED" ? "ADMIN_REVOKED" : "SUBSCRIPTION_EXPIRED",
+                revocationReason,
                 inviteLink: "",
                 expiresAt: new Date(0),
                 revocationAttempts: 0,
