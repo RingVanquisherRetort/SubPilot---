@@ -973,7 +973,8 @@ async function processSuccessfulStarsPayment(
         paymentRecordId: payment.id,
         paymentRejected: false,
         paymentWasProcessed: false,
-        accessSuppressedByAdminRevocation: false
+        accessSuppressedByAdminRevocation: false,
+        isInitialRecurring: false
       };
     }
 
@@ -992,16 +993,16 @@ async function processSuccessfulStarsPayment(
         paymentRecordId: payment.id,
         paymentRejected: true,
         paymentWasProcessed: false,
-        accessSuppressedByAdminRevocation: false
+        accessSuppressedByAdminRevocation: false,
+        isInitialRecurring: false
       };
     }
 
-    // An administrator can revoke while Telegram has a renewal charge in flight.
-    // Keep the real charge in the ledger, but do not reactivate the entitlement.
-    const accessSuppressedByAdminRevocation =
-      currentSubscription.status === "CANCELLED" &&
-      Boolean(currentSubscription.telegramStarInitialChargeId) &&
-      paymentKind === "RECURRING_RENEWAL";
+    // A successful receipt must never reopen an explicitly cancelled entitlement.
+    // This also covers a one-time or first-recurring charge that was already in flight
+    // when the administrator revoked an ACTIVE subscription without a charge anchor.
+    const accessSuppressedByAdminRevocation = currentSubscription.status === "CANCELLED";
+    const isInitialRecurring = paymentKind === "INITIAL_RECURRING";
 
     const currentEnd = currentSubscription.endsAt && currentSubscription.endsAt > now
       ? currentSubscription.endsAt
@@ -1013,9 +1014,11 @@ async function processSuccessfulStarsPayment(
     const endsAt = isRecurringPayment && expirationFromTelegram
       ? (expirationFromTelegram > currentEnd ? expirationFromTelegram : currentEnd)
       : durationBasedEnd;
-    const isInitialActivation = paymentKind === "RECURRING_RENEWAL"
+    const isInitialActivation = accessSuppressedByAdminRevocation
       ? false
-      : currentSubscription.status !== "ACTIVE";
+      : paymentKind === "RECURRING_RENEWAL"
+        ? false
+        : currentSubscription.status !== "ACTIVE";
     let paymentRecordId = payment.id;
 
     if (paymentKind === "RECURRING_RENEWAL") {
@@ -1086,7 +1089,8 @@ async function processSuccessfulStarsPayment(
           paymentRecordId: payment.id,
           paymentRejected: false,
           paymentWasProcessed: false,
-          accessSuppressedByAdminRevocation: false
+          accessSuppressedByAdminRevocation: false,
+          isInitialRecurring: false
         };
       }
     }
@@ -1115,6 +1119,17 @@ async function processSuccessfulStarsPayment(
               : {})
         }
       });
+    } else if (isInitialRecurring) {
+      // The receipt arrived after admin revocation and supplies the first charge ID
+      // only now. Persist the anchor without reopening access so the same Telegram
+      // recurring chain can be cancelled immediately after this transaction commits.
+      await tx.subscription.update({
+        where: { id: subscription.id },
+        data: {
+          telegramStarInitialChargeId: receipt.telegram_payment_charge_id,
+          telegramStarSubscriptionState: "ACTIVE"
+        }
+      });
     }
 
     await tx.paymentWebhookEvent.create({
@@ -1134,6 +1149,7 @@ async function processSuccessfulStarsPayment(
           isInitialActivation,
           isRecurring: isRecurringPayment,
           isRenewal: paymentKind === "RECURRING_RENEWAL",
+          isInitialRecurring,
           accessSuppressedByAdminRevocation
         },
         processedAt: now
@@ -1189,10 +1205,11 @@ async function processSuccessfulStarsPayment(
       paymentRecordId,
       paymentRejected: false,
       paymentWasProcessed: true,
-      accessSuppressedByAdminRevocation
+      accessSuppressedByAdminRevocation,
+      isInitialRecurring
     };
   });
-  const { endsAt, isInitialActivation, isRenewal, paymentRecordId, paymentRejected, paymentWasProcessed, accessSuppressedByAdminRevocation } = transactionResult;
+  const { endsAt, isInitialActivation, isRenewal, paymentRecordId, paymentRejected, paymentWasProcessed, accessSuppressedByAdminRevocation, isInitialRecurring } = transactionResult;
 
   if (paymentRejected) {
     await ctx.reply(
@@ -1238,18 +1255,87 @@ async function processSuccessfulStarsPayment(
     });
   };
 
-  const queueAdminRevokedChargeReview = async (reviewPaymentId = paymentRecordId): Promise<void> => {
+  const queueAdminRevokedChargeReview = async (
+    reviewPaymentId = paymentRecordId,
+    initialRenewalCancellationConfirmed?: boolean
+  ): Promise<void> => {
     await enqueueProjectOwnerNotification({
       projectId,
       dedupeKey: "payment:admin-revoked-renewal-review:" + receipt.telegram_payment_charge_id,
       eventType: "renewal_after_admin_revocation_review",
       messageText:
-        "⚠️ Telegram подтвердил рекуррентное списание после административного отзыва подписки.\n" +
+        "⚠️ Telegram подтвердил платёж по уже отозванной подписке.\n" +
         "Проект: «" + payment.project.name + "»\nТариф: «" + snapshotPlanTitle + "»\n" +
         "Сумма: " + payment.amount.toString() + " ⭐\n" +
         "ID платежа: " + reviewPaymentId + "\n" +
+        (initialRenewalCancellationConfirmed === true
+          ? "Автопродление отключено после получения первой квитанции.\n"
+          : initialRenewalCancellationConfirmed === false
+            ? "🚨 Telegram не подтвердил отключение автопродления. Срочно проверьте рекуррентную подписку через исходного бота.\n"
+            : "") +
         "Доступ автоматически не восстановлен. Проверьте платёж и при необходимости оформите возврат через /refundpayment."
     });
+  };
+
+  const cancelLateInitialRecurringRenewal = async (): Promise<boolean> => {
+    const telegramUserId = Number(payment.customer.telegramUserId);
+    if (!Number.isSafeInteger(telegramUserId) || telegramUserId <= 0) return false;
+
+    try {
+      return await prisma.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe(
+          'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+          subscription.id
+        );
+        const current = await tx.subscription.findUnique({
+          where: { id: subscription.id },
+          select: {
+            status: true,
+            telegramStarInitialChargeId: true,
+            telegramStarSubscriptionState: true
+          }
+        });
+        if (
+          !current ||
+          current.status !== "CANCELLED" ||
+          current.telegramStarInitialChargeId !== receipt.telegram_payment_charge_id
+        ) {
+          return false;
+        }
+        if (current.telegramStarSubscriptionState === "CANCELED") return true;
+
+        const rawApi = bot.api.raw as unknown as {
+          editUserStarSubscription: (args: {
+            user_id: number;
+            telegram_payment_charge_id: string;
+            is_canceled: boolean;
+          }) => Promise<boolean>;
+        };
+        const cancelled = await rawApi.editUserStarSubscription({
+          user_id: telegramUserId,
+          telegram_payment_charge_id: receipt.telegram_payment_charge_id,
+          is_canceled: true
+        });
+        if (!cancelled) return false;
+
+        await tx.subscription.updateMany({
+          where: {
+            id: subscription.id,
+            status: "CANCELLED",
+            telegramStarInitialChargeId: receipt.telegram_payment_charge_id,
+            telegramStarSubscriptionState: "ACTIVE"
+          },
+          data: { telegramStarSubscriptionState: "CANCELED" }
+        });
+        return true;
+      }, { isolationLevel: "ReadCommitted", maxWait: 10_000, timeout: 30_000 });
+    } catch (error) {
+      console.error(
+        "Could not cancel a late initial Telegram Stars renewal:",
+        error instanceof Error ? error.name : "UnknownError"
+      );
+      return false;
+    }
   };
 
   if (!paymentWasProcessed) {
@@ -1271,16 +1357,20 @@ async function processSuccessfulStarsPayment(
       where: { id: processedPaymentId },
       select: { status: true }
     });
-    if (shouldQueueNewSubscriberNotification(successfulEvent?.payload, currentPayment?.status ?? "UNKNOWN")) {
-      await queueNewSubscriberNotification(endsAt);
-    }
     if (eventPayload?.accessSuppressedByAdminRevocation === true && currentPayment?.status === "SUCCEEDED") {
-      await queueAdminRevokedChargeReview(processedPaymentId);
+      const renewalCancellationConfirmed = eventPayload.isInitialRecurring === true
+        ? await cancelLateInitialRecurringRenewal()
+        : undefined;
+      await queueAdminRevokedChargeReview(processedPaymentId, renewalCancellationConfirmed);
       await ctx.reply(
-        "Платёж получен после административного отзыва подписки. Доступ не восстановлен. " +
-        "Обратитесь к владельцу проекта или в /paysupport по вопросу платежа."
+        renewalCancellationConfirmed === false
+          ? "Платёж получен после административного отзыва. Доступ не восстановлен, но Telegram не подтвердил отключение автопродления. Срочно обратитесь к владельцу проекта или в /paysupport."
+          : "Платёж получен после административного отзыва подписки. Доступ не восстановлен. Обратитесь к владельцу проекта или в /paysupport по вопросу платежа."
       );
       return;
+    }
+    if (shouldQueueNewSubscriberNotification(successfulEvent?.payload, currentPayment?.status ?? "UNKNOWN")) {
+      await queueNewSubscriberNotification(endsAt);
     }
     if (eventPayload?.isRenewal === true && currentPayment?.status === "SUCCEEDED") {
       await queueRenewalNotification(endsAt);
@@ -1303,10 +1393,14 @@ async function processSuccessfulStarsPayment(
 
 
   if (accessSuppressedByAdminRevocation) {
-    await queueAdminRevokedChargeReview();
+    const renewalCancellationConfirmed = isInitialRecurring
+      ? await cancelLateInitialRecurringRenewal()
+      : undefined;
+    await queueAdminRevokedChargeReview(paymentRecordId, renewalCancellationConfirmed);
     await ctx.reply(
-      "Telegram подтвердил списание, но эта подписка уже была отозвана администратором. " +
-      "Доступ не восстановлен. Обратитесь к владельцу проекта или в /paysupport для проверки платежа."
+      renewalCancellationConfirmed === false
+        ? "Платёж получен после административного отзыва. Доступ не восстановлен, но Telegram не подтвердил отключение автопродления. Срочно обратитесь к владельцу проекта или в /paysupport."
+        : "Telegram подтвердил списание, но эта подписка уже была отозвана администратором. Доступ не восстановлен. Обратитесь к владельцу проекта или в /paysupport для проверки платежа."
     );
     return;
   }
