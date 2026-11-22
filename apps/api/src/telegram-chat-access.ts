@@ -13,3 +13,20 @@ export function hasRequiredSubscriptionChatRights(
       member.can_invite_users === true &&
       member.can_restrict_members === true);
 }
+
+/**
+ * Some Telegram getChatMember failures explicitly mean that the buyer has not
+ * joined the chat yet. A transport, permission or rate-limit failure does not:
+ * never issue an invite on the assumption that an unknown member is unbanned.
+ */
+export function isExplicitTelegramNonMemberError(error: unknown): boolean {
+  const details = typeof error === "object" && error !== null
+    ? error as { description?: unknown; message?: unknown }
+    : null;
+  const message = typeof details?.description === "string"
+    ? details.description
+    : typeof details?.message === "string"
+      ? details.message
+      : "";
+  return /(?:USER_NOT_PARTICIPANT|user (?:is )?not a participant|user not found)/i.test(message);
+}
