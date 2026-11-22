@@ -859,6 +859,21 @@ async function processSuccessfulStarsPayment(
       throw new Error("The original Telegram Stars payment disappeared during processing.");
     }
 
+    const eventKey = "telegram-stars:" + receipt.telegram_payment_charge_id;
+    const alreadyRecorded = await tx.paymentWebhookEvent.findUnique({
+      where: { dedupeKey: eventKey },
+      select: { id: true }
+    });
+    if (alreadyRecorded) {
+      return {
+        endsAt: currentSubscription.endsAt,
+        isInitialActivation: false,
+        isRenewal: false,
+        paymentRejected: false,
+        paymentWasProcessed: false
+      };
+    }
+
     const paymentKind = classifyTelegramStarsPayment({
       planIsRecurring: metadata.isRecurring === true,
       paymentStatus: currentAnchorPayment.status,
@@ -874,23 +889,6 @@ async function processSuccessfulStarsPayment(
         paymentRejected: true,
         paymentWasProcessed: false
       };
-    }
-
-    const eventKey = "telegram-stars:" + receipt.telegram_payment_charge_id;
-    if (paymentKind === "RECURRING_RENEWAL") {
-      const alreadyRecorded = await tx.paymentWebhookEvent.findUnique({
-        where: { dedupeKey: eventKey },
-        select: { id: true }
-      });
-      if (alreadyRecorded) {
-        return {
-          endsAt: currentSubscription.endsAt,
-          isInitialActivation: false,
-          isRenewal: false,
-          paymentRejected: false,
-          paymentWasProcessed: false
-        };
-      }
     }
 
     const currentEnd = currentSubscription.endsAt && currentSubscription.endsAt > now
