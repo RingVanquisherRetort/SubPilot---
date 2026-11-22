@@ -1,5 +1,5 @@
 import { prisma } from "@subpilot/database";
-import { lockSubscriptionAccessScopes } from "../../api/src/subscription-access-scope-lock.js";
+import { lockSubscriptionAccessScopes } from "@subpilot/payments";
 import { Bot } from "grammy";
 import { decryptSecret } from "@subpilot/security";
 
