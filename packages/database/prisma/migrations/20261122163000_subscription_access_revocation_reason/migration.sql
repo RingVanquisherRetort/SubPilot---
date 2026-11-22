@@ -11,7 +11,7 @@ ALTER TABLE "SubscriptionAccessGrant"
 -- Existing revoked grants need a reason before the worker starts distinguishing
 -- natural expiry from moderation/admin decisions. Unknown active-parent revokes
 -- fail closed until an owner explicitly re-grants the destination.
-UPDATE "SubscriptionAccessGrant" AS grant
+UPDATE "SubscriptionAccessGrant" AS access_grant
 SET "revocationReason" = CASE
     WHEN subscription."status"::text = 'EXPIRED'
         THEN 'SUBSCRIPTION_EXPIRED'::"SubscriptionAccessRevocationReason"
@@ -20,5 +20,5 @@ SET "revocationReason" = CASE
     ELSE 'LEGACY_UNKNOWN'::"SubscriptionAccessRevocationReason"
 END
 FROM "Subscription" AS subscription
-WHERE grant."subscriptionId" = subscription."id"
-  AND grant."revokedAt" IS NOT NULL;
+WHERE access_grant."subscriptionId" = subscription."id"
+  AND access_grant."revokedAt" IS NOT NULL;
