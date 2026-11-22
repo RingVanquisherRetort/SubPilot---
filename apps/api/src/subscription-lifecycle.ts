@@ -442,7 +442,7 @@ async function expireSubscriptions(
 
       try {
         const locked = await prisma.$transaction(async (tx) =>
-          withSubscriptionExpiryRowLock(tx, subscription.id, now, async () => {
+          withSubscriptionExpiryRowLock(tx, subscription.id, now, async (currentStatus) => {
             await tx.$queryRawUnsafe(
               'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
               grant.id
@@ -511,7 +511,9 @@ async function expireSubscriptions(
               where: { id: currentGrant.id, revokedAt: null },
               data: {
                 revokedAt: now,
-                ...(otherActiveGrant ? { inviteLink: "", expiresAt: new Date(0) } : {})
+                revocationReason: currentStatus === "CANCELLED" ? "ADMIN_REVOKED" : "SUBSCRIPTION_EXPIRED",
+                inviteLink: "",
+                expiresAt: new Date(0)
               }
             });
 
