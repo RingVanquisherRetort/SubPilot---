@@ -851,6 +851,7 @@ export async function deliverSubscriptionAccess(
       alreadyJoined: results.alreadyJoined.length,
       blocked: results.blocked.length
     };
+    let unpersistedInviteLink: string | null = null;
     try {
       if (!chat.isActive) {
         await fail("CONNECTED_CHAT_INACTIVE");
@@ -993,8 +994,11 @@ export async function deliverSubscriptionAccess(
             member_limit: 1
           }
         );
+        unpersistedInviteLink = invite.invite_link;
         if (!ownsLease()) {
-          await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), invite.invite_link).catch(() => undefined);
+          await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), invite.invite_link).then(() => {
+            unpersistedInviteLink = null;
+          }).catch(() => undefined);
           results.failed.push(label);
           continue;
         }
@@ -1010,11 +1014,14 @@ export async function deliverSubscriptionAccess(
         if (!saved) {
           // Telegram does not know about the database lease. Compensate when a
           // stale worker created a credential that it can no longer persist.
-          await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), invite.invite_link).catch(() => undefined);
+          await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), invite.invite_link).then(() => {
+            unpersistedInviteLink = null;
+          }).catch(() => undefined);
           await settleScope();
           results.blocked.push(label);
           continue;
         }
+        unpersistedInviteLink = null;
         results.links.push(label + ": " + invite.invite_link);
       }
 
@@ -1030,6 +1037,16 @@ export async function deliverSubscriptionAccess(
         continue;
       }
     } catch (error) {
+      if (unpersistedInviteLink) {
+        await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), unpersistedInviteLink)
+          .then(() => { unpersistedInviteLink = null; })
+          .catch((cleanupError: unknown) => {
+            console.error(
+              "Could not compensate an unpersisted Telegram invite:",
+              cleanupError instanceof Error ? cleanupError.name : "UnknownError"
+            );
+          });
+      }
       await fail("INVITE_CREATION_FAILED").catch(() => undefined);
       console.error(
         "Could not reconcile subscription access outside a database transaction:",
