@@ -153,6 +153,7 @@ export async function getAgencyAnalytics(input: {
   expiredSubscriptions: number;
   cancelledSubscriptions: number;
   churnEvents: number;
+  openingBaseChurnEvents: number;
   activeAtPeriodStart: number;
   churnRatePercent: number;
   newTrials: number;
@@ -237,6 +238,7 @@ export async function getAgencyAnalytics(input: {
       trialGroups,
       manualGroups,
       activeAtStart,
+      openingBaseChurnEvents,
       paidGroups,
       refundGroups,
       paymentsInPeriod,
@@ -295,6 +297,25 @@ export async function getAgencyAnalytics(input: {
             { OR: [{ startsAt: null }, { startsAt: { lte: from } }] },
             { OR: [{ endsAt: null }, { endsAt: { gt: from } }] },
             { OR: [{ cancelledAt: null }, { cancelledAt: { gt: from } }] }
+          ]
+        }
+      }),
+      tx.subscription.count({
+        where: {
+          projectId: { in: projectIds },
+          createdAt: { lte: from },
+          AND: [
+            { OR: [{ startsAt: null }, { startsAt: { lte: from } }] },
+            {
+              OR: [
+                { status: "EXPIRED", endsAt: { gt: from, lte: to } },
+                {
+                  status: "CANCELLED",
+                  cancelledAt: inPeriod,
+                  OR: [{ endsAt: null }, { endsAt: { gt: from } }]
+                }
+              ]
+            }
           ]
         }
       }),
@@ -439,9 +460,10 @@ export async function getAgencyAnalytics(input: {
       expiredSubscriptions,
       cancelledSubscriptions,
       churnEvents,
+      openingBaseChurnEvents,
       activeAtPeriodStart: activeAtStart,
-      churnRatePercent: activeAtPeriodStart > 0
-        ? Math.round((churnEvents / activeAtPeriodStart) * 10_000) / 100
+      churnRatePercent: activeAtStart > 0
+        ? Math.round((openingBaseChurnEvents / activeAtStart) * 10_000) / 100
         : 0,
       newTrials: projectsReport.reduce((sum, project) => sum + project.newTrials, 0),
       manualGrants: projectsReport.reduce((sum, project) => sum + project.manualGrants, 0),
