@@ -1,4 +1,5 @@
 import { prisma } from "@subpilot/database";
+import { lockWorkspace } from "./workspace-quota-enforcement.js";
 
 export class AgencyAuditError extends Error {
   constructor(public readonly code:
@@ -72,6 +73,7 @@ async function loadAgencyAuditEvents(input: {
   take: number;
 }): Promise<{ workspaceName: string; events: AgencyAuditEvent[] }> {
   return prisma.$transaction(async (tx) => {
+    await lockWorkspace(tx, input.workspaceId);
     const workspace = await tx.workspace.findUnique({
       where: { id: input.workspaceId },
       select: { name: true, type: true }
