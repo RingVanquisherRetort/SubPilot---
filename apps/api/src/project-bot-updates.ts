@@ -1711,6 +1711,87 @@ export async function handleProjectBotUpdate(
       : "Для активных подписок не удалось получить ссылки. Попробуйте позже или обратитесь в поддержку через /paysupport.");
   });
 
+  const showBuyerSubscriptionSettings = async (ctx: Context): Promise<void> => {
+    if (!(await requirePrivateBuyerChat(ctx)) || !ctx.from) return;
+
+    const customer = await prisma.projectCustomer.findUnique({
+      where: {
+        projectId_telegramUserId: {
+          projectId,
+          telegramUserId: BigInt(ctx.from.id)
+        }
+      },
+      select: { id: true }
+    });
+    if (!customer) {
+      await ctx.reply("У вас пока нет подписок в этом проекте.");
+      return;
+    }
+
+    const subscriptions = await prisma.subscription.findMany({
+      where: {
+        projectId,
+        customerId: customer.id,
+        status: "ACTIVE",
+        OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }]
+      },
+      include: { plan: { select: { title: true } } },
+      orderBy: { updatedAt: "desc" }
+    });
+
+    if (subscriptions.length === 0) {
+      await ctx.reply("Активных подписок не найдено. Посмотреть тарифы можно командой /plans.");
+      return;
+    }
+
+    const keyboard = new InlineKeyboard();
+    let hasActions = false;
+    const messages = subscriptions.map((subscription) => {
+      const endLabel = subscription.endsAt
+        ? subscription.endsAt.toLocaleString("ru-RU")
+        : "без ограничения";
+      if (!subscription.telegramStarInitialChargeId) {
+        return "«" + subscription.plan.title + "»\nДоступ до: " + endLabel +
+          "\nАвтопродление: не подключено";
+      }
+
+      const renewalLabel = subscription.telegramStarSubscriptionState === "ACTIVE"
+        ? "включено"
+        : subscription.telegramStarSubscriptionState === "CANCELED"
+          ? "отключено"
+          : subscription.telegramStarSubscriptionState === "FAILED"
+            ? "ошибка последнего обновления"
+            : "статус уточняется";
+      if (subscription.telegramStarSubscriptionState === "ACTIVE") {
+        keyboard.text("⏹ Отключить автопродление", "star-sub:cancel:" + subscription.id).row();
+        hasActions = true;
+      } else if (
+        subscription.telegramStarSubscriptionState === "CANCELED" &&
+        (!subscription.endsAt || subscription.endsAt > new Date())
+      ) {
+        keyboard.text("▶️ Включить автопродление", "star-sub:resume:" + subscription.id).row();
+        hasActions = true;
+      }
+
+      return "«" + subscription.plan.title + "»\nДоступ до: " + endLabel +
+        "\nАвтопродление: " + renewalLabel +
+        (subscription.telegramStarSubscriptionState === "CANCELED"
+          ? "\nДоступ сохранится до конца уже оплаченного периода."
+          : "");
+    });
+
+    const message = "Ваши подписки:\n\n" + messages.join("\n\n");
+    if (hasActions) {
+      await ctx.reply(message, { reply_markup: keyboard });
+    } else {
+      await ctx.reply(message);
+    }
+  };
+
+  projectBot.command("subscription", async (ctx) => {
+    await showBuyerSubscriptionSettings(ctx);
+  });
+
   projectBot.command("start", async (ctx) => {
     if (!(await requirePrivateBuyerChat(ctx))) return;
     await ctx.reply(
@@ -1718,6 +1799,8 @@ export async function handleProjectBotUpdate(
       {
         reply_markup: new InlineKeyboard()
           .text("💎 Посмотреть подписки", "buyer:plans")
+          .row()
+          .text("👤 Мои подписки", "buyer:subscription")
           .row()
           .text("ℹ️ Как это работает", "buyer:help")
       }
@@ -1740,6 +1823,116 @@ export async function handleProjectBotUpdate(
     if (!(await requirePrivateBuyerChat(ctx))) return;
     await ctx.answerCallbackQuery();
     await showPlans(ctx, true);
+  });
+
+  projectBot.callbackQuery("buyer:subscription", async (ctx) => {
+    if (!(await requirePrivateBuyerChat(ctx))) return;
+    await ctx.answerCallbackQuery();
+    await showBuyerSubscriptionSettings(ctx);
+  });
+
+  projectBot.callbackQuery(/^star-sub:(cancel|resume):(.+)$/, async (ctx) => {
+    if (!(await requirePrivateBuyerChat(ctx)) || !ctx.from) return;
+    await ctx.answerCallbackQuery();
+
+    const action = ctx.match[1];
+    const subscriptionId = ctx.match[2];
+    if (!subscriptionId || (action !== "cancel" && action !== "resume")) return;
+
+    const customer = await prisma.projectCustomer.findUnique({
+      where: {
+        projectId_telegramUserId: {
+          projectId,
+          telegramUserId: BigInt(ctx.from.id)
+        }
+      },
+      select: { id: true }
+    });
+    if (!customer) {
+      await ctx.reply("Подписка не найдена. Обновите меню через /subscription.");
+      return;
+    }
+
+    const subscription = await prisma.subscription.findFirst({
+      where: {
+        id: subscriptionId,
+        projectId,
+        customerId: customer.id,
+        status: "ACTIVE",
+        OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }]
+      },
+      select: {
+        id: true,
+        endsAt: true,
+        telegramStarInitialChargeId: true,
+        telegramStarSubscriptionState: true
+      }
+    });
+    const expectedState = action === "cancel" ? "ACTIVE" : "CANCELED";
+    if (
+      !subscription ||
+      !subscription.telegramStarInitialChargeId ||
+      subscription.telegramStarSubscriptionState !== expectedState
+    ) {
+      await ctx.reply("Состояние автопродления уже изменилось или срок подписки закончился. Проверьте /subscription.");
+      return;
+    }
+
+    try {
+      const rawApi = projectBot.api.raw as unknown as {
+        editUserStarSubscription: (args: {
+          user_id: number;
+          telegram_payment_charge_id: string;
+          is_canceled: boolean;
+        }) => Promise<boolean>;
+      };
+      const changed = await rawApi.editUserStarSubscription({
+        user_id: ctx.from.id,
+        telegram_payment_charge_id: subscription.telegramStarInitialChargeId,
+        is_canceled: action === "cancel"
+      });
+      if (!changed) {
+        await ctx.reply("Telegram не подтвердил изменение автопродления. Попробуйте ещё раз позже.");
+        return;
+      }
+
+      const nextState = action === "cancel" ? "CANCELED" : "ACTIVE";
+      const saved = await prisma.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe(
+          'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+          subscription.id
+        );
+        const updated = await tx.subscription.updateMany({
+          where: {
+            id: subscription.id,
+            projectId,
+            customerId: customer.id,
+            telegramStarInitialChargeId: subscription.telegramStarInitialChargeId
+          },
+          data: { telegramStarSubscriptionState: nextState }
+        });
+        return updated.count === 1;
+      });
+
+      if (!saved) {
+        await ctx.reply(
+          "Telegram принял запрос, но локальный статус не удалось обновить. " +
+          "Откройте /subscription ещё раз; состояние будет сверено по обновлению Telegram."
+        );
+        return;
+      }
+
+      await ctx.reply(action === "cancel"
+        ? "Автопродление отключено. Доступ останется активным до конца уже оплаченного периода."
+        : "Автопродление снова включено. Следующее списание будет выполняться Telegram по расписанию.");
+      await showBuyerSubscriptionSettings(ctx);
+    } catch (error) {
+      console.error(
+        "Could not update Telegram Stars subscription renewal state:",
+        error instanceof Error ? error.name : "UnknownError"
+      );
+      await ctx.reply("Не удалось изменить автопродление в Telegram. Попробуйте позже или обратитесь в /paysupport.");
+    }
   });
 
   projectBot.callbackQuery("buyer:help", async (ctx) => {
