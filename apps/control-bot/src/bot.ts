@@ -2092,8 +2092,16 @@ export function createControlBot(token: string): Bot {
     const projectId = fields[0] ?? "";
     const limit = fields[1] === undefined ? 10 : Number(fields[1]);
     if (!projectId || fields.length > 2 || !Number.isSafeInteger(limit) || limit < 1 || limit > 25) {
-      await ctx.reply("Формат: /auditlog PROJECT_ID [LIMIT]\nLIMIT: от 1 до 25, по умолчанию 10.");\n      return;
+      await ctx.reply("Формат: /auditlog PROJECT_ID [LIMIT]\nLIMIT: от 1 до 25, по умолчанию 10.");
       return;
+    }
+    try {
+      const actor = await upsertTelegramUser(ctx);
+      const { workspace } = await getActiveWorkspace(actor);
+      const project = await canAccessProject(projectId, actor.id, MANAGER_ROLES);
+      if (!project || project.workspaceId !== workspace.id) {
+        await ctx.reply("Проект не найден в активном пространстве или у вас нет прав.");
+        return;
       }
       const events = await listProjectAuditHistory({
         workspaceId: workspace.id,
