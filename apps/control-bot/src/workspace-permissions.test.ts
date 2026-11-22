@@ -96,3 +96,51 @@ test("workspace removal policy passes the complete actor/target-role matrix", ()
     }
   }
 });
+
+test("workspace role-change policy protects owners, peers and self", () => {
+  const actors = ["OWNER", "ADMIN", "MANAGER", "VIEWER"] as const;
+  const targets = ["OWNER", "ADMIN", "MANAGER", "VIEWER"] as const;
+  const requestedRoles = ["ADMIN", "MANAGER", "VIEWER"] as const;
+  const expected: Record<(typeof actors)[number], Record<(typeof targets)[number], Record<(typeof requestedRoles)[number], boolean>>> = {
+    OWNER: {
+      OWNER: { ADMIN: false, MANAGER: false, VIEWER: false },
+      ADMIN: { ADMIN: true, MANAGER: true, VIEWER: true },
+      MANAGER: { ADMIN: true, MANAGER: true, VIEWER: true },
+      VIEWER: { ADMIN: true, MANAGER: true, VIEWER: true }
+    },
+    ADMIN: {
+      OWNER: { ADMIN: false, MANAGER: false, VIEWER: false },
+      ADMIN: { ADMIN: false, MANAGER: false, VIEWER: false },
+      MANAGER: { ADMIN: false, MANAGER: true, VIEWER: true },
+      VIEWER: { ADMIN: false, MANAGER: true, VIEWER: true }
+    },
+    MANAGER: {
+      OWNER: { ADMIN: false, MANAGER: false, VIEWER: false },
+      ADMIN: { ADMIN: false, MANAGER: false, VIEWER: false },
+      MANAGER: { ADMIN: false, MANAGER: false, VIEWER: false },
+      VIEWER: { ADMIN: false, MANAGER: false, VIEWER: false }
+    },
+    VIEWER: {
+      OWNER: { ADMIN: false, MANAGER: false, VIEWER: false },
+      ADMIN: { ADMIN: false, MANAGER: false, VIEWER: false },
+      MANAGER: { ADMIN: false, MANAGER: false, VIEWER: false },
+      VIEWER: { ADMIN: false, MANAGER: false, VIEWER: false }
+    }
+  };
+  for (const actor of actors) {
+    for (const target of targets) {
+      for (const requested of requestedRoles) {
+        assert.equal(
+          canChangeWorkspaceMemberRole(actor, target, false, requested),
+          expected[actor][target][requested],
+          `${actor} changing ${target} to ${requested}`
+        );
+        assert.equal(
+          canChangeWorkspaceMemberRole(actor, target, true, requested),
+          false,
+          `${actor} cannot change own role to ${requested}`
+        );
+      }
+    }
+  }
+});
