@@ -71,7 +71,7 @@ test("workspace membership administration rechecks roles transactionally and aud
     const promoted = await setWorkspaceMemberRole({
       workspaceId: workspace.id,
       actorUserId: owner.id,
-      targetTelegramId: String(admin.id === "never" ? 0 : telegramBase + 4n),
+      targetTelegramId: String(telegramBase + 4n),
       requestedRole: "ADMIN"
     });
     assert.equal(promoted.previousRole, "MANAGER");
