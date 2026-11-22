@@ -293,6 +293,7 @@ async function createPurchaseInvoice(
         invoiceTitle.slice(0, 32),
         invoiceDescription.slice(0, 255),
         pending.payment.id,
+        "",
         "XTR",
         [{ label: invoiceTitle.slice(0, 32), amount: invoiceAmountStars }],
         { subscription_period: 2_592_000 }
