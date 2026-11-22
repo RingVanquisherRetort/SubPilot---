@@ -116,7 +116,7 @@ Initial research candidates for creators who are individuals: YooMoney, Crypto P
 - [x] Implement one-time workspace payment status transitions, paid-period extension and period-aware full-refund handling. Manual renewal is the product decision; automatic recurring charges/grace scheduling are not required.
 - [x] Add the separate hosted YooKassa platform checkout and reconciliation path; creator payment records/credentials remain isolated. Live merchant acceptance, invoices/receipts and production reconciliation remain to be validated.
 - [ ] Reconsider the 14% offer only after a separate legal, provider, currency and commercial review; do not debit creator Stars.
-- [ ] Upgrade/downgrade, grace period and payment-failure handling.
+- [ ] Decide whether upgrade/downgrade, proration or grace-period behavior is needed after commercial policy approval. The current launch model is manual one-time renewal, holds plan switches during an unexpired paid period for manual review, and has no automatic renewal/grace scheduler.
 
 ## Stage 7 — Agency and analytics
 
