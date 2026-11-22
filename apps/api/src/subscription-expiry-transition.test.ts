@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { claimSubscriptionExpiry, withSubscriptionExpiryRowLock } from "./subscription-expiry-transition.js";
 
@@ -41,7 +42,6 @@ test("PostgreSQL expiry row lock re-reads a renewed entitlement before revocatio
   skip: !process.env.DATABASE_URL
 }, async () => {
   const { prisma } = await import("@subpilot/database");
-  const { randomUUID } = await import("node:crypto");
   const suffix = randomUUID().replace(/-/g, "").slice(0, 12);
   const telegramBase = BigInt(Date.now()) * 1_000_000n + BigInt(Math.floor(Math.random() * 100_000));
   let actorId: string | undefined;
