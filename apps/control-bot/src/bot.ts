@@ -4099,7 +4099,7 @@ export function createControlBot(token: string): Bot {
           }
         } catch (error) {
           if (error instanceof ManualSubscriptionAccessError) {
-            const messages: Record<ManualSubscriptionAccessError["code"], string> = {
+            const messages: Partial<Record<ManualSubscriptionAccessError["code"], string>> = {
               INVALID_TELEGRAM_USER_ID: "Telegram ID должен быть положительным числом.",
               INVALID_DURATION: "Срок должен быть от 1 до 3650 дней; для ручной выдачи 0 означает бессрочный доступ.",
               ACTOR_NOT_AUTHORIZED: "Только владелец или администратор пространства может выдавать доступ.",
@@ -4111,7 +4111,7 @@ export function createControlBot(token: string): Bot {
               SUBSCRIPTION_NOT_FOUND: "Подписка не найдена в активном пространстве.",
               SUBSCRIPTION_NOT_ACTIVE: "Подписка уже не активна."
             };
-            await ctx.reply(messages[error.code], {
+            await ctx.reply(messages[error.code] ?? "Не удалось изменить доступ.", {
               reply_markup: new InlineKeyboard().text("К управлению подписками", "ui:subaccess:" + pendingAction.projectId)
             });
           } else {
