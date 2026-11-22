@@ -2659,16 +2659,16 @@ export async function handleProjectBotUpdate(
           const [currentSubscription, currentGrant] = await Promise.all([
             tx.subscription.findUnique({
               where: { id: grant.subscriptionId },
-              select: { status: true, startsAt: true, endsAt: true }
+              select: { customerId: true, status: true, startsAt: true, endsAt: true }
             }),
             tx.subscriptionAccessGrant.findUnique({
               where: { id: grant.id },
               select: { id: true, inviteLink: true, revokedAt: true, joinedAt: true }
             })
           ]);
+          if (!currentSubscription || !currentGrant) return false;
+          await lockSubscriptionAccessScope(tx, currentSubscription.customerId, grant.connectedChatId);
           if (
-            !currentSubscription ||
-            !currentGrant ||
             currentGrant.inviteLink !== inviteLink ||
             currentGrant.joinedAt !== null ||
             !isSubscriptionAccessPermissionActive({
