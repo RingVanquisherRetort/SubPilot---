@@ -27,6 +27,7 @@ test("agency analytics aggregate subscribers, churn, renewals and revenue by cur
     const owner = await makeUser(1, "Agency Analytics Owner");
     const manager = await makeUser(2, "Agency Analytics Manager");
     const viewer = await makeUser(3, "Agency Analytics Viewer");
+    const scopedViewer = await makeUser(4, "Agency Analytics Scoped Viewer");
 
     const workspace = await prisma.workspace.create({
       data: {
@@ -38,7 +39,8 @@ test("agency analytics aggregate subscribers, churn, renewals and revenue by cur
           create: [
             { userId: owner.id, role: "OWNER" },
             { userId: manager.id, role: "MANAGER" },
-            { userId: viewer.id, role: "VIEWER" }
+            { userId: viewer.id, role: "VIEWER" },
+            { userId: scopedViewer.id, role: "VIEWER" }
           ]
         }
       }
@@ -59,6 +61,9 @@ test("agency analytics aggregate subscribers, churn, renewals and revenue by cur
         name: "Agency project B",
         slug: "agency-project-b-" + suffix
       }
+    });
+    await prisma.projectMember.create({
+      data: { projectId: projectB.id, userId: scopedViewer.id, role: "MANAGER" }
     });
 
     const planA = await prisma.creatorPlan.create({
@@ -242,7 +247,7 @@ test("agency analytics aggregate subscribers, churn, renewals and revenue by cur
     assert.equal(report.newTrials, 1);
     assert.equal(report.manualGrants, 1);
     assert.equal(report.successfulPayments, 3);
-    assert.equal(report.renewalPayments, 2);
+    assert.equal(report.renewalPayments, 1);
     assert.equal(report.renewingSubscriptions, 1);
     assert.equal(report.refundedPayments, 1);
     assert.deepEqual(report.revenueByCurrency, [
@@ -280,6 +285,16 @@ test("agency analytics aggregate subscribers, churn, renewals and revenue by cur
     assert.equal(managerReport.projects.length, 1);
     assert.equal(managerReport.projects[0]?.projectId, projectA.id);
     assert.equal(managerReport.activeSubscriptions, 2);
+
+    const scopedViewerReport = await getAgencyAnalytics({
+      workspaceId: workspace.id,
+      actorUserId: scopedViewer.id,
+      periodDays: 30,
+      now
+    });
+    assert.equal(scopedViewerReport.projects.length, 1);
+    assert.equal(scopedViewerReport.projects[0]?.projectId, projectB.id);
+    assert.equal(scopedViewerReport.activeSubscriptions, 2);
 
     await assert.rejects(
       getAgencyAnalytics({
