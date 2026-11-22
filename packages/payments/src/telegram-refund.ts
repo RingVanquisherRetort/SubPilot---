@@ -88,6 +88,7 @@ export interface TelegramStarsRefundReceipt {
 
 export interface TelegramStarsRefundPaymentSnapshot {
   id: string;
+  originalPaymentId?: string | null;
   provider: string;
   currency: string;
   amount: string;
@@ -106,7 +107,7 @@ export function matchesTelegramStarsRefundReceipt(
   const amount = Number(payment.amount);
   return payment.provider === "TELEGRAM_STARS" &&
     payment.currency === "XTR" &&
-    payment.id === receipt.invoice_payload &&
+    (payment.id === receipt.invoice_payload || payment.originalPaymentId === receipt.invoice_payload) &&
     receipt.currency === "XTR" &&
     Number.isSafeInteger(receipt.total_amount) &&
     Number.isSafeInteger(amount) &&
