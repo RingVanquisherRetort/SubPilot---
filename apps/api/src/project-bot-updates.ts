@@ -1226,7 +1226,7 @@ async function processSuccessfulStarsPayment(
     });
   };
 
-  const queueAdminRevokedChargeReview = async (): Promise<void> => {
+  const queueAdminRevokedChargeReview = async (reviewPaymentId = paymentRecordId): Promise<void> => {
     await enqueueProjectOwnerNotification({
       projectId,
       dedupeKey: "payment:admin-revoked-renewal-review:" + receipt.telegram_payment_charge_id,
@@ -1235,7 +1235,7 @@ async function processSuccessfulStarsPayment(
         "⚠️ Telegram подтвердил рекуррентное списание после административного отзыва подписки.\n" +
         "Проект: «" + payment.project.name + "»\nТариф: «" + snapshotPlanTitle + "»\n" +
         "Сумма: " + payment.amount.toString() + " ⭐\n" +
-        "ID платежа: " + paymentRecordId + "\n" +
+        "ID платежа: " + reviewPaymentId + "\n" +
         "Доступ автоматически не восстановлен. Проверьте платёж и при необходимости оформите возврат через /refundpayment."
     });
   };
@@ -1263,7 +1263,7 @@ async function processSuccessfulStarsPayment(
       await queueNewSubscriberNotification(endsAt);
     }
     if (eventPayload?.accessSuppressedByAdminRevocation === true && currentPayment?.status === "SUCCEEDED") {
-      await queueAdminRevokedChargeReview();
+      await queueAdminRevokedChargeReview(processedPaymentId);
       await ctx.reply(
         "Платёж получен после административного отзыва подписки. Доступ не восстановлен. " +
         "Обратитесь к владельцу проекта или в /paysupport по вопросу платежа."
