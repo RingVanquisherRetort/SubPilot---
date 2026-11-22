@@ -20,6 +20,7 @@ import { shouldActivateConnectedChat } from "./connected-chat-quota.js";
 import { parseTelegramStarSubscriptionUpdate } from "./telegram-star-subscription-update.js";
 import { classifyTelegramStarsPayment } from "./telegram-star-payment-kind.js";
 import { isSubscriptionAccessPermissionActive } from "./subscription-access-permission.js";
+import { classifyTelegramMembershipDeparture } from "./telegram-membership-departure.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
@@ -2352,21 +2353,33 @@ export async function handleProjectBotUpdate(
     };
 
     if (!isMember) {
-      const leftGrants = await prisma.subscriptionAccessGrant.findMany({
+      const departureKind = classifyTelegramMembershipDeparture(
+        newMember.status,
+        newMember.status === "restricted" ? newMember.is_member : false
+      );
+      if (!departureKind) {
+        await saveCursor();
+        return;
+      }
+
+      const affectedGrants = await prisma.subscriptionAccessGrant.findMany({
         where: {
           connectedChat: { projectId, telegramChatId },
           subscription: {
             status: "ACTIVE",
             customer: { telegramUserId }
           },
-          joinedAt: { not: null },
-          revokedAt: null
+          revokedAt: null,
+          ...(departureKind === "VOLUNTARY_EXIT" ? { joinedAt: { not: null } } : {})
         },
         select: { id: true, subscriptionId: true, connectedChatId: true }
       });
 
-      for (const grant of leftGrants) {
-        await prisma.$transaction(async (tx) => {
+      const adminExcludedPlanTitles: string[] = [];
+      let inviteRevocationFailed = false;
+
+      for (const grant of affectedGrants) {
+        const transition = await prisma.$transaction(async (tx) => {
           await tx.$queryRawUnsafe(
             'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
             grant.subscriptionId
@@ -2378,31 +2391,119 @@ export async function handleProjectBotUpdate(
           const [currentSubscription, currentGrant] = await Promise.all([
             tx.subscription.findUnique({
               where: { id: grant.subscriptionId },
-              select: { status: true, startsAt: true, endsAt: true }
+              select: {
+                status: true,
+                startsAt: true,
+                endsAt: true,
+                plan: { select: { title: true } }
+              }
             }),
             tx.subscriptionAccessGrant.findUnique({
               where: { id: grant.id },
-              select: { revokedAt: true, joinedAt: true }
+              select: { revokedAt: true, joinedAt: true, inviteLink: true }
             })
           ]);
           if (
             !currentSubscription ||
             !currentGrant ||
-            !currentGrant.joinedAt ||
             !isSubscriptionAccessPermissionActive({
               subscriptionStatus: currentSubscription.status,
               subscriptionStartsAt: currentSubscription.startsAt,
               subscriptionEndsAt: currentSubscription.endsAt,
               grantRevokedAt: currentGrant.revokedAt
             })
-          ) return;
+          ) return null;
 
-          await tx.subscriptionAccessGrant.updateMany({
-            where: { id: grant.id, revokedAt: null, joinedAt: { not: null } },
-            data: { joinedAt: null, inviteLink: "", expiresAt: new Date(0) }
+          if (departureKind === "VOLUNTARY_EXIT") {
+            if (!currentGrant.joinedAt) return null;
+            const updated = await tx.subscriptionAccessGrant.updateMany({
+              where: { id: grant.id, revokedAt: null, joinedAt: { not: null } },
+              data: { joinedAt: null, inviteLink: "", expiresAt: new Date(0) }
+            });
+            return updated.count === 1
+              ? { kind: "VOLUNTARY_EXIT" as const, planTitle: currentSubscription.plan.title }
+              : null;
+          }
+
+          const updated = await tx.subscriptionAccessGrant.updateMany({
+            where: { id: grant.id, revokedAt: null },
+            data: {
+              revokedAt: new Date(),
+              revocationReason: "ADMIN_EXCLUDED",
+              joinedAt: null
+            }
           });
+          return updated.count === 1
+            ? {
+                kind: "ADMIN_EXCLUSION" as const,
+                planTitle: currentSubscription.plan.title,
+                inviteLink: currentGrant.inviteLink
+              }
+            : null;
         });
+
+        if (transition?.kind === "ADMIN_EXCLUSION") {
+          adminExcludedPlanTitles.push(transition.planTitle);
+          if (transition.inviteLink) {
+            let revoked = false;
+            try {
+              await projectBot.api.revokeChatInviteLink(ctx.chat.id, transition.inviteLink);
+              revoked = true;
+            } catch (error) {
+              revoked = isTelegramInviteAlreadyRevoked(error);
+              if (!revoked) {
+                inviteRevocationFailed = true;
+                console.error(
+                  "Could not revoke an invite after Telegram admin exclusion:",
+                  error instanceof Error ? error.name : "UnknownError"
+                );
+              }
+            }
+
+            if (revoked) {
+              await prisma.$transaction(async (tx) => {
+                await tx.$queryRawUnsafe(
+                  'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+                  grant.subscriptionId
+                );
+                await tx.$queryRawUnsafe(
+                  'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
+                  grant.id
+                );
+                await tx.subscriptionAccessGrant.updateMany({
+                  where: {
+                    id: grant.id,
+                    revokedAt: { not: null },
+                    revocationReason: "ADMIN_EXCLUDED",
+                    inviteLink: transition.inviteLink
+                  },
+                  data: { inviteLink: "", expiresAt: new Date(0) }
+                });
+              });
+            }
+          }
+        }
       }
+
+      if (departureKind === "ADMIN_EXCLUSION" && adminExcludedPlanTitles.length > 0) {
+        await enqueueProjectOwnerNotification({
+          projectId,
+          dedupeKey: "access:admin-exclusion:" + telegramChatId.toString() + ":" +
+            telegramUserId.toString() + ":" + updateId,
+          eventType: "subscription_access_admin_excluded",
+          messageText:
+            "🚫 Telegram сообщил об административном исключении подписчика из площадки «" +
+            ("title" in ctx.chat ? ctx.chat.title : ctx.chat.id.toString()) + "».\n" +
+            "Telegram ID: " + telegramUserId.toString() + "\nТарифы: " +
+            Array.from(new Set(adminExcludedPlanTitles)).join(", ") + "\n" +
+            "SubPilot заблокировал соответствующие права доступа и не будет повторно выдавать приглашения. " +
+            (inviteRevocationFailed
+              ? "Не удалось подтвердить отзыв старой ссылки — проверьте права исходного бота и отзовите ссылку вручную. "
+              : "") +
+            "Для восстановления доступа снимите блокировку пользователя в Telegram и выполните явную повторную выдачу доступа."
+        }).catch(() => undefined);
+      }
+
       await saveCursor();
       return;
     }
