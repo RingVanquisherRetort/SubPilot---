@@ -3,6 +3,13 @@ import { MAX_ACCESS_DELIVERY_ATTEMPTS } from "@subpilot/payments";
 
 type Transaction = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$use" | "$extends">;
 
+export class WorkspaceAccessDeliveryError extends Error {
+  constructor(public readonly code: "ACTOR_NOT_AUTHORIZED") {
+    super(code);
+    this.name = "WorkspaceAccessDeliveryError";
+  }
+}
+
 async function lockWorkspace(tx: Transaction, workspaceId: string): Promise<void> {
   await tx.$queryRawUnsafe(
     'SELECT "id" FROM "Workspace" WHERE "id" = $1 FOR UPDATE',
@@ -23,7 +30,7 @@ async function assertWorkspaceAdmin(
     },
     select: { id: true }
   });
-  if (!membership) throw new Error("ACTOR_NOT_AUTHORIZED");
+  if (!membership) throw new WorkspaceAccessDeliveryError("ACTOR_NOT_AUTHORIZED");
 }
 
 export async function listWorkspaceFailedAccessDeliveries(
