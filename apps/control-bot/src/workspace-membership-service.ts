@@ -39,6 +39,57 @@ async function actorRole(
   return actor.role;
 }
 
+export async function listWorkspaceMembersForAdmin(input: {
+  workspaceId: string;
+  actorUserId: string;
+}): Promise<{
+  workspaceName: string;
+  members: Array<{
+    firstName: string | null;
+    lastName: string | null;
+    username: string | null;
+    telegramId: string;
+    role: WorkspaceRole;
+  }>;
+}> {
+  return prisma.$transaction(async (tx) => {
+    await lockWorkspace(tx, input.workspaceId);
+    const role = await actorRole(tx, input.workspaceId, input.actorUserId);
+    if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
+      throw new WorkspaceMembershipError("PERMISSION_DENIED");
+    }
+    const [workspace, members] = await Promise.all([
+      tx.workspace.findUnique({
+        where: { id: input.workspaceId },
+        select: { name: true }
+      }),
+      tx.workspaceMember.findMany({
+        where: { workspaceId: input.workspaceId },
+        include: {
+          user: {
+            select: {
+              firstName: true,
+              lastName: true,
+              username: true,
+              telegramId: true
+            }
+          }
+        },
+        orderBy: { createdAt: "asc" }
+      })
+    ]);
+    if (!workspace) throw new WorkspaceMembershipError("WORKSPACE_NOT_FOUND");
+    return {
+      workspaceName: workspace.name,
+      members: members.map((member) => ({
+        ...member.user,
+        telegramId: member.user.telegramId.toString(),
+        role: member.role
+      }))
+    };
+  }, { isolationLevel: "ReadCommitted" });
+}
+
 export async function setWorkspaceMemberRole(input: {
   workspaceId: string;
   actorUserId: string;
