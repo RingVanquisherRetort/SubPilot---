@@ -324,6 +324,7 @@ model ConnectedChat {
   project        Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
   planLinks      CreatorPlanChat[]
   accessGrants   SubscriptionAccessGrant[]
+  accessScopes   SubscriptionAccessScope[]
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
 
@@ -371,6 +372,7 @@ model ProjectCustomer {
   project        Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   subscriptions Subscription[]
   payments       Payment[]
+  accessScopes   SubscriptionAccessScope[]
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -433,6 +435,28 @@ model SubscriptionAccessGrant {
   @@index([revokedAt, revocationNextAttemptAt, revocationAttempts])
   @@index([revocationReason, revocationNextAttemptAt])
   @@index([revokedAt, deliveryAttempts, deliveryNextAttemptAt])
+}
+
+
+model SubscriptionAccessScope {
+  id                 String         @id @default(cuid())
+  customerId         String
+  connectedChatId    String
+  desiredRevision    BigInt         @default(0)
+  appliedRevision    BigInt         @default(0)
+  leaseToken         String?        @unique
+  leaseExpiresAt     DateTime?
+  nextAttemptAt      DateTime?      @default(now())
+  attempts           Int            @default(0)
+  lastErrorCode      String?
+  customer           ProjectCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  connectedChat      ConnectedChat   @relation(fields: [connectedChatId], references: [id], onDelete: Cascade)
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  @@unique([customerId, connectedChatId])
+  @@index([nextAttemptAt, leaseExpiresAt, createdAt])
+  @@index([desiredRevision, appliedRevision])
 }
 
 model PaymentProviderConnection {
