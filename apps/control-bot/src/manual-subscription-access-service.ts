@@ -414,7 +414,7 @@ export async function revokeSubscriptionAccessManually(
           subscriptionId: target.id,
           provider: "TELEGRAM_STARS",
           providerPaymentId: target.telegramStarInitialChargeId,
-          status: "SUCCEEDED"
+          status: { in: ["SUCCEEDED", "REFUNDING", "REFUNDED"] }
         },
         select: { metadata: true }
       });
