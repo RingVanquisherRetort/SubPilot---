@@ -19,7 +19,7 @@ import { shouldProcessTelegramUpdate } from "./telegram-update-order.js";
 import { shouldActivateConnectedChat } from "./connected-chat-quota.js";
 import { parseTelegramStarSubscriptionUpdate } from "./telegram-star-subscription-update.js";
 import { classifyTelegramStarsPayment } from "./telegram-star-payment-kind.js";
-import { isSubscriptionAccessPermissionActive } from "./subscription-access-permission.js";
+import { isSubscriptionAccessPermissionActive, PAID_RENEWAL_RESTORABLE_REVOCATION_REASON } from "./subscription-access-permission.js";
 import { classifyTelegramMembershipDeparture } from "./telegram-membership-departure.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
@@ -1101,7 +1101,7 @@ async function processSuccessfulStarsPayment(
           where: {
             subscriptionId: subscription.id,
             revokedAt: { not: null },
-            revocationReason: "SUBSCRIPTION_EXPIRED"
+            revocationReason: PAID_RENEWAL_RESTORABLE_REVOCATION_REASON
           },
           data: {
             revokedAt: null,
