@@ -1,8 +1,8 @@
 # Subscription access coordination — open architecture review
 
-**Status:** Open — durable coordinator foundation implemented; Telegram-path migration remains  
+**Status:** Open — revision enqueueing is partially integrated; reconciliation worker and Telegram-path migration remain  
 **Reviewed branch:** `feat/subscription-lifecycle-ui`  
-**Reviewed implementation snapshot:** `3d6a9d633f67ab3b7090f4e8b1fd2c2c20cf5512` (CI run `45063554127` passed: migration validation, Prisma generation, typecheck and 189/189 tests)  
+**Reviewed implementation snapshot:** `afecef01d8069c7a4396cc64c221ec4416f3dd35` (refund revision enqueue and PostgreSQL assertions added; latest CI validation pending)  
 **Production status:** Not merged; no live Telegram/provider test has been run as part of this review.
 
 ## Why this review exists
@@ -64,7 +64,7 @@ The selected storage primitive is `SubscriptionAccessScope`, unique by `(custome
 
 The migration is `20261122200000_subscription_access_scope_lease`. PostgreSQL integration coverage verifies revision coalescing, single-owner claims, lease renewal, a new desired revision arriving during an in-flight operation, stale-owner rejection after lease transfer, retry scheduling and error-code sanitization. CI run `45063554127` passed migration validation against clean and upgraded PostgreSQL databases, Prisma generation, typecheck and 189/189 tests.
 
-**Important:** this is the durable coordination primitive, not the completed Telegram refactor. Existing subscription delivery, expiry/member-removal and manual recurring-cancellation paths have not yet been migrated to this coordinator; they still contain interactive-transaction/network-call coupling. The scope rows are not yet a live work queue until the mutation paths and reconciliation worker are wired together.
+**Important:** this is the durable coordination primitive, not the completed Telegram refactor. Desired revisions are now enqueued transactionally for successful Telegram Stars payment/renewal, manual and trial grants, manual revocation, expiry revocation and Telegram Stars refund reconciliation. The queue is still not consumed by a reconciliation worker. Existing subscription delivery, expiry/member-removal and manual recurring-cancellation paths still contain interactive-transaction/network-call coupling.
 
 ### Remaining integration work
 
