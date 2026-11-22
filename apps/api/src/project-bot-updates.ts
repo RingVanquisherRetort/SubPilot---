@@ -2656,7 +2656,7 @@ export async function handleProjectBotUpdate(
         })
       ]);
       if (!currentSubscription || !currentGrant || currentGrant.inviteLink !== inviteLink) {
-        return { allowed: false, removeMember: false, shouldRevokeInvite: true };
+        return { removeMember: false, shouldRevokeInvite: true };
       }
 
       const permissionActive = isSubscriptionAccessPermissionActive({
@@ -2672,7 +2672,7 @@ export async function handleProjectBotUpdate(
             data: { joinedAt: new Date() }
           });
         }
-        return { allowed: true, removeMember: false, shouldRevokeInvite: false };
+        return { removeMember: false, shouldRevokeInvite: false };
       }
 
       // A different active subscription may still authorize this user in the same
@@ -2697,7 +2697,6 @@ export async function handleProjectBotUpdate(
         select: { id: true }
       });
       return {
-        allowed: false,
         removeMember: !otherActiveGrant,
         shouldRevokeInvite: true
       };
