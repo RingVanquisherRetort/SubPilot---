@@ -48,6 +48,10 @@ The following commands remain available as an advanced fallback:
 - `/newproject Name` — create a project in the active workspace.
 - `/projects` — list projects.
 - `/agencyportfolio` — list agency projects grouped by assigned creator (OWNER/ADMIN/MANAGER).
+- `/projectmembers PROJECT_ID` — list the explicit team and responsible creator for an agency project (OWNER/ADMIN only).
+- `/setprojectmember PROJECT_ID TELEGRAM_ID [MANAGER|VIEWER]` and `/removeprojectmember PROJECT_ID TELEGRAM_ID` — grant/revoke project-scoped access. The target must already belong to the same agency; the responsible creator has implicit MANAGER access to that project.
+
+In agency workspaces, OWNER/ADMIN retain workspace-wide project access. Other members see only projects they are assigned to as responsible creator or explicitly added to through `ProjectMember`. Personal workspaces retain their existing workspace-role behavior. Existing agency MANAGER/VIEWER access is backfilled to current projects by the migration so deployment does not silently remove existing access; owners/admins can then narrow each project's team.
 - `/assigncreator PROJECT_ID TELEGRAM_ID` and `/unassigncreator PROJECT_ID` — assign/remove a responsible creator. Only OWNER/ADMIN may change assignments; the creator must be a member of the same agency.
 - `/createagency Name` — create an agency workspace.
 - `/workspaces` and `/switchworkspace ID` — list/switch workspaces.
