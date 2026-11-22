@@ -376,10 +376,10 @@ export async function revokeSubscriptionAccessManually(
 }> {
   const now = new Date();
 
-  // Authorize first and capture the exact project bot that created the initial
-  // recurring Stars charge. Never send a cancellation request through another
-  // bot in a multi-bot project.
-  const cancellationContext = await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
+    // Keep one subscription-row lock across the Telegram cancellation request and
+    // local state transition. Buyer cancel/resume and payment webhooks use the same
+    // lock, so none can re-enable renewal or access between these two operations.
     await lockWorkspace(tx, input.workspaceId);
     await assertWorkspaceAdmin(tx, input.workspaceId, input.actorUserId);
     await tx.$queryRawUnsafe(
@@ -406,81 +406,50 @@ export async function revokeSubscriptionAccessManually(
     if (target.status !== "ACTIVE") {
       throw new ManualSubscriptionAccessError("SUBSCRIPTION_NOT_ACTIVE");
     }
-    if (!target.telegramStarInitialChargeId || target.telegramStarSubscriptionState === "CANCELED") {
-      return null;
-    }
 
-    const initialPayment = await tx.payment.findFirst({
-      where: {
-        subscriptionId: target.id,
-        provider: "TELEGRAM_STARS",
-        providerPaymentId: target.telegramStarInitialChargeId,
-        status: "SUCCEEDED"
-      },
-      select: { metadata: true }
-    });
-    const metadata = initialPayment?.metadata && typeof initialPayment.metadata === "object" && !Array.isArray(initialPayment.metadata)
-      ? initialPayment.metadata as Record<string, unknown>
-      : null;
-    const projectBotId = typeof metadata?.projectBotId === "string"
-      ? metadata.projectBotId
-      : null;
-    const projectBot = await tx.projectBot.findFirst({
-      where: {
-        projectId: target.projectId,
-        ...(projectBotId ? { id: projectBotId } : { isPrimary: true })
-      },
-      orderBy: [{ isPrimary: "desc" }, { createdAt: "desc" }],
-      select: { tokenEncrypted: true }
-    });
-    if (!initialPayment || !projectBot) {
-      throw new ManualSubscriptionAccessError("TELEGRAM_RENEWAL_CANCEL_FAILED");
-    }
-
-    return {
-      telegramUserId: target.customer.telegramUserId,
-      telegramPaymentChargeId: target.telegramStarInitialChargeId,
-      encryptedBotToken: projectBot.tokenEncrypted
-    };
-  }, { isolationLevel: "ReadCommitted" });
-
-  if (cancellationContext) {
-    let cancelled = false;
-    try {
-      cancelled = await (dependencies.cancelTelegramRenewal ?? cancelTelegramStarRenewal)(cancellationContext);
-    } catch {
-      cancelled = false;
-    }
-    if (!cancelled) {
-      // Do not revoke access locally while Telegram may still charge the buyer.
-      throw new ManualSubscriptionAccessError("TELEGRAM_RENEWAL_CANCEL_FAILED");
-    }
-  }
-
-  return prisma.$transaction(async (tx) => {
-    await lockWorkspace(tx, input.workspaceId);
-    await assertWorkspaceAdmin(tx, input.workspaceId, input.actorUserId);
-    await tx.$queryRawUnsafe(
-      'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
-      input.subscriptionId
-    );
-
-    const target = await tx.subscription.findUnique({
-      where: { id: input.subscriptionId },
-      select: {
-        id: true,
-        projectId: true,
-        project: { select: { workspaceId: true, name: true } },
-        plan: { select: { title: true } },
-        status: true,
-        telegramStarInitialChargeId: true
+    const hasRecurringAnchor = Boolean(target.telegramStarInitialChargeId);
+    if (target.telegramStarInitialChargeId && target.telegramStarSubscriptionState !== "CANCELED") {
+      const initialPayment = await tx.payment.findFirst({
+        where: {
+          subscriptionId: target.id,
+          provider: "TELEGRAM_STARS",
+          providerPaymentId: target.telegramStarInitialChargeId,
+          status: "SUCCEEDED"
+        },
+        select: { metadata: true }
+      });
+      const metadata = initialPayment?.metadata && typeof initialPayment.metadata === "object" && !Array.isArray(initialPayment.metadata)
+        ? initialPayment.metadata as Record<string, unknown>
+        : null;
+      const projectBotId = typeof metadata?.projectBotId === "string"
+        ? metadata.projectBotId
+        : null;
+      const projectBot = await tx.projectBot.findFirst({
+        where: {
+          projectId: target.projectId,
+          ...(projectBotId ? { id: projectBotId } : { isPrimary: true })
+        },
+        orderBy: [{ isPrimary: "desc" }, { createdAt: "desc" }],
+        select: { tokenEncrypted: true }
+      });
+      if (!initialPayment || !projectBot) {
+        throw new ManualSubscriptionAccessError("TELEGRAM_RENEWAL_CANCEL_FAILED");
       }
-    });
-    if (!target || target.project.workspaceId !== input.workspaceId) {
-      throw new ManualSubscriptionAccessError("SUBSCRIPTION_NOT_FOUND");
-    }
-    if (target.status !== "ACTIVE") {
-      throw new ManualSubscriptionAccessError("SUBSCRIPTION_NOT_ACTIVE");
+
+      let cancelled = false;
+      try {
+        cancelled = await (dependencies.cancelTelegramRenewal ?? cancelTelegramStarRenewal)({
+          telegramUserId: target.customer.telegramUserId,
+          telegramPaymentChargeId: target.telegramStarInitialChargeId,
+          encryptedBotToken: projectBot.tokenEncrypted
+        });
+      } catch {
+        cancelled = false;
+      }
+      if (!cancelled) {
+        // Fail closed: never revoke a paid entitlement while Telegram may still renew it.
+        throw new ManualSubscriptionAccessError("TELEGRAM_RENEWAL_CANCEL_FAILED");
+      }
     }
 
     const updated = await tx.subscription.updateMany({
@@ -489,9 +458,7 @@ export async function revokeSubscriptionAccessManually(
         status: "CANCELLED",
         endsAt: now,
         cancelledAt: now,
-        ...(target.telegramStarInitialChargeId
-          ? { telegramStarSubscriptionState: "CANCELED" as const }
-          : {})
+        ...(hasRecurringAnchor ? { telegramStarSubscriptionState: "CANCELED" as const } : {})
       }
     });
     if (updated.count !== 1) throw new ManualSubscriptionAccessError("SUBSCRIPTION_NOT_ACTIVE");
@@ -507,7 +474,7 @@ export async function revokeSubscriptionAccessManually(
         metadata: {
           previousStatus: target.status,
           revokedAt: now.toISOString(),
-          recurringRenewalCancelled: Boolean(target.telegramStarInitialChargeId)
+          recurringRenewalCancelled: hasRecurringAnchor
         }
       }
     });
@@ -516,9 +483,9 @@ export async function revokeSubscriptionAccessManually(
       subscriptionId: target.id,
       projectName: target.project.name,
       planTitle: target.plan.title,
-      recurringRenewalCancelled: Boolean(target.telegramStarInitialChargeId)
+      recurringRenewalCancelled: hasRecurringAnchor
     };
-  }, { isolationLevel: "ReadCommitted" });
+  }, { isolationLevel: "ReadCommitted", maxWait: 10_000, timeout: 30_000 });
 }
 export async function listActiveProjectSubscriptions(input: {
   workspaceId: string;
