@@ -21,6 +21,7 @@ import { parseTelegramStarSubscriptionUpdate } from "./telegram-star-subscriptio
 import { classifyTelegramStarsPayment } from "./telegram-star-payment-kind.js";
 import { isSubscriptionAccessPermissionActive, PAID_RENEWAL_RESTORABLE_REVOCATION_REASON } from "./subscription-access-permission.js";
 import { classifyTelegramMembershipDeparture } from "./telegram-membership-departure.js";
+import { getAccessRevocationRetryState } from "./access-revocation-retry.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
@@ -533,6 +534,52 @@ export async function recordSubscriptionAccessDeliveryFailure(
   await prisma.$transaction((tx) =>
     recordSubscriptionAccessDeliveryFailureUsing(tx, subscriptionId, connectedChatId, errorCode, now)
   );
+}
+
+export async function recordSubscriptionAccessRevocationFailure(
+  subscriptionId: string,
+  grantId: string,
+  errorCode: string,
+  now = new Date()
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRawUnsafe(
+      'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+      subscriptionId
+    );
+    await tx.$queryRawUnsafe(
+      'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
+      grantId
+    );
+    const current = await tx.subscriptionAccessGrant.findUnique({
+      where: { id: grantId },
+      select: {
+        subscriptionId: true,
+        revokedAt: true,
+        revocationReason: true,
+        inviteLink: true,
+        revocationAttempts: true
+      }
+    });
+    if (!current || current.subscriptionId !== subscriptionId) return;
+
+    // Normal expiry/admin-revoke work is pending while revokedAt is null.
+    // An ADMIN_EXCLUDED grant is logically revoked already, but an old Telegram
+    // invite still needs retry until its stored inviteLink is cleared.
+    const pending = current.revokedAt === null ||
+      (current.revocationReason === "ADMIN_EXCLUDED" && Boolean(current.inviteLink));
+    if (!pending) return;
+
+    const retry = getAccessRevocationRetryState(current.revocationAttempts, now, errorCode);
+    await tx.subscriptionAccessGrant.update({
+      where: { id: grantId },
+      data: {
+        revocationAttempts: retry.attempts,
+        revocationNextAttemptAt: retry.nextAttemptAt,
+        revocationLastError: retry.lastError
+      }
+    });
+  }, { maxWait: 10_000, timeout: 30_000 });
 }
 
 async function clearSubscriptionAccessDeliveryFailureUsing(
@@ -2456,6 +2503,11 @@ export async function handleProjectBotUpdate(
               revoked = isTelegramInviteAlreadyRevoked(error);
               if (!revoked) {
                 inviteRevocationFailed = true;
+                await recordSubscriptionAccessRevocationFailure(
+                  grant.subscriptionId,
+                  grant.id,
+                  "INVITE_REVOKE_FAILED"
+                );
                 console.error(
                   "Could not revoke an invite after Telegram admin exclusion:",
                   error instanceof Error ? error.name : "UnknownError"
@@ -2480,7 +2532,13 @@ export async function handleProjectBotUpdate(
                     revocationReason: "ADMIN_EXCLUDED",
                     inviteLink: transition.inviteLink
                   },
-                  data: { inviteLink: "", expiresAt: new Date(0) }
+                  data: {
+                    inviteLink: "",
+                    expiresAt: new Date(0),
+                    revocationAttempts: 0,
+                    revocationNextAttemptAt: new Date(),
+                    revocationLastError: null
+                  }
                 });
               });
             }
