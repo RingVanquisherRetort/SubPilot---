@@ -175,11 +175,11 @@ test("PostgreSQL scope lease coalesces revisions, rejects stale owners, and retr
     await prisma.$transaction((tx) =>
       requestSubscriptionAccessReconciliation(tx, customer.id, [chat.id], filterRequestedAt)
     );
-    assert.equal(await claimNextSubscriptionAccessScope(prisma, {
+    assert.equal(await claimSubscriptionAccessScope(prisma, customer.id, chat.id, {
       now: new Date(filterRequestedAt.getTime() + 1),
       onlyActiveEntitlements: true
     }), null);
-    const unrestricted = await claimNextSubscriptionAccessScope(prisma, {
+    const unrestricted = await claimSubscriptionAccessScope(prisma, customer.id, chat.id, {
       now: new Date(filterRequestedAt.getTime() + 1)
     });
     assert.ok(unrestricted);
