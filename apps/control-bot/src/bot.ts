@@ -4219,6 +4219,7 @@ export function createControlBot(token: string): Bot {
             { command: "start", description: "Открыть меню подписок" },
             { command: "plans", description: "Посмотреть тарифы" },
             { command: "buy", description: "Оформить выбранный тариф" },
+            { command: "subscription", description: "Управлять автопродлением" },
             { command: "access", description: "Получить ссылки для вступления" },
             { command: "terms", description: "Условия покупки" },
             { command: "paysupport", description: "Поддержка по оплате и возвратам" }
