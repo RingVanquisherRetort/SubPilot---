@@ -1914,15 +1914,12 @@ export function createControlBot(token: string): Bot {
 
     try {
       const user = await upsertTelegramUser(ctx);
-      const { workspace, role } = await getActiveWorkspace(user);
-      if (!MANAGER_ROLES.includes(role as typeof MANAGER_ROLES[number])) {
-        await ctx.reply("У вас нет прав переименовывать проекты в этом пространстве.");
+      const { workspace } = await getActiveWorkspace(user);
+      const project = await canAccessProject(projectId, user.id, MANAGER_ROLES);
+      if (!project || project.workspaceId !== workspace.id) {
+        await ctx.reply("Проект не найден или у вас нет прав переименовывать его.");
         return;
       }
-
-      const project = await prisma.project.findFirst({
-        where: { id: projectId, workspaceId: workspace.id }
-      });
 
       if (!project) {
         await ctx.reply("Проект не найден в активном пространстве.");
