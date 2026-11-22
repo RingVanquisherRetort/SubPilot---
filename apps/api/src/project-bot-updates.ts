@@ -577,7 +577,7 @@ async function deliverSubscriptionAccessUnlocked(
   });
 
   if (!subscription || subscription.status !== "ACTIVE") {
-    return { links: [], alreadyJoined: [], failed: [] };
+    return { links: [], alreadyJoined: [], failed: [], blocked: [] };
   }
 
   const results = {
@@ -1118,6 +1118,25 @@ async function processSuccessfulStarsPayment(
               : {})
         }
       });
+
+      // A newly paid renewal after normal expiry re-authorizes grants revoked by
+      // the expiry worker. Explicitly revoked grants on still-active subscriptions
+      // remain blocked and are never silently reopened by invite delivery.
+      if (currentSubscription.status === "EXPIRED") {
+        await tx.subscriptionAccessGrant.updateMany({
+          where: { subscriptionId: subscription.id, revokedAt: { not: null } },
+          data: {
+            revokedAt: null,
+            inviteLink: "",
+            expiresAt: new Date(0),
+            joinedAt: null,
+            deliveryAttempts: 0,
+            deliveryNextAttemptAt: now,
+            deliveryLastError: null,
+            deliveryFailedAt: null
+          }
+        });
+      }
     } else if (isInitialRecurring) {
       // The receipt arrived after admin revocation and supplies the first charge ID
       // only now. Persist the anchor without reopening access so the same Telegram
@@ -1442,6 +1461,22 @@ async function processSuccessfulStarsPayment(
         "⚠️ Не удалось автоматически выдать доступ по тарифу «" + snapshotPlanTitle +
         "». SubPilot повторит попытку. Проверьте права бота и состояние подключённых площадок: " +
         access.failed.join(", ")
+    });
+  }
+
+  if (access.blocked.length > 0) {
+    messageParts.push(
+      "Для следующих площадок отдельное право доступа отключено, поэтому новые приглашения не выдавались: " +
+      access.blocked.join(", ") + ". Обратитесь к владельцу проекта для повторного предоставления доступа."
+    );
+    await enqueueProjectOwnerNotification({
+      projectId,
+      dedupeKey: "subscription:" + subscription.id + ":access-permission-blocked",
+      eventType: "access_permission_blocked",
+      messageText:
+        "⚠️ Попытка выдать приглашение для отозванного или отсутствующего права доступа по тарифу «" +
+        snapshotPlanTitle + "». Площадки: " + access.blocked.join(", ") +
+        ". SubPilot не восстановил разрешение автоматически."
     });
   }
 
@@ -2003,6 +2038,9 @@ export async function handleProjectBotUpdate(
       }
       if (access.failed.length > 0) {
         messages.push("«" + subscription.plan.title + "»: не удалось создать ссылки для " + access.failed.join(", ") + ". Повторите запрос позже.");
+      }
+      if (access.blocked.length > 0) {
+        messages.push("«" + subscription.plan.title + "»: право доступа отключено для " + access.blocked.join(", ") + ". Обратитесь к владельцу проекта для повторного предоставления доступа.");
       }
     }
 
