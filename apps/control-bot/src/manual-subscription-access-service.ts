@@ -212,7 +212,6 @@ export async function grantManualSubscriptionAccess(input: AccessOperationInput 
 
     const customer = await ensureCustomer(tx, project.id, telegramUserId);
     const connectedChatIds = plan.chats.map((chat) => chat.connectedChatId);
-    await lockSubscriptionAccessScopes(tx, customer.id, connectedChatIds);
     const existing = await tx.subscription.findFirst({
       where: {
         projectId: project.id,
@@ -228,6 +227,11 @@ export async function grantManualSubscriptionAccess(input: AccessOperationInput 
     let subscriptionId: string;
     let endsAt: Date | null;
     if (existing) {
+      await tx.$queryRawUnsafe(
+        'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+        existing.id
+      );
+      await lockSubscriptionAccessScopes(tx, customer.id, connectedChatIds);
       endsAt = durationDays === null || existing.endsAt === null
         ? null
         : new Date(Math.max(now.getTime(), existing.endsAt.getTime()) +
@@ -252,6 +256,7 @@ export async function grantManualSubscriptionAccess(input: AccessOperationInput 
           endsAt
         }
       });
+      await lockSubscriptionAccessScopes(tx, customer.id, connectedChatIds);
       subscriptionId = created.id;
     }
 
@@ -310,7 +315,6 @@ export async function grantTrialSubscriptionAccess(input: AccessOperationInput &
 
     const customer = await ensureCustomer(tx, project.id, telegramUserId);
     const connectedChatIds = plan.chats.map((chat) => chat.connectedChatId);
-    await lockSubscriptionAccessScopes(tx, customer.id, connectedChatIds);
     const priorTrial = await tx.subscription.findFirst({
       where: {
         customerId: customer.id,
@@ -344,6 +348,7 @@ export async function grantTrialSubscriptionAccess(input: AccessOperationInput &
         endsAt
       }
     });
+    await lockSubscriptionAccessScopes(tx, customer.id, connectedChatIds);
     await ensureAccessGrantRows(tx, created.id, connectedChatIds, now);
     await tx.auditLog.create({
       data: {
