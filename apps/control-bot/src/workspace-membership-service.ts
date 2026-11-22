@@ -165,6 +165,31 @@ export async function removeWorkspaceMember(input: {
       throw new WorkspaceMembershipError("PERMISSION_DENIED");
     }
 
+    // A removed workspace member can no longer remain the active creator
+    // assigned to projects in this agency. Preserve the projects and clear only
+    // their current creator assignment, in the same transaction as membership removal.
+    const clearedCreatorAssignments = await tx.project.updateMany({
+      where: {
+        workspaceId: input.workspaceId,
+        creatorUserId: target.userId
+      },
+      data: { creatorUserId: null }
+    });
+    if (clearedCreatorAssignments.count > 0) {
+      await tx.auditLog.create({
+        data: {
+          workspaceId: input.workspaceId,
+          actorUserId: input.actorUserId,
+          action: "AGENCY_PROJECT_CREATOR_CLEARED_MEMBER_REMOVED",
+          resourceType: "ProjectCreatorAssignments",
+          metadata: {
+            removedCreatorUserId: target.userId,
+            assignmentCount: clearedCreatorAssignments.count
+          }
+        }
+      });
+    }
+
     await tx.workspaceMember.delete({ where: { id: target.id } });
     if (target.user.activeWorkspaceId === input.workspaceId) {
       await tx.user.updateMany({
