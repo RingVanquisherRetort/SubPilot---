@@ -156,6 +156,11 @@ async function ensureAccessGrantRows(
     'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
     subscriptionId
   );
+  const subscription = await tx.subscription.findUnique({
+    where: { id: subscriptionId },
+    select: { customerId: true }
+  });
+  if (!subscription) throw new ManualSubscriptionAccessError("SUBSCRIPTION_NOT_FOUND");
   await tx.subscriptionAccessGrant.createMany({
     data: connectedChatIds.map((connectedChatId) => ({
       subscriptionId,
