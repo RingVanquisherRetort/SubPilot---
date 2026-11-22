@@ -1118,9 +1118,14 @@ async function processSuccessfulStarsPayment(
       // remain blocked and are never silently reopened by invite delivery.
       if (currentSubscription.status === "EXPIRED") {
         await tx.subscriptionAccessGrant.updateMany({
-          where: { subscriptionId: subscription.id, revokedAt: { not: null } },
+          where: {
+            subscriptionId: subscription.id,
+            revokedAt: { not: null },
+            revocationReason: "SUBSCRIPTION_EXPIRED"
+          },
           data: {
             revokedAt: null,
+            revocationReason: null,
             inviteLink: "",
             expiresAt: new Date(0),
             joinedAt: null,
