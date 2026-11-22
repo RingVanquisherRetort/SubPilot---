@@ -7,10 +7,16 @@ import {
   ADMIN_ROLES,
   MANAGER_ROLES,
   canInviteWorkspaceRole,
-  canRemoveWorkspaceMember,
   type InvitableWorkspaceRole
 } from "./workspace-permissions.js";
 import { isPrivateControlChat } from "./private-control-context.js";
+import {
+  WorkspaceMembershipError,
+  createWorkspaceInvite,
+  removeWorkspaceMember,
+  revokeWorkspaceInvite,
+  setWorkspaceMemberRole
+} from "./workspace-membership-service.js";
 import { isPlatformAdminTelegramId } from "./platform-admin.js";
 import { PlatformRefundError, requestPlatformPaymentRefund } from "./platform-refund-service.js";
 import { parsePlatformPlanUpsertInput } from "./platform-plan-catalog.js";
@@ -405,20 +411,13 @@ export function createControlBot(token: string): Bot {
       await ctx.reply("У вас нет прав назначить эту роль.");
       return;
     }
-    const token = randomBytes(32).toString("base64url");
-    const tokenHash = createHash("sha256").update(token).digest("hex");
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-    await prisma.workspaceInvite.create({
-      data: {
-        workspaceId: workspace.id,
-        invitedByUserId: user.id,
-        tokenHash,
-        role: requestedRole,
-        expiresAt
-      }
+    const created = await createWorkspaceInvite({
+      workspaceId: workspace.id,
+      actorUserId: user.id,
+      requestedRole
     });
     const botInfo = await ctx.api.getMe();
-    const inviteLink = `https://t.me/${botInfo.username}?start=join_${token}`;
+    const inviteLink = `https://t.me/${botInfo.username}?start=join_${created.token}`;
     await ctx.reply(
       `Приглашение в «${workspace.name}» создано. Роль: ${requestedRole.toLowerCase()}. Ссылка действует 7 дней и используется один раз:\n\n${inviteLink}`,
       { reply_markup: new InlineKeyboard().text("К команде", "ui:team").row().text("В главное меню", "ui:home") }
@@ -1356,22 +1355,14 @@ export function createControlBot(token: string): Bot {
         return;
       }
 
-      const token = randomBytes(32).toString("base64url");
-      const tokenHash = createHash("sha256").update(token).digest("hex");
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-      await prisma.workspaceInvite.create({
-        data: {
-          workspaceId: workspace.id,
-          invitedByUserId: user.id,
-          tokenHash,
-          role: requestedRole as "ADMIN" | "MANAGER" | "VIEWER",
-          expiresAt
-        }
+      const created = await createWorkspaceInvite({
+        workspaceId: workspace.id,
+        actorUserId: user.id,
+        requestedRole: requestedRole as InvitableWorkspaceRole
       });
 
       const botInfo = await ctx.api.getMe();
-      const inviteLink = `https://t.me/${botInfo.username}?start=join_${token}`;
+      const inviteLink = `https://t.me/${botInfo.username}?start=join_${created.token}`;
 
       await ctx.reply(
         `Приглашение в «${workspace.name}» создано.\n\n` +
@@ -1385,10 +1376,51 @@ export function createControlBot(token: string): Bot {
     }
   });
 
-  bot.command("members", async (ctx) => {
+  bot.command("setmemberrole", async (ctx) => {
+    const fields = String(ctx.match ?? "").trim().split(/\s+/).filter(Boolean);
+    const telegramId = fields[0] ?? "";
+    const role = (fields[1] ?? "").toUpperCase();
+    if (!/^\d{1,20}$/.test(telegramId) || !["ADMIN", "MANAGER", "VIEWER"].includes(role) || fields.length !== 2) {
+      await ctx.reply("Формат: /setmemberrole TELEGRAM_ID [ADMIN|MANAGER|VIEWER]\nНазначать ADMIN может только владелец.");
+      return;
+    }
     try {
       const user = await upsertTelegramUser(ctx);
       const { workspace } = await getActiveWorkspace(user);
+      const result = await setWorkspaceMemberRole({
+        workspaceId: workspace.id,
+        actorUserId: user.id,
+        targetTelegramId: telegramId,
+        requestedRole: role as InvitableWorkspaceRole
+      });
+      await ctx.reply(
+        "Роль участника " + result.telegramId + " изменена: " +
+        result.previousRole.toLowerCase() + " → " + result.role.toLowerCase() + "."
+      );
+    } catch (error) {
+      if (error instanceof WorkspaceMembershipError) {
+        const messages: Record<string, string> = {
+          ACTOR_NOT_MEMBER: "У вас больше нет доступа к этому пространству.",
+          PERMISSION_DENIED: "У вас нет прав изменить роль этого участника. Администраторы не могут управлять другими администраторами или назначать ADMIN.",
+          MEMBER_NOT_FOUND: "Участник не найден в активном пространстве.",
+          WORKSPACE_NOT_FOUND: "Рабочее пространство не найдено."
+        };
+        await ctx.reply(messages[error.code] ?? "Не удалось изменить роль участника.");
+      } else {
+        console.error("Control bot /setmemberrole failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось изменить роль участника.");
+      }
+    }
+  });
+
+  bot.command("members", async (ctx) => {
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace, role } = await getActiveWorkspace(user);
+      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
+        await ctx.reply("Список участников с Telegram ID доступен только владельцу и администратору пространства.");
+        return;
+      }
       const members = await prisma.workspaceMember.findMany({
         where: { workspaceId: workspace.id },
         include: { user: true },
@@ -1430,42 +1462,14 @@ export function createControlBot(token: string): Bot {
         return;
       }
 
-      const target = await prisma.workspaceMember.findFirst({
-        where: {
-          workspaceId: workspace.id,
-          user: { telegramId: BigInt(telegramIdInput) }
-        },
-        include: { user: true }
+      const removed = await removeWorkspaceMember({
+        workspaceId: workspace.id,
+        actorUserId: user.id,
+        targetTelegramId: telegramIdInput
       });
 
-      if (!target) {
-        await ctx.reply("Такой участник не найден в активном пространстве.");
-        return;
-      }
-
-      const isSelf = target.userId === user.id;
-      if (!canRemoveWorkspaceMember(actorRole, target.role, isSelf)) {
-        if (isSelf || target.role === "OWNER") {
-          await ctx.reply("Нельзя удалить владельца пространства или самого себя этой командой.");
-        } else if (actorRole === "ADMIN" && target.role === "ADMIN") {
-          await ctx.reply("Администратор не может удалять других администраторов.");
-        } else {
-          await ctx.reply("У вас нет прав удалять этого участника.");
-        }
-        return;
-      }
-
-      await prisma.workspaceMember.delete({ where: { id: target.id } });
-
-      if (target.user.activeWorkspaceId === workspace.id) {
-        await prisma.user.update({
-          where: { id: target.userId },
-          data: { activeWorkspaceId: null }
-        });
-      }
-
       await ctx.reply(
-        `Участник ${target.user.username ? `@${target.user.username}` : target.user.telegramId.toString()} удалён из «${workspace.name}».`
+        `Участник ${removed.telegramId} удалён из «${workspace.name}».`
       );
     } catch (error) {
       console.error("Control bot /removemember failed:", error);
@@ -1527,19 +1531,13 @@ export function createControlBot(token: string): Bot {
         return;
       }
 
-      const revoked = await prisma.workspaceInvite.updateMany({
-        where: {
-          id: inviteId,
-          workspaceId: workspace.id,
-          usedAt: null
-        },
-        data: { usedAt: new Date() }
+      const revoked = await revokeWorkspaceInvite({
+        workspaceId: workspace.id,
+        actorUserId: user.id,
+        inviteId
       });
-
       await ctx.reply(
-        revoked.count === 1
-          ? "Приглашение отозвано."
-          : "Активное приглашение с таким ID не найдено."
+        revoked ? "Приглашение отозвано." : "Активное приглашение с таким ID не найдено."
       );
     } catch (error) {
       console.error("Control bot /revokeinvite failed:", error);
@@ -3855,6 +3853,7 @@ export function createControlBot(token: string): Bot {
       "/projects — проекты активного пространства\n" +
       "/createagency Название — создать агентство\n" +
       "/invite [ROLE] — одноразовая ссылка для участника\n" +
+      "/setmemberrole TELEGRAM_ID [ADMIN|MANAGER|VIEWER] — изменить роль участника\n" +
       "/members — участники пространства\n" +
       "/removemember ID — удалить участника\n" +
       "/invites — активные приглашения\n" +
