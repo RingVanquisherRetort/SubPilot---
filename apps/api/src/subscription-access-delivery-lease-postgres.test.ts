@@ -58,7 +58,10 @@ test("subscription invite delivery releases its database transaction before Tele
       }
     });
     const customer = await prisma.projectCustomer.create({
-      data: { projectId: project.id, telegramUserId: telegramBase + 1n }
+      data: {
+        projectId: project.id,
+        telegramUserId: BigInt(Date.now() % 1_000_000_000) + 100_000_000n
+      }
     });
     const chat = await prisma.connectedChat.create({
       data: {
