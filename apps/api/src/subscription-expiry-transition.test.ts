@@ -114,11 +114,14 @@ test("PostgreSQL expiry row lock re-reads a renewed entitlement before revocatio
 
     let revokeCalls = 0;
     const firstResult = await prisma.$transaction(async (tx) =>
-      withSubscriptionExpiryRowLock(tx, expiryFirst.id, now, async () => {
+      withSubscriptionExpiryRowLock(tx, expiryFirst.id, now, async (currentStatus) => {
         revokeCalls += 1;
         await tx.subscriptionAccessGrant.update({
           where: { id: grantAfterExpiryFirst.id },
-          data: { revokedAt: now }
+          data: {
+            revokedAt: now,
+            revocationReason: currentStatus === "CANCELLED" ? "ADMIN_REVOKED" : "SUBSCRIPTION_EXPIRED"
+          }
         });
         return "REVOKED";
       })
@@ -126,6 +129,11 @@ test("PostgreSQL expiry row lock re-reads a renewed entitlement before revocatio
     assert.equal(firstResult.shouldRevoke, true);
     assert.equal(firstResult.result, "REVOKED");
     assert.equal(revokeCalls, 1);
+    const expiredGrant = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grantAfterExpiryFirst.id }
+    });
+    assert.equal(expiredGrant.revokedAt?.getTime(), now.getTime());
+    assert.equal(expiredGrant.revocationReason, "SUBSCRIPTION_EXPIRED");
 
     // A paid renewal that gets the same lock after expiry removal restores the
     // entitlement. The worker must then skip any remaining stale grant work.
