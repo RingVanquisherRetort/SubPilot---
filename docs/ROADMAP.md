@@ -71,7 +71,8 @@
 - [x] Persist pending access-delivery records and retry failed invite delivery through the lifecycle worker.
 - [x] Add access-delivery dead-letter monitoring, owner alert, bounded retries and audited workspace-scoped operator recovery.
 - [ ] Implement external provider adapters only for compliant checkout scenarios and eligible merchants/products.
-- [ ] Add recurring Stars subscriptions (Telegram currently constrains recurring bot invoices to a 30-day period).
+- [x] Subscribe project-bot webhooks to Telegram's subscription state updates and persist ordered ACTIVE/CANCELED/FAILED transitions for recurring Stars checkouts.
+- [ ] Complete recurring Stars checkout and renewal accounting via Telegram invoice links (30-day period), including buyer cancellation/re-enable controls and per-charge idempotency.
 - [x] Keep creator payments isolated from SubPilot platform billing through separate payment, workspace-billing and commission ledgers.
 
 Initial research candidates for creators who are individuals: YooMoney, Crypto Pay and manual confirmation. Nemiling's public matrix lists these for physical persons, but this is reference information only. SubPilot adapters and provider approvals remain pending. YooKassa, Prodamus, Robokassa and CloudPayments are retained as candidates for merchant types listed by the reference matrix (for example, self-employed, individual entrepreneurs or legal entities). None of these external methods can be used to sell Telegram channel/group access or other digital goods/services offered or fulfilled by a Telegram bot/Mini App; Stars remain required. See docs/decisions/creator-payment-model.md.
