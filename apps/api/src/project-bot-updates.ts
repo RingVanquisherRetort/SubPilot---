@@ -1177,6 +1177,18 @@ async function processSuccessfulStarsPayment(
             revocationLastError: null
           }
         });
+
+        // A renewal also supersedes any failed-but-not-yet-committed expiry
+        // revocation attempt. Keep the permission active and restart its retry
+        // clock so the next natural expiry gets a fresh first attempt.
+        await tx.subscriptionAccessGrant.updateMany({
+          where: { subscriptionId: subscription.id, revokedAt: null },
+          data: {
+            revocationAttempts: 0,
+            revocationNextAttemptAt: now,
+            revocationLastError: null
+          }
+        });
       }
     } else if (isInitialRecurring) {
       // The receipt arrived after admin revocation and supplies the first charge ID
