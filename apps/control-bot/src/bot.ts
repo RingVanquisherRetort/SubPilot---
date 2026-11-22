@@ -883,7 +883,8 @@ export function createControlBot(token: string): Bot {
       });
       await ctx.editMessageText(
         "Досрочный отзыв принят.\nПроект: «" + result.projectName + "»\n" +
-        "Тариф: «" + result.planTitle + "»\nПодписка: " + result.subscriptionId + "\n\n" +
+        "Тариф: «" + result.planTitle + "»\nПодписка: " + result.subscriptionId + "\n" +
+        (result.recurringRenewalCancelled ? "Автопродление Telegram отключено.\n\n" : "\n") +
         "Фоновый обработчик удалит действующие приглашения и отзовёт членство. Если у клиента есть другая активная подписка на ту же площадку, доступ по ней останется.",
         { reply_markup: new InlineKeyboard().text("К управлению подписками", "ui:subaccess:" + projectId) }
       );
@@ -894,7 +895,9 @@ export function createControlBot(token: string): Bot {
             ? "Подписка уже не активна."
             : error.code === "SUBSCRIPTION_NOT_FOUND"
               ? "Подписка не найдена в этом пространстве."
-              : "Отозвать доступ может только владелец или администратор."
+              : error.code === "TELEGRAM_RENEWAL_CANCEL_FAILED"
+                ? "Не удалось подтвердить отключение автопродления в Telegram. Доступ не отозван. Проверьте исходного бота и повторите попытку."
+                : "Отозвать доступ может только владелец или администратор."
         );
       } else {
         console.error("Button subscription revocation failed:", error instanceof Error ? error.name : "UnknownError");
@@ -2719,7 +2722,8 @@ export function createControlBot(token: string): Bot {
           TRIAL_NOT_CONFIGURED: "Для этого тарифа не задан пробный срок. Укажите DAYS явно.",
           TRIAL_ALREADY_USED: "Пробный доступ уже использовался или у клиента есть действующая подписка на этот тариф.",
           SUBSCRIPTION_NOT_FOUND: "Подписка не найдена в активном пространстве.",
-          SUBSCRIPTION_NOT_ACTIVE: "Подписка уже не активна."
+          SUBSCRIPTION_NOT_ACTIVE: "Подписка уже не активна.",
+          TELEGRAM_RENEWAL_CANCEL_FAILED: "Не удалось подтвердить отключение автопродления в Telegram. Доступ не отозван. Проверьте исходного бота и повторите попытку."
         };
         await ctx.reply(messages[error.code] ?? "Не удалось выдать доступ.");
       } else {
@@ -2846,7 +2850,9 @@ export function createControlBot(token: string): Bot {
       });
       await ctx.reply(
         `Досрочный отзыв принят.\nПроект: «${result.projectName}»\nТариф: «${result.planTitle}»\n` +
-        `Подписка: ${result.subscriptionId}\n\nФоновый обработчик удалит активные приглашения и отзовёт доступ. ` +
+        `Подписка: ${result.subscriptionId}\n` +
+        (result.recurringRenewalCancelled ? "Автопродление Telegram отключено.\n\n" : "\n") +
+        "Фоновый обработчик удалит активные приглашения и отзовёт доступ. " +
         "Если у клиента есть другая действующая подписка на ту же площадку, она останется активной."
       );
     } catch (error) {
