@@ -17,7 +17,7 @@ import { getSubscriptionGrantTelegramChatIds } from "./subscription-grant-persis
 import { buildExpiredSubscriptionNotice } from "./subscription-messages.js";
 import { runLifecyclePassWithLease } from "./subscription-lifecycle-runner.js";
 import { withSubscriptionExpiryRowLock } from "./subscription-expiry-transition.js";
-import { lockSubscriptionAccessScope } from "@subpilot/payments";
+import { lockSubscriptionAccessScope, requestSubscriptionAccessReconciliation } from "@subpilot/payments";
 import {
   deliverPendingOwnerNotifications,
   enqueueProjectOwnerNotification
@@ -644,7 +644,7 @@ async function expireSubscriptions(
               }
             }
 
-            await tx.subscriptionAccessGrant.updateMany({
+            const revoked = await tx.subscriptionAccessGrant.updateMany({
               where: { id: currentGrant.id, revokedAt: null },
               data: {
                 revokedAt: now,
@@ -656,6 +656,14 @@ async function expireSubscriptions(
                 revocationLastError: null
               }
             });
+            if (revoked.count === 1) {
+              await requestSubscriptionAccessReconciliation(
+                tx,
+                subscription.customerId,
+                [currentGrant.connectedChatId],
+                now
+              );
+            }
 
             return {
               completed: true,
