@@ -64,5 +64,5 @@ export async function getAccessibleProject(
 
   if (!accessRole || !allowedRoles.includes(accessRole)) return null;
   const { workspace, members: _members, ...projectData } = project;
-  return { ...projectData, accessRole };
+  return { ...projectData, workspaceType: workspace.type, accessRole };
 }
