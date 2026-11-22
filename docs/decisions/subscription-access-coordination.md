@@ -2,7 +2,7 @@
 
 **Status:** Open — design and implementation required  
 **Reviewed branch:** `feat/subscription-lifecycle-ui`  
-**Reviewed implementation snapshot:** `d3c29b56f0e7d9cc593de17b95518d089e88900c` (follow-up commits may adjust lock ordering/tests)  
+**Reviewed implementation snapshot:** `cca79c14f77956c5cf6f6364465b5dae0dde0395` (CI validation for this exact snapshot is pending)  
 **Production status:** Not merged; no live Telegram/provider test has been run as part of this review.
 
 ## Why this review exists
@@ -23,10 +23,11 @@ A transaction-scoped PostgreSQL advisory lock now uses the stable key `(customer
 
 The lock is acquired in the currently inspected paths before their access mutation/reconciliation:
 - successful Telegram Stars payment, including both existing grant scopes and the new purchase's destination snapshot;
-- delivery of an invite or recording that the buyer is already a member;
+- delivery of an invite, recording that the buyer is already a member, and confirmation of a Telegram join against a still-current invite;
 - expiry/admin-revocation membership reconciliation and the overlapping-entitlement query;
 - Telegram `ADMIN_EXCLUDED` membership updates;
-- manual/trial grant and manual revocation.
+- manual/trial grant and manual revocation;
+- recovery/rotation of a compromised invite after another Telegram user consumes it.
 
 The manual grant path locks an existing subscription row before taking the scope lock, matching the payment/expiry lock order. New subscription rows are created inside the same transaction before their scope lock is taken. Multi-chat operations acquire distinct scope keys in sorted order.
 
