@@ -8,6 +8,7 @@ import {
   isTelegramInviteAlreadyRevoked,
   lockSubscriptionAccessScope,
   renewSubscriptionAccessScopeLease,
+  requestSubscriptionAccessReconciliation,
   type SubscriptionAccessScopeLease
 } from "@subpilot/payments";
 import { recordSubscriptionAccessRevocationFailure } from "./project-bot-updates.js";
@@ -16,6 +17,7 @@ type LeaseOwnershipCheck = () => boolean;
 
 export type SubscriptionAccessRemovalResult =
   | "REVOKED"
+  | "INVITE_CLEANED"
   | "PRESERVED_BY_OTHER_SUBSCRIPTION"
   | "SKIPPED"
   | "FAILED"
@@ -29,6 +31,21 @@ function isSubscriptionDueForRevocation(
   return subscription.status === "EXPIRED" ||
     subscription.status === "CANCELLED" ||
     (subscription.status === "ACTIVE" && subscription.endsAt !== null && subscription.endsAt <= now);
+}
+
+function isAdminExcludedInviteDue(
+  grant: {
+    revokedAt: Date | null;
+    revocationReason: string | null;
+    inviteLink: string;
+    revocationNextAttemptAt: Date;
+  },
+  now: Date
+): boolean {
+  return grant.revokedAt !== null &&
+    grant.revocationReason === "ADMIN_EXCLUDED" &&
+    Boolean(grant.inviteLink) &&
+    grant.revocationNextAttemptAt <= now;
 }
 
 /**
@@ -75,14 +92,13 @@ export async function reconcileSubscriptionAccessRemoval(
         include: { connectedChat: { select: { telegramChatId: true } } }
       })
     ]);
-    if (
-      !subscription ||
-      !grant ||
-      subscription.customerId !== input.customerId ||
+    if (!subscription || !grant || subscription.customerId !== input.customerId) return null;
+    const cleanupExcludedInvite = isAdminExcludedInviteDue(grant, requestedAt);
+    if (!cleanupExcludedInvite && (
       grant.revokedAt !== null ||
       grant.revocationNextAttemptAt > requestedAt ||
       !isSubscriptionDueForRevocation(subscription, requestedAt)
-    ) return null;
+    )) return null;
 
     await lockSubscriptionAccessScope(tx, input.customerId, input.connectedChatId);
 
@@ -138,6 +154,7 @@ export async function reconcileSubscriptionAccessRemoval(
     }
 
     return {
+      cleanupExcludedInvite,
       subscriptionStatus: subscription.status,
       grantId: grant.id,
       inviteLink: grant.inviteLink,
@@ -183,6 +200,8 @@ export async function reconcileSubscriptionAccessRemoval(
         select: {
           connectedChatId: true,
           revokedAt: true,
+          revocationReason: true,
+          revocationNextAttemptAt: true,
           inviteLink: true,
           expiresAt: true,
           joinedAt: true,
@@ -195,19 +214,18 @@ export async function reconcileSubscriptionAccessRemoval(
       })
     ]);
     const checkedAt = new Date();
-    if (
-      !subscription ||
-      subscription.customerId !== input.customerId ||
-      !isSubscriptionDueForRevocation(subscription, checkedAt) ||
-      !grant ||
-      grant.connectedChatId !== input.connectedChatId ||
-      grant.revokedAt !== null ||
-      !scope ||
+    if (!subscription || !grant || subscription.customerId !== input.customerId ||
+      grant.connectedChatId !== input.connectedChatId || !scope ||
       scope.leaseToken !== lease.leaseToken ||
-      scope.leaseExpiresAt === null ||
-      scope.leaseExpiresAt <= checkedAt ||
+      scope.leaseExpiresAt === null || scope.leaseExpiresAt <= checkedAt ||
       scope.desiredRevision !== lease.revision
     ) return null;
+    const cleanupExcludedInvite = isAdminExcludedInviteDue(grant, checkedAt);
+    const naturalRevocationDue = grant.revokedAt === null &&
+      grant.revocationNextAttemptAt <= checkedAt &&
+      isSubscriptionDueForRevocation(subscription, checkedAt);
+    if ((cleanupExcludedInvite !== snapshot.cleanupExcludedInvite) ||
+      (!cleanupExcludedInvite && !naturalRevocationDue)) return null;
     const otherActiveGrant = await tx.subscriptionAccessGrant.findFirst({
       where: {
         id: { not: snapshot.grantId },
@@ -227,6 +245,7 @@ export async function reconcileSubscriptionAccessRemoval(
     });
     return {
       ...snapshot,
+      cleanupExcludedInvite,
       subscriptionStatus: subscription.status,
       inviteLink: grant.inviteLink,
       expiresAt: grant.expiresAt,
@@ -290,7 +309,7 @@ export async function reconcileSubscriptionAccessRemoval(
 
     if (
       currentSnapshot.inviteLink &&
-      currentSnapshot.expiresAt > requestedAt &&
+      (currentSnapshot.cleanupExcludedInvite || currentSnapshot.expiresAt > requestedAt) &&
       await isCurrentRevision()
     ) {
       try {
@@ -304,7 +323,8 @@ export async function reconcileSubscriptionAccessRemoval(
       if (!ownsLease()) return "LEASE_LOST";
     }
 
-    if (!currentSnapshot.hasOtherActiveGrant && currentSnapshot.joinedAt) {
+    if (!currentSnapshot.cleanupExcludedInvite &&
+      !currentSnapshot.hasOtherActiveGrant && currentSnapshot.joinedAt) {
       const telegramUserId = Number(input.telegramUserId);
       if (!Number.isSafeInteger(telegramUserId) || telegramUserId <= 0) {
         await fail("INVALID_TELEGRAM_USER_ID");
@@ -318,11 +338,18 @@ export async function reconcileSubscriptionAccessRemoval(
       // A ban observed after MEMBER_UNBAN_FAILED is ambiguous: a moderator
       // could have applied a new ban. Never automatically unban that state.
       if (!await isCurrentRevision()) return "LEASE_LOST";
+      if (member.status === "kicked" &&
+        (currentSnapshot.revocationLastError === "MEMBER_UNBAN_FAILED" ||
+          currentSnapshot.revocationLastError === "MEMBER_BAN_OWNERSHIP_UNCERTAIN")) {
+        // The user may still be banned by our previous failed cleanup, or by
+        // a moderator who banned them afterwards. Never guess and unban.
+        await fail("MEMBER_BAN_OWNERSHIP_UNCERTAIN");
+        return "FAILED";
+      }
       if (
         member.status === "kicked" ||
         (member.status === "restricted" && !member.is_member)
       ) {
-        // Preserve a ban that was already present before our temporary removal.
         revocationReason = "ADMIN_EXCLUDED";
       } else {
         if (!await isCurrentRevision()) return "LEASE_LOST";
@@ -371,7 +398,7 @@ export async function reconcileSubscriptionAccessRemoval(
         }),
         tx.subscriptionAccessGrant.findUnique({
           where: { id: currentSnapshot.grantId },
-          select: { inviteLink: true, revokedAt: true }
+          select: { inviteLink: true, revokedAt: true, revocationReason: true }
         })
       ]);
 
@@ -387,16 +414,44 @@ export async function reconcileSubscriptionAccessRemoval(
         return { state: "STALE" as const, preserved: false };
       }
 
-      if (
-        !subscription ||
-        subscription.customerId !== input.customerId ||
-        !isSubscriptionDueForRevocation(subscription, now) ||
-        !grant ||
-        grant.revokedAt !== null ||
-        grant.inviteLink !== currentSnapshot.inviteLink
-      ) {
+      const stillExcluded = Boolean(grant &&
+        grant.revokedAt !== null &&
+        grant.revocationReason === "ADMIN_EXCLUDED" &&
+        grant.inviteLink === currentSnapshot.inviteLink);
+      const stillNatural = Boolean(subscription && grant &&
+        subscription.customerId === input.customerId &&
+        grant.revokedAt === null &&
+        grant.inviteLink === currentSnapshot.inviteLink &&
+        isSubscriptionDueForRevocation(subscription, now));
+      if (!subscription || subscription.customerId !== input.customerId ||
+        (currentSnapshot.cleanupExcludedInvite ? !stillExcluded : !stillNatural)) {
         await completeSubscriptionAccessScope(tx, lease, now);
         return { state: "STALE" as const, preserved: false };
+      }
+
+      if (currentSnapshot.cleanupExcludedInvite) {
+        const cleaned = await tx.subscriptionAccessGrant.updateMany({
+          where: {
+            id: currentSnapshot.grantId,
+            revokedAt: { not: null },
+            revocationReason: "ADMIN_EXCLUDED",
+            inviteLink: currentSnapshot.inviteLink
+          },
+          data: {
+            inviteLink: "",
+            expiresAt: new Date(0),
+            revocationAttempts: 0,
+            revocationNextAttemptAt: now,
+            revocationLastError: null
+          }
+        });
+        if (cleaned.count !== 1) return { state: "STALE" as const, preserved: false };
+        await requestSubscriptionAccessReconciliation(
+          tx, input.customerId, [input.connectedChatId], now
+        );
+        const completed = await completeSubscriptionAccessScope(tx, lease, now);
+        if (!completed) throw new Error("ACCESS_SCOPE_LEASE_LOST_DURING_FINALIZATION");
+        return { state: "CLEANED" as const, preserved: false };
       }
 
       const otherActiveGrant = await tx.subscriptionAccessGrant.findFirst({
@@ -434,6 +489,11 @@ export async function reconcileSubscriptionAccessRemoval(
         }
       });
       if (revoked.count !== 1) return { state: "STALE" as const, preserved: false };
+      if (otherActiveGrant) {
+        await requestSubscriptionAccessReconciliation(
+          tx, input.customerId, [input.connectedChatId], now
+        );
+      }
 
       const completed = await completeSubscriptionAccessScope(tx, lease, now);
       if (!completed) throw new Error("ACCESS_SCOPE_LEASE_LOST_DURING_FINALIZATION");
@@ -444,6 +504,7 @@ export async function reconcileSubscriptionAccessRemoval(
     }, { maxWait: 10_000, timeout: 15_000 });
 
     if (finalized.state === "STALE") return "LEASE_LOST";
+    if (finalized.state === "CLEANED") return "INVITE_CLEANED";
     return finalized.preserved ? "PRESERVED_BY_OTHER_SUBSCRIPTION" : "REVOKED";
   } catch (error) {
     await fail("ACCESS_REVOCATION_FAILED").catch(() => undefined);
