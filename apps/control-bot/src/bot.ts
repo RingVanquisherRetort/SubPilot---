@@ -67,7 +67,8 @@ import {
 } from "./workspace-billing-service.js";
 import {
   listWorkspaceFailedAccessDeliveries,
-  retryWorkspaceFailedAccessDelivery
+  retryWorkspaceFailedAccessDelivery,
+  WorkspaceAccessDeliveryError
 } from "./workspace-access-delivery-service.js";
 import {
   getProjectAnalytics,
@@ -970,6 +971,10 @@ export function createControlBot(token: string): Bot {
         { reply_markup: new InlineKeyboard().text("К управлению подписками", "ui:subaccess:" + projectId) }
       );
     } catch (error) {
+      if (error instanceof WorkspaceAccessDeliveryError && error.code === "ACTOR_NOT_AUTHORIZED") {
+        await ctx.reply("Ваши права изменились. Повторять выдачу могут только владелец или администратор пространства.");
+        return;
+      }
       console.error("Failed subscription delivery retry failed:", error instanceof Error ? error.name : "UnknownError");
       await ctx.reply("Не удалось вернуть выдачу в очередь.");
     }
@@ -3343,6 +3348,10 @@ export function createControlBot(token: string): Bot {
         ? "Выдача доступа возвращена в очередь. Повторная попытка будет выполнена worker-процессом с обычным контролем прав и статуса подписки."
         : "Не удалось восстановить выдачу. Проверьте ID, статус подписки, активное пространство и права.");
     } catch (error) {
+      if (error instanceof WorkspaceAccessDeliveryError && error.code === "ACTOR_NOT_AUTHORIZED") {
+        await ctx.reply("Ваши права изменились. Восстанавливать выдачу могут только владелец или администратор пространства.");
+        return;
+      }
       console.error("Control bot /retrydelivery failed:", error instanceof Error ? error.name : "UnknownError");
       await ctx.reply("Не удалось восстановить выдачу доступа.");
     }
