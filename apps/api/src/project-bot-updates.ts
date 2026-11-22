@@ -22,7 +22,16 @@ import { isSubscriptionAccessPermissionActive, PAID_RENEWAL_RESTORABLE_REVOCATIO
 import { classifyTelegramMembershipDeparture } from "./telegram-membership-departure.js";
 import { getAccessRevocationRetryState } from "./access-revocation-retry.js";
 import { reconcileTelegramStarsRefundUsing } from "./telegram-stars-refund-reconciliation.js";
-import { lockSubscriptionAccessScope, lockSubscriptionAccessScopes, requestSubscriptionAccessReconciliation } from "@subpilot/payments";
+import {
+  claimSubscriptionAccessScope,
+  completeSubscriptionAccessScope,
+  DEFAULT_SUBSCRIPTION_ACCESS_SCOPE_LEASE_TTL_MS,
+  failSubscriptionAccessScope,
+  lockSubscriptionAccessScope,
+  lockSubscriptionAccessScopes,
+  requestSubscriptionAccessReconciliation,
+  renewSubscriptionAccessScopeLease
+} from "@subpilot/payments";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
@@ -595,151 +604,291 @@ export async function recordSubscriptionAccessRevocationFailure(
   }, { maxWait: 10_000, timeout: 30_000 });
 }
 
-async function clearSubscriptionAccessDeliveryFailureUsing(
-  tx: Transaction,
-  subscriptionId: string,
-  connectedChatId: string
-): Promise<void> {
-  await tx.subscriptionAccessGrant.updateMany({
-    where: { subscriptionId, connectedChatId, revokedAt: null },
-    data: {
-      deliveryAttempts: 0,
-      deliveryNextAttemptAt: new Date(),
-      deliveryLastError: null,
-      deliveryFailedAt: null
-    }
-  });
-}
-
-async function deliverSubscriptionAccessUnlocked(
-  tx: Transaction,
+/**
+ * Reconcile one subscription's invitation without holding a database
+ * transaction open during Telegram network calls. The durable customer/chat
+ * lease fences this flow against every other migrated access operation.
+ */
+export async function deliverSubscriptionAccess(
   bot: Bot,
   subscriptionId: string,
   chatIds?: string[],
-  isLeaseOwned: () => boolean = () => true
+  isLifecycleLeaseOwned: () => boolean = () => true
 ): Promise<{ links: string[]; alreadyJoined: string[]; failed: string[]; blocked: string[] }> {
-  const subscription = await tx.subscription.findUnique({
-    where: { id: subscriptionId },
-    include: {
-      customer: true,
-      plan: {
-        include: {
-          chats: {
-            include: { connectedChat: true }
-          }
-        }
-      }
-    }
-  });
-
-  if (!subscription || subscription.status !== "ACTIVE") {
-    return { links: [], alreadyJoined: [], failed: [], blocked: [] };
-  }
-
   const results = {
     links: [] as string[],
     alreadyJoined: [] as string[],
     failed: [] as string[],
     blocked: [] as string[]
   };
+  const subscription = await prisma.subscription.findUnique({
+    where: { id: subscriptionId },
+    include: {
+      customer: true,
+      plan: { include: { chats: { include: { connectedChat: true } } } }
+    }
+  });
+  const initialNow = new Date();
+  if (
+    !subscription ||
+    subscription.status !== "ACTIVE" ||
+    (subscription.endsAt !== null && subscription.endsAt <= initialNow)
+  ) return results;
+
   const targetChats = chatIds
-    ? await tx.connectedChat.findMany({
+    ? await prisma.connectedChat.findMany({
         where: {
           projectId: subscription.projectId,
           telegramChatId: {
-            in: chatIds.filter((id) => /^-?\d+$/.test(id)).map((id) => BigInt(id))
+            in: chatIds.filter((id) => /^-?\\d+$/.test(id)).map((id) => BigInt(id))
           }
         }
       })
     : subscription.plan.chats.map((item) => item.connectedChat);
 
   for (const chat of targetChats) {
-    if (!isLeaseOwned()) return results;
+    if (!isLifecycleLeaseOwned()) return results;
     const label = chat.title ?? chat.username ?? chat.telegramChatId.toString();
+    const prepared = await prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+        subscriptionId
+      );
+      await tx.$queryRawUnsafe(
+        'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "subscriptionId" = $1 AND "connectedChatId" = $2 FOR UPDATE',
+        subscriptionId,
+        chat.id
+      );
+      const [currentSubscription, currentGrant] = await Promise.all([
+        tx.subscription.findUnique({
+          where: { id: subscriptionId },
+          select: {
+            customerId: true,
+            status: true,
+            startsAt: true,
+            endsAt: true
+          }
+        }),
+        tx.subscriptionAccessGrant.findUnique({
+          where: {
+            subscriptionId_connectedChatId: {
+              subscriptionId,
+              connectedChatId: chat.id
+            }
+          },
+          select: {
+            id: true,
+            inviteLink: true,
+            expiresAt: true,
+            joinedAt: true,
+            revokedAt: true
+          }
+        })
+      ]);
+      if (!currentSubscription || !currentGrant) return { state: "MISSING" as const };
+      const now = new Date();
+      if (!isSubscriptionAccessPermissionActive({
+        subscriptionStatus: currentSubscription.status,
+        subscriptionStartsAt: currentSubscription.startsAt,
+        subscriptionEndsAt: currentSubscription.endsAt,
+        grantRevokedAt: currentGrant.revokedAt
+      }, now)) return { state: "BLOCKED" as const };
 
-    // Coordinate this chat across all subscriptions for the same buyer.
-    await lockSubscriptionAccessScope(tx, subscription.customerId, chat.id);
+      await lockSubscriptionAccessScope(tx, currentSubscription.customerId, chat.id);
+      await requestSubscriptionAccessReconciliation(
+        tx,
+        currentSubscription.customerId,
+        [chat.id],
+        now
+      );
+      return {
+        state: "READY" as const,
+        customerId: currentSubscription.customerId,
+        grant: currentGrant
+      };
+    }, { maxWait: 10_000, timeout: 15_000 });
 
-    // Lock and validate the concrete chat permission before any Telegram API call.
-    // An active billing subscription cannot recreate a missing or revoked grant.
-    await tx.$queryRawUnsafe(
-      'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "subscriptionId" = $1 AND "connectedChatId" = $2 FOR UPDATE',
-      subscription.id,
-      chat.id
-    );
-    const existing = await tx.subscriptionAccessGrant.findUnique({
-      where: {
-        subscriptionId_connectedChatId: {
-          subscriptionId: subscription.id,
-          connectedChatId: chat.id
-        }
-      }
-    });
-    const permissionCheckedAt = new Date();
-    if (!isSubscriptionAccessPermissionActive({
-      subscriptionStatus: subscription.status,
-      subscriptionStartsAt: subscription.startsAt,
-      subscriptionEndsAt: subscription.endsAt,
-      grantRevokedAt: existing?.revokedAt
-    }, permissionCheckedAt)) {
+    if (prepared.state === "BLOCKED" || prepared.state === "MISSING") {
       results.blocked.push(label);
       continue;
     }
 
-    if (!chat.isActive) {
-      await recordSubscriptionAccessDeliveryFailureUsing(tx, subscription.id, chat.id, "CONNECTED_CHAT_INACTIVE");
+    const lease = await claimSubscriptionAccessScope(
+      prisma,
+      prepared.customerId,
+      chat.id,
+      { leaseTtlMs: DEFAULT_SUBSCRIPTION_ACCESS_SCOPE_LEASE_TTL_MS }
+    );
+    if (!lease) {
       results.failed.push(label);
       continue;
     }
 
-    const telegramUserId = Number(subscription.customer.telegramUserId);
-    let isAlreadyMember = false;
-    let isBanned = false;
+    let ownsScopeLease = true;
+    let heartbeatRunning = false;
+    const ownsLease = (): boolean => ownsScopeLease && isLifecycleLeaseOwned();
+    const heartbeat = setInterval(() => {
+      if (!ownsScopeLease || heartbeatRunning) return;
+      heartbeatRunning = true;
+      void renewSubscriptionAccessScopeLease(prisma, lease, {
+        leaseTtlMs: DEFAULT_SUBSCRIPTION_ACCESS_SCOPE_LEASE_TTL_MS
+      }).then((renewed) => {
+        if (!renewed) ownsScopeLease = false;
+      }).catch(() => {
+        ownsScopeLease = false;
+      }).finally(() => {
+        heartbeatRunning = false;
+      });
+    }, Math.max(1_000, Math.floor(DEFAULT_SUBSCRIPTION_ACCESS_SCOPE_LEASE_TTL_MS / 3)));
+    heartbeat.unref?.();
 
-    try {
-      const member = await bot.api.getChatMember(chat.telegramChatId.toString(), telegramUserId);
-      isAlreadyMember =
-        member.status === "creator" ||
-        member.status === "administrator" ||
-        member.status === "member" ||
-        (member.status === "restricted" && member.is_member);
-      isBanned = member.status === "kicked";
-    } catch {
-      // A buyer who is not in this chat may produce a Telegram API error here.
-      // Invite creation below remains the authoritative check for the bot's invite permissions.
-    }
-    if (!isLeaseOwned()) return results;
-
-    if (isAlreadyMember) {
-      const now = new Date();
-      if (existing?.inviteLink && !existing.revokedAt && existing.expiresAt > now) {
-        if (!isLeaseOwned()) return results;
-        try {
-          await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), existing.inviteLink);
-          if (!isLeaseOwned()) return results;
-        } catch (error) {
-          if (!isTelegramInviteAlreadyRevoked(error)) {
-            if (!isLeaseOwned()) return results;
-            await recordSubscriptionAccessDeliveryFailureUsing(tx, subscription.id, chat.id, "INVITE_REVOKE_FAILED");
-            console.error(
-              "Could not revoke an unused invite link for an existing member:",
-              error instanceof Error ? error.name : "UnknownError"
-            );
-            results.failed.push(label);
-            continue;
-          }
-        }
-      }
-
-      if (!isLeaseOwned()) return results;
-      await tx.subscriptionAccessGrant.update({
+    const retryAt = new Date(Date.now() + Math.min(
+      60 * 60 * 1000,
+      60_000 * (2 ** Math.min(Math.max(lease.attempts - 1, 0), 6))
+    ));
+    const fail = async (errorCode: string): Promise<void> => {
+      if (!ownsLease()) return;
+      await recordSubscriptionAccessDeliveryFailure(subscriptionId, chat.id, errorCode);
+      await failSubscriptionAccessScope(prisma, lease, {
+        retryAt,
+        errorCode: "ACCESS_DELIVERY_" + errorCode
+      });
+    };
+    const scopeStillCurrent = async (tx: Transaction): Promise<boolean> => {
+      const scope = await tx.subscriptionAccessScope.findUnique({
         where: {
-          subscriptionId_connectedChatId: {
-            subscriptionId: subscription.id,
+          customerId_connectedChatId: {
+            customerId: prepared.customerId,
             connectedChatId: chat.id
           }
         },
-        data: {
+        select: {
+          desiredRevision: true,
+          leaseToken: true,
+          leaseExpiresAt: true
+        }
+      });
+      return Boolean(
+        scope &&
+        scope.leaseToken === lease.leaseToken &&
+        scope.desiredRevision === lease.revision &&
+        scope.leaseExpiresAt !== null &&
+        scope.leaseExpiresAt > new Date()
+      );
+    };
+    const updateCurrentGrant = async (
+      expectedInviteLink: string,
+      data: {
+        inviteLink: string;
+        expiresAt: Date;
+        joinedAt: Date | null;
+        deliveryAttempts: number;
+        deliveryNextAttemptAt: Date;
+        deliveryLastError: string | null;
+        deliveryFailedAt: Date | null;
+      }
+    ): Promise<boolean> => prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+        subscriptionId
+      );
+      await tx.$queryRawUnsafe(
+        'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
+        prepared.grant.id
+      );
+      await lockSubscriptionAccessScope(tx, prepared.customerId, chat.id);
+      if (!await scopeStillCurrent(tx)) return false;
+      const currentSubscription = await tx.subscription.findUnique({
+        where: { id: subscriptionId },
+        select: { status: true, startsAt: true, endsAt: true }
+      });
+      const currentGrant = await tx.subscriptionAccessGrant.findUnique({
+        where: { id: prepared.grant.id },
+        select: { revokedAt: true, inviteLink: true }
+      });
+      if (
+        !currentSubscription ||
+        !currentGrant ||
+        currentGrant.inviteLink !== expectedInviteLink ||
+        !isSubscriptionAccessPermissionActive({
+          subscriptionStatus: currentSubscription.status,
+          subscriptionStartsAt: currentSubscription.startsAt,
+          subscriptionEndsAt: currentSubscription.endsAt,
+          grantRevokedAt: currentGrant.revokedAt
+        })
+      ) return false;
+      const updated = await tx.subscriptionAccessGrant.updateMany({
+        where: {
+          id: prepared.grant.id,
+          inviteLink: expectedInviteLink,
+          revokedAt: null
+        },
+        data
+      });
+      return updated.count === 1;
+    }, { maxWait: 10_000, timeout: 15_000 });
+
+    try {
+      if (!chat.isActive) {
+        await fail("CONNECTED_CHAT_INACTIVE");
+        results.failed.push(label);
+        continue;
+      }
+      if (!ownsLease()) {
+        results.failed.push(label);
+        continue;
+      }
+
+      const telegramUserId = Number(subscription.customer.telegramUserId);
+      if (!Number.isSafeInteger(telegramUserId) || telegramUserId <= 0) {
+        await fail("INVITE_CREATION_FAILED");
+        results.failed.push(label);
+        continue;
+      }
+      let isAlreadyMember = false;
+      let isBanned = false;
+      try {
+        const member = await bot.api.getChatMember(chat.telegramChatId.toString(), telegramUserId);
+        isAlreadyMember =
+          member.status === "creator" ||
+          member.status === "administrator" ||
+          member.status === "member" ||
+          (member.status === "restricted" && member.is_member);
+        isBanned = member.status === "kicked";
+      } catch {
+        // As before, a non-member lookup may fail; invite creation remains the
+        // authoritative permission check. A moderation ban is handled below.
+      }
+      if (!ownsLease()) {
+        results.failed.push(label);
+        continue;
+      }
+
+      const existing = prepared.grant;
+      const now = new Date();
+      if (isBanned) {
+        await fail("SUBSCRIBER_ADMIN_BANNED");
+        results.failed.push(label);
+        continue;
+      }
+
+      if (isAlreadyMember) {
+        if (existing.inviteLink && !existing.revokedAt && existing.expiresAt > now) {
+          try {
+            await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), existing.inviteLink);
+          } catch (error) {
+            if (!isTelegramInviteAlreadyRevoked(error)) {
+              await fail("INVITE_REVOKE_FAILED");
+              results.failed.push(label);
+              continue;
+            }
+          }
+        }
+        if (!ownsLease()) {
+          results.failed.push(label);
+          continue;
+        }
+        const persisted = await updateCurrentGrant(existing.inviteLink, {
           inviteLink: "",
           expiresAt: new Date(0),
           joinedAt: now,
@@ -747,90 +896,79 @@ async function deliverSubscriptionAccessUnlocked(
           deliveryNextAttemptAt: now,
           deliveryLastError: null,
           deliveryFailedAt: null
-        }
-      });
-      results.alreadyJoined.push(label);
-      continue;
-    }
-
-    // A Telegram ban is an administrator/moderator decision. Never undo it
-    // automatically as part of paid-access delivery, even after an owner
-    // explicitly re-grants the database permission.
-    if (isBanned) {
-      await recordSubscriptionAccessDeliveryFailureUsing(tx, subscription.id, chat.id, "SUBSCRIBER_ADMIN_BANNED");
-      results.failed.push(label);
-      continue;
-    }
-
-    const previousJoinWasCleared = Boolean(existing?.joinedAt && !isAlreadyMember);
-    const now = new Date();
-    if (!previousJoinWasCleared && existing && !existing.revokedAt && existing.inviteLink &&
-        existing.expiresAt > now) {
-      await clearSubscriptionAccessDeliveryFailureUsing(tx, subscription.id, chat.id);
-      results.links.push(label + ": " + existing.inviteLink);
-      continue;
-    }
-
-    try {
-      // Revoke the previous link before clearing it from the database. If Telegram
-      // rejects the revoke, retain the old link so the next worker pass can retry safely.
-      if (existing?.inviteLink && !existing.revokedAt && existing.expiresAt > now) {
-        if (!isLeaseOwned()) return results;
-        try {
-          await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), existing.inviteLink);
-        } catch (error) {
-          if (!isTelegramInviteAlreadyRevoked(error)) throw error;
-        }
-        if (!isLeaseOwned()) return results;
-      }
-
-      if (previousJoinWasCleared && existing) {
-        if (!isLeaseOwned()) return results;
-        await tx.subscriptionAccessGrant.updateMany({
-          where: { id: existing.id, revokedAt: null },
-          data: { joinedAt: null, inviteLink: "", expiresAt: new Date(0) }
         });
-      }
-
-      // Persist a pending delivery row before creating the replacement invite.
-      if (!isLeaseOwned()) return results;
-      await tx.subscriptionAccessGrant.update({
-        where: {
-          subscriptionId_connectedChatId: {
-            subscriptionId: subscription.id,
-            connectedChatId: chat.id
+        if (persisted) results.alreadyJoined.push(label);
+        else results.blocked.push(label);
+      } else if (
+        existing.inviteLink &&
+        !existing.revokedAt &&
+        existing.expiresAt > now &&
+        !existing.joinedAt
+      ) {
+        const cleared = await prisma.$transaction(async (tx) => {
+          await tx.subscriptionAccessGrant.updateMany({
+            where: { id: existing.id, inviteLink: existing.inviteLink, revokedAt: null },
+            data: {
+              deliveryAttempts: 0,
+              deliveryNextAttemptAt: new Date(),
+              deliveryLastError: null,
+              deliveryFailedAt: null
+            }
+          });
+        });
+        void cleared;
+        results.links.push(label + ": " + existing.inviteLink);
+      } else {
+        if (existing.inviteLink && !existing.revokedAt && existing.expiresAt > now) {
+          try {
+            await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), existing.inviteLink);
+          } catch (error) {
+            if (!isTelegramInviteAlreadyRevoked(error)) {
+              await fail("INVITE_REVOKE_FAILED");
+              results.failed.push(label);
+              continue;
+            }
           }
-        },
-        data: {
+        }
+        if (!ownsLease()) {
+          results.failed.push(label);
+          continue;
+        }
+
+        const oldInviteLink = existing.inviteLink;
+        const cleared = await updateCurrentGrant(oldInviteLink, {
           inviteLink: "",
           expiresAt: new Date(0),
-          joinedAt: null
+          joinedAt: null,
+          deliveryAttempts: existing.joinedAt ? existing.id ? 0 : 0 : 0,
+          deliveryNextAttemptAt: new Date(),
+          deliveryLastError: null,
+          deliveryFailedAt: null
+        });
+        if (!cleared) {
+          results.blocked.push(label);
+          continue;
         }
-      });
-
-      if (!isLeaseOwned()) return results;
-      const expiresAt = new Date(Date.now() + INVITE_LIFETIME_SECONDS * 1000);
-      const invite = await bot.api.createChatInviteLink(
-        chat.telegramChatId.toString(),
-        {
-          name: "SubPilot " + subscription.id.slice(-12),
-          expire_date: Math.floor(expiresAt.getTime() / 1000),
-          member_limit: 1
+        if (!ownsLease()) {
+          results.failed.push(label);
+          continue;
         }
-      );
 
-      if (!isLeaseOwned()) {
-        await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), invite.invite_link).catch(() => undefined);
-        return results;
-      }
-      await tx.subscriptionAccessGrant.update({
-        where: {
-          subscriptionId_connectedChatId: {
-            subscriptionId: subscription.id,
-            connectedChatId: chat.id
+        const expiresAt = new Date(Date.now() + INVITE_LIFETIME_SECONDS * 1000);
+        const invite = await bot.api.createChatInviteLink(
+          chat.telegramChatId.toString(),
+          {
+            name: "SubPilot " + subscriptionId.slice(-12),
+            expire_date: Math.floor(expiresAt.getTime() / 1000),
+            member_limit: 1
           }
-        },
-        data: {
+        );
+        if (!ownsLease()) {
+          await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), invite.invite_link).catch(() => undefined);
+          results.failed.push(label);
+          continue;
+        }
+        const saved = await updateCurrentGrant("", {
           inviteLink: invite.invite_link,
           expiresAt,
           joinedAt: null,
@@ -838,65 +976,39 @@ async function deliverSubscriptionAccessUnlocked(
           deliveryNextAttemptAt: new Date(),
           deliveryLastError: null,
           deliveryFailedAt: null
-        }
-      });
-
-      results.links.push(label + ": " + invite.invite_link);
-    } catch (error) {
-      if (isLeaseOwned()) {
-        await recordSubscriptionAccessDeliveryFailureUsing(tx, 
-          subscription.id,
-          chat.id,
-          "INVITE_CREATION_FAILED"
-        ).catch((recordError: unknown) => {
-          console.error(
-            "Could not persist subscription access delivery failure:",
-            recordError instanceof Error ? recordError.name : "UnknownError"
-          );
         });
+        if (!saved) {
+          // Telegram does not know about the database lease. Compensate when a
+          // stale worker created a credential that it can no longer persist.
+          await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), invite.invite_link).catch(() => undefined);
+          results.blocked.push(label);
+          continue;
+        }
+        results.links.push(label + ": " + invite.invite_link);
       }
+
+      if (!ownsLease()) {
+        results.failed.push(label);
+        continue;
+      }
+      const completed = await completeSubscriptionAccessScope(prisma, lease);
+      if (!completed) {
+        results.failed.push(label);
+        continue;
+      }
+    } catch (error) {
+      await fail("INVITE_CREATION_FAILED").catch(() => undefined);
       console.error(
-        "Could not create subscription invite:",
+        "Could not reconcile subscription access outside a database transaction:",
         error instanceof Error ? error.name : "UnknownError"
       );
       results.failed.push(label);
+    } finally {
+      clearInterval(heartbeat);
     }
   }
 
   return results;
-}
-
-/**
- * Serialize access delivery with payment activation, administrative revocation
- * and expiry removal. The subscription row lock is held across Telegram side
- * effects, and the entitlement is re-read after acquiring it.
- */
-export async function deliverSubscriptionAccess(
-  bot: Bot,
-  subscriptionId: string,
-  chatIds?: string[],
-  isLeaseOwned: () => boolean = () => true
-): Promise<{ links: string[]; alreadyJoined: string[]; failed: string[]; blocked: string[] }> {
-  return prisma.$transaction(async (tx) => {
-    await tx.$queryRawUnsafe(
-      'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
-      subscriptionId
-    );
-    const now = new Date();
-    const current = await tx.subscription.findUnique({
-      where: { id: subscriptionId },
-      select: { status: true, endsAt: true }
-    });
-    if (
-      !current ||
-      current.status !== "ACTIVE" ||
-      (current.endsAt !== null && current.endsAt <= now)
-    ) {
-      return { links: [], alreadyJoined: [], failed: [], blocked: [] };
-    }
-
-    return deliverSubscriptionAccessUnlocked(tx, bot, subscriptionId, chatIds, isLeaseOwned);
-  }, { maxWait: 10_000, timeout: 120_000 });
 }
 
 async function processSuccessfulStarsPayment(
