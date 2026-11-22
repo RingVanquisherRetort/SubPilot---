@@ -104,14 +104,15 @@ Each connected project bot exposes a button-first buyer interface:
 
 - `/start` — opens the subscription menu.
 - **View subscriptions** — opens an inline tariff list.
-- **Select a tariff** — opens the Stars invoice.
+- **My subscriptions** — shows active entitlements and recurring-payment status.
+- **Select a tariff** — opens a one-time Stars invoice or a recurring Stars invoice link.
 - Renewal reminders include a **Renew subscription** button.
 
-The `/plans` and `/buy PLAN_ID` commands remain as an advanced fallback, but are not required for normal purchases.
+The `/plans`, `/buy PLAN_ID` and `/subscription` commands remain available as fallbacks. Recurring Stars plans currently require a 30-day duration; Telegram controls the renewal schedule. Buyers can disable or re-enable future renewals from `/subscription`. Disabling renewal preserves access until the already-paid Telegram subscription period expires.
 
-For a digital subscription sold inside Telegram, the invoice uses `XTR`. Before accepting payment, SubPilot checks the pending payment, buyer Telegram ID, amount and currency. A subscription is activated only after a Telegram `successful_payment` update.
+For digital subscriptions sold inside Telegram, invoices use `XTR`. Recurring invoices are generated as Telegram invoice links with the 30-day subscription period. Before accepting an initial payment, SubPilot checks the pending payment, buyer Telegram ID, amount and currency. Every later successful recurring charge is stored as its own payment ledger record and applied once using the Telegram charge ID. Subscription expiry is synchronized from Telegram's successful-payment update.
 
-After payment, the project bot creates a one-person invite link for each destination captured in the purchase snapshot. Each invite expires after 24 hours; joins are recorded from `chat_member` updates. Refunds can be initiated from the central bot using `/refundpayment`. Access grants are persisted even when a destination is temporarily inactive, allowing the lifecycle worker to retry delivery after the project bot's permissions are restored.
+After payment, the project bot creates a one-person invite link for each destination captured in the purchase snapshot. Each invite expires after 24 hours; joins are recorded from `chat_member` updates. Refunds can be initiated from the central bot using `/refundpayment`; refunds of recurring renewals are reconciled against the matching charge ledger row while retaining the original invoice payload as the anchor. Access grants are persisted even when a destination is temporarily inactive, allowing the lifecycle worker to retry delivery after the project bot's permissions are restored.
 
 The API starts a lifecycle worker after the database and HTTP server are ready. It sends buyer renewal reminders approximately three days and one day before expiry, queues owner/author notifications for those milestones and expiry, extends an existing active subscription when a buyer renews early, expires subscriptions on schedule, revokes unused invite links and removes joined subscribers from connected chats. Owner notifications are delivered by the central control bot and retried with backoff. Removal requires the project bot to retain the necessary administrator rights. Configure `CONTROL_BOT_TOKEN` for the API service as well as the control-bot service. The lifecycle worker polls once per minute and uses a PostgreSQL-backed lease with heartbeat so only one API replica runs a lifecycle pass at a time. Exhausted owner notifications are retained after the 10-attempt ceiling and can be inspected/requeued by workspace owners/admins with `/failednotifications` and `/retrynotification ID`. Failed subscription access deliveries have a separate 10-attempt dead-letter path, owner alert and audited recovery commands `/faileddeliveries` and `/retrydelivery ACCESS_GRANT_ID`.
 
