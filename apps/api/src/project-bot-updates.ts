@@ -1159,7 +1159,10 @@ async function processSuccessfulStarsPayment(
             deliveryAttempts: 0,
             deliveryNextAttemptAt: now,
             deliveryLastError: null,
-            deliveryFailedAt: null
+            deliveryFailedAt: null,
+            revocationAttempts: 0,
+            revocationNextAttemptAt: now,
+            revocationLastError: null
           }
         });
       }
@@ -2771,6 +2774,11 @@ export async function handleProjectBotUpdate(
       } catch (error) {
         inviteRevoked = isTelegramInviteAlreadyRevoked(error);
         if (!inviteRevoked) {
+          await recordSubscriptionAccessRevocationFailure(
+            grant.subscriptionId,
+            grant.id,
+            "INVITE_REVOKE_FAILED"
+          );
           console.error(
             "Could not revoke an invite used without a current access permission:",
             error instanceof Error ? error.name : "UnknownError"
@@ -2790,7 +2798,13 @@ export async function handleProjectBotUpdate(
           );
           await tx.subscriptionAccessGrant.updateMany({
             where: { id: grant.id, inviteLink },
-            data: { inviteLink: "", expiresAt: new Date(0) }
+            data: {
+              inviteLink: "",
+              expiresAt: new Date(0),
+              revocationAttempts: 0,
+              revocationNextAttemptAt: new Date(),
+              revocationLastError: null
+            }
           });
         });
       }
