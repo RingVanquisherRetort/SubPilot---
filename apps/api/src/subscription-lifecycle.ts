@@ -594,7 +594,8 @@ async function expireSubscriptions(
             });
 
             const chatId = currentGrant.connectedChat.telegramChatId.toString();
-            let revocationReason = currentStatus === "CANCELLED" ? "ADMIN_REVOKED" : "SUBSCRIPTION_EXPIRED";
+            let revocationReason: "ADMIN_REVOKED" | "SUBSCRIPTION_EXPIRED" | "ADMIN_EXCLUDED" =
+              currentStatus === "CANCELLED" ? "ADMIN_REVOKED" : "SUBSCRIPTION_EXPIRED";
             if (!isLeaseOwned()) {
               return { completed: false, preserved: false, skipped: false, leaseLost: true };
             }
