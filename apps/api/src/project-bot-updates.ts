@@ -2648,6 +2648,47 @@ export async function handleProjectBotUpdate(
         );
       }
 
+      if (!inviteRevoked && grant.revocationReason === "ADMIN_EXCLUDED") {
+        await recordSubscriptionAccessRevocationFailure(
+          grant.subscriptionId,
+          grant.id,
+          "INVITE_REVOKE_FAILED"
+        ).catch((error: unknown) => {
+          console.error(
+            "Could not schedule an invite-revocation retry after an admin exclusion:",
+            error instanceof Error ? error.name : "UnknownError"
+          );
+        });
+      }
+
+      if (inviteRevoked && grant.revocationReason === "ADMIN_EXCLUDED") {
+        await prisma.$transaction(async (tx) => {
+          await tx.$queryRawUnsafe(
+            'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+            grant.subscriptionId
+          );
+          await tx.$queryRawUnsafe(
+            'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
+            grant.id
+          );
+          await tx.subscriptionAccessGrant.updateMany({
+            where: {
+              id: grant.id,
+              inviteLink,
+              revokedAt: { not: null },
+              revocationReason: "ADMIN_EXCLUDED"
+            },
+            data: {
+              inviteLink: "",
+              expiresAt: new Date(0),
+              revocationAttempts: 0,
+              revocationNextAttemptAt: new Date(),
+              revocationLastError: null
+            }
+          });
+        });
+      }
+
       if (!inviteRevoked || !unintendedUserRemoved) {
         await enqueueProjectOwnerNotification({
           projectId,
