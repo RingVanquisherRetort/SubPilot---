@@ -103,6 +103,9 @@ test("agency analytics aggregate subscribers, churn, renewals and revenue by cur
     const cancelledCustomer = await prisma.projectCustomer.create({
       data: { projectId: projectB.id, telegramUserId: telegramBase + 105n }
     });
+    const expiredDuringPeriodCustomer = await prisma.projectCustomer.create({
+      data: { projectId: projectA.id, telegramUserId: telegramBase + 106n }
+    });
 
     const createSubscription = async (input: {
       projectId: string;
@@ -182,6 +185,16 @@ test("agency analytics aggregate subscribers, churn, renewals and revenue by cur
       endsAt: new Date(from.getTime() + 20 * 24 * 60 * 60_000),
       cancelledAt: new Date(from.getTime() + 7 * 24 * 60 * 60_000)
     });
+    await createSubscription({
+      projectId: projectA.id,
+      customerId: expiredDuringPeriodCustomer.id,
+      planId: planA.id,
+      status: "EXPIRED",
+      grantType: "PAID",
+      createdAt: new Date(from.getTime() + 2 * 24 * 60 * 60_000),
+      startsAt: new Date(from.getTime() + 2 * 24 * 60 * 60_000),
+      endsAt: new Date(from.getTime() + 6 * 24 * 60 * 60_000)
+    });
 
     await prisma.payment.createMany({
       data: [
@@ -237,11 +250,12 @@ test("agency analytics aggregate subscribers, churn, renewals and revenue by cur
     });
     assert.equal(report.activeSubscriptions, 4);
     assert.equal(report.uniqueActiveSubscribers, 3);
-    assert.equal(report.newSubscriptions, 4);
-    assert.equal(report.newSubscribers, 3);
-    assert.equal(report.expiredSubscriptions, 1);
+    assert.equal(report.newSubscriptions, 5);
+    assert.equal(report.newSubscribers, 4);
+    assert.equal(report.expiredSubscriptions, 2);
     assert.equal(report.cancelledSubscriptions, 1);
-    assert.equal(report.churnEvents, 2);
+    assert.equal(report.churnEvents, 3);
+    assert.equal(report.openingBaseChurnEvents, 2);
     assert.equal(report.activeAtPeriodStart, 2);
     assert.equal(report.churnRatePercent, 100);
     assert.equal(report.newTrials, 1);
