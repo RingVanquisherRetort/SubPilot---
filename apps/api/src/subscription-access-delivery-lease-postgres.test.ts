@@ -3,7 +3,11 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import type { Bot } from "grammy";
 import { prisma } from "@subpilot/database";
-import { lockSubscriptionAccessScope, requestSubscriptionAccessReconciliation } from "@subpilot/payments";
+import {
+  claimSubscriptionAccessScope,
+  lockSubscriptionAccessScope,
+  requestSubscriptionAccessReconciliation
+} from "@subpilot/payments";
 import { deliverSubscriptionAccess } from "./project-bot-updates.js";
 
 function deferred<T = void>(): {
@@ -105,10 +109,22 @@ test("subscription invite delivery releases its database transaction before Tele
       }
     } as unknown as Bot;
 
+    await prisma.$transaction((tx) =>
+      requestSubscriptionAccessReconciliation(tx, customer.id, [chat.id])
+    );
+    const preclaimedLease = await claimSubscriptionAccessScope(
+      prisma,
+      customer.id,
+      chat.id
+    );
+    assert.ok(preclaimedLease, "background worker should claim the dirty customer/chat scope");
+
     delivery = deliverSubscriptionAccess(
       fakeBot,
       subscription.id,
-      [chat.telegramChatId.toString()]
+      [chat.telegramChatId.toString()],
+      () => true,
+      preclaimedLease
     );
 
     await Promise.race([
