@@ -324,6 +324,10 @@ export async function grantTrialSubscriptionAccess(input: AccessOperationInput &
 
     const customer = await ensureCustomer(tx, project.id, telegramUserId);
     const connectedChatIds = plan.chats.map((chat) => chat.connectedChatId);
+    // Trial creation has no pre-existing subscription row to lock. Taking the
+    // shared scope before checking for an active entitlement makes the one-trial
+    // and no-overlap decision serial with payment/expiry operations.
+    await lockSubscriptionAccessScopes(tx, customer.id, connectedChatIds);
     const priorTrial = await tx.subscription.findFirst({
       where: {
         customerId: customer.id,
@@ -357,7 +361,6 @@ export async function grantTrialSubscriptionAccess(input: AccessOperationInput &
         endsAt
       }
     });
-    await lockSubscriptionAccessScopes(tx, customer.id, connectedChatIds);
     await ensureAccessGrantRows(tx, created.id, connectedChatIds, now);
     await tx.auditLog.create({
       data: {
