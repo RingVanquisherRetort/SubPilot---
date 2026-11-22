@@ -17,6 +17,7 @@ import { shouldQueueNewSubscriberNotification } from "./payment-event-notificati
 import { shouldProcessTelegramUpdate } from "./telegram-update-order.js";
 import { shouldActivateConnectedChat } from "./connected-chat-quota.js";
 import { parseTelegramStarSubscriptionUpdate } from "./telegram-star-subscription-update.js";
+import { classifyTelegramStarsPayment } from "./telegram-star-payment-kind.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
@@ -799,6 +800,8 @@ async function processSuccessfulStarsPayment(
 
   if (
     !payment ||
+    typeof receipt.telegram_payment_charge_id !== "string" ||
+    receipt.telegram_payment_charge_id.length === 0 ||
     !isPaymentFromProjectBot(payment.metadata, projectBotId) ||
     !payment.subscription ||
     payment.projectId !== projectId ||
@@ -833,9 +836,13 @@ async function processSuccessfulStarsPayment(
   const expirationFromTelegram = receipt.subscription_expiration_date
     ? new Date(receipt.subscription_expiration_date * 1000)
     : null;
+  const recurringReceipt = receipt as typeof receipt & {
+    is_recurring?: boolean;
+    is_first_recurring?: boolean;
+  };
   const transactionResult = await prisma.$transaction(async (tx) => {
-    // Serialize extensions for a shared entitlement so concurrent successful payments
-    // cannot calculate their end date from the same stale subscription snapshot.
+    // Serialize all successful charges for one entitlement. Telegram may retry
+    // updates, and multiple monthly renewals must extend from the latest period.
     await tx.$queryRawUnsafe('SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE', subscription.id);
     const currentSubscription = await tx.subscription.findUnique({
       where: { id: subscription.id }
@@ -844,36 +851,114 @@ async function processSuccessfulStarsPayment(
       throw new Error("Subscription disappeared while processing a successful payment.");
     }
 
-    const updated = await tx.payment.updateMany({
-      where: {
-        id: payment.id,
-        status: { in: ["PENDING", "CANCELLED"] },
-        provider: "TELEGRAM_STARS",
-        providerPaymentId: null
-      },
-      data: {
-        status: "SUCCEEDED",
-        providerPaymentId: receipt.telegram_payment_charge_id,
-        paidAt: now
-      }
+    const currentAnchorPayment = await tx.payment.findUnique({
+      where: { id: payment.id },
+      select: { status: true }
     });
+    if (!currentAnchorPayment) {
+      throw new Error("The original Telegram Stars payment disappeared during processing.");
+    }
 
-    if (updated.count !== 1) {
+    const paymentKind = classifyTelegramStarsPayment({
+      planIsRecurring: metadata.isRecurring === true,
+      paymentStatus: currentAnchorPayment.status,
+      initialChargeId: currentSubscription.telegramStarInitialChargeId,
+      isRecurring: recurringReceipt.is_recurring,
+      isFirstRecurring: recurringReceipt.is_first_recurring
+    });
+    if (!paymentKind) {
       return {
         endsAt: currentSubscription.endsAt,
         isInitialActivation: false,
+        isRenewal: false,
+        paymentRecordId: payment.id,
         paymentWasProcessed: false
       };
+    }
+
+    const eventKey = "telegram-stars:" + receipt.telegram_payment_charge_id;
+    if (paymentKind === "RECURRING_RENEWAL") {
+      const alreadyRecorded = await tx.paymentWebhookEvent.findUnique({
+        where: { dedupeKey: eventKey },
+        select: { id: true }
+      });
+      if (alreadyRecorded) {
+        return {
+          endsAt: currentSubscription.endsAt,
+          isInitialActivation: false,
+          isRenewal: false,
+          paymentRecordId: payment.id,
+          paymentWasProcessed: false
+        };
+      }
     }
 
     const currentEnd = currentSubscription.endsAt && currentSubscription.endsAt > now
       ? currentSubscription.endsAt
       : now;
-    const endsAt = expirationFromTelegram ??
+    const isRecurringPayment = paymentKind !== "ONE_TIME";
+    const endsAt = (isRecurringPayment ? expirationFromTelegram : null) ??
       (snapshotDurationDays
         ? new Date(currentEnd.getTime() + snapshotDurationDays * 24 * 60 * 60 * 1000)
         : null);
-    const isInitialActivation = currentSubscription.status !== "ACTIVE";
+    const isInitialActivation = paymentKind === "RECURRING_RENEWAL"
+      ? false
+      : currentSubscription.status !== "ACTIVE";
+    let paymentRecordId = payment.id;
+
+    if (paymentKind === "RECURRING_RENEWAL") {
+      // Keep the checkout payment as the immutable invoice-payload anchor.
+      // Each later Telegram charge receives its own ledger row so refunds,
+      // revenue reports and idempotency remain period-specific.
+      const renewalPayment = await tx.payment.create({
+        data: {
+          projectId: payment.projectId,
+          customerId: payment.customerId,
+          subscriptionId: subscription.id,
+          provider: "TELEGRAM_STARS",
+          providerPaymentId: receipt.telegram_payment_charge_id,
+          idempotencyKey: "telegram-stars-renewal:" + receipt.telegram_payment_charge_id,
+          amount: payment.amount,
+          currency: "XTR",
+          status: "SUCCEEDED",
+          paidAt: now,
+          metadata: {
+            ...metadata,
+            isRecurring: true,
+            isRenewal: true,
+            originalPaymentId: payment.id,
+            telegramPaymentChargeId: receipt.telegram_payment_charge_id,
+            subscriptionExpirationDate: receipt.subscription_expiration_date ?? null
+          }
+        },
+        select: { id: true }
+      });
+      paymentRecordId = renewalPayment.id;
+    } else {
+      const updated = await tx.payment.updateMany({
+        where: {
+          id: payment.id,
+          status: { in: ["PENDING", "CANCELLED"] },
+          provider: "TELEGRAM_STARS",
+          providerPaymentId: null
+        },
+        data: {
+          status: "SUCCEEDED",
+          providerPaymentId: receipt.telegram_payment_charge_id,
+          paidAt: now
+        }
+      });
+
+      if (updated.count !== 1) {
+        return {
+          endsAt: currentSubscription.endsAt,
+          isInitialActivation: false,
+          isRenewal: false,
+          paymentRecordId: payment.id,
+          paymentWasProcessed: false
+        };
+      }
+    }
 
     await tx.subscription.update({
       where: { id: subscription.id },
@@ -882,31 +967,42 @@ async function processSuccessfulStarsPayment(
         startsAt: currentSubscription.startsAt ?? now,
         endsAt,
         reminder3dAt: null,
-        reminder1dAt: null
+        reminder1dAt: null,
+        ...(paymentKind === "INITIAL_RECURRING"
+          ? {
+              telegramStarInitialChargeId: receipt.telegram_payment_charge_id,
+              telegramStarSubscriptionState: "ACTIVE"
+            }
+          : paymentKind === "RECURRING_RENEWAL"
+            ? { telegramStarSubscriptionState: "ACTIVE" }
+            : {})
       }
     });
 
     await tx.paymentWebhookEvent.create({
       data: {
         connectionId: null,
-        dedupeKey: "telegram-stars:" + receipt.telegram_payment_charge_id,
+        dedupeKey: eventKey,
         providerEventId: receipt.telegram_payment_charge_id,
         eventType: "telegram.stars.payment.succeeded",
         payload: {
+          paymentId: paymentRecordId,
+          originalPaymentId: payment.id,
           invoicePayload: receipt.invoice_payload,
           currency: receipt.currency,
           totalAmount: receipt.total_amount,
           telegramPaymentChargeId: receipt.telegram_payment_charge_id,
           providerPaymentChargeId: receipt.provider_payment_charge_id,
-          isInitialActivation
+          isInitialActivation,
+          isRecurring: isRecurringPayment,
+          isRenewal: paymentKind === "RECURRING_RENEWAL"
         },
         processedAt: now
       }
     });
 
     // Persist pending access-delivery rows in the same transaction as payment
-    // confirmation. The lifecycle worker can recover if the process stops before
-    // the immediate Telegram invite-link delivery completes.
+    // confirmation. The lifecycle worker can recover after a process interruption.
     let connectedChatIds: string[] = [];
     if (snapshotChatIds !== undefined) {
       const telegramChatIds = snapshotChatIds
@@ -947,9 +1043,15 @@ async function processSuccessfulStarsPayment(
       });
     }
 
-    return { endsAt, isInitialActivation, paymentWasProcessed: true };
+    return {
+      endsAt,
+      isInitialActivation,
+      isRenewal: paymentKind === "RECURRING_RENEWAL",
+      paymentRecordId,
+      paymentWasProcessed: true
+    };
   });
-  const { endsAt, isInitialActivation, paymentWasProcessed } = transactionResult;
+  const { endsAt, isInitialActivation, isRenewal, paymentRecordId, paymentWasProcessed } = transactionResult;
 
   const queueNewSubscriberNotification = async (accessEndsAt: Date | null): Promise<void> => {
     const buyerName = [payment.customer.firstName, payment.customer.lastName]
@@ -1005,6 +1107,20 @@ async function processSuccessfulStarsPayment(
 
   if (isInitialActivation) {
     await queueNewSubscriberNotification(endsAt);
+  } else if (isRenewal) {
+    const buyerName = [payment.customer.firstName, payment.customer.lastName]
+      .filter(Boolean)
+      .join(" ") || (payment.customer.username ? "@" + payment.customer.username : "Покупатель Telegram");
+    await enqueueProjectOwnerNotification({
+      projectId,
+      dedupeKey: "payment:renewal:" + receipt.telegram_payment_charge_id,
+      eventType: "subscription_renewal",
+      messageText:
+        "🔁 Автопродление подписки подтверждено\nПроект: «" + payment.project.name + "»\n" +
+        "Подписчик: " + buyerName + "\nТариф: «" + snapshotPlanTitle + "»\n" +
+        "Оплата: " + payment.amount.toString() + " ⭐\n" +
+        (endsAt ? "Доступ действует до: " + endsAt.toLocaleString("ru-RU") : "Срок действия: без ограничения")
+    });
   }
 
   const access = await deliverSubscriptionAccess(bot, subscription.id, snapshotChatIds);
