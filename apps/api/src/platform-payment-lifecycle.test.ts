@@ -18,6 +18,7 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
   let actorId: string | undefined;
   let workspaceId: string | undefined;
   let planId: string | undefined;
+  const invalidPlanIds: string[] = [];
   let connectionId: string | undefined;
   const previousPeriodStart = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const previousPeriodEnd = new Date(Date.now() + 60 * 60 * 1000);
@@ -122,6 +123,31 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
       salesSurface: "INDEPENDENT_WEB" as const,
       telegramTpaRelated: false
     };
+
+    for (const [label, price] of [["zero", "0.00"], ["negative", "-1.00"]] as const) {
+      const invalidPlan = await prisma.platformPlan.create({
+        data: {
+          code: `yoo-${label}-${suffix}`,
+          title: `Invalid ${label} price`,
+          price,
+          currency: "RUB",
+          billingPeriodDays: 30,
+          features: plan.features
+        }
+      });
+      invalidPlanIds.push(invalidPlan.id);
+      await assert.rejects(
+        createPlatformPaymentCheckout({
+          ...checkoutInput,
+          planCode: invalidPlan.code,
+          idempotencyKey: `invalid-${label}-${suffix}`
+        }, { fetch: fakeFetch }),
+        (error: unknown) => error instanceof PlatformPaymentLifecycleError &&
+          error.code === "PLAN_NOT_AVAILABLE"
+      );
+    }
+    assert.equal(createCalls, 0, "invalid catalogue prices must be rejected before contacting YooKassa");
+
     const checkout = await createPlatformPaymentCheckout(checkoutInput, { fetch: fakeFetch });
     paymentId = checkout.paymentId;
     assert.equal(checkout.status, "PENDING");
@@ -271,6 +297,7 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
       await prisma.auditLog.deleteMany({ where: { workspaceId } });
       await prisma.workspace.deleteMany({ where: { id: workspaceId } });
     }
+    if (invalidPlanIds.length) await prisma.platformPlan.deleteMany({ where: { id: { in: invalidPlanIds } } });
     if (planId) await prisma.platformPlan.deleteMany({ where: { id: planId } });
     if (actorId) await prisma.user.deleteMany({ where: { id: actorId } });
     await prisma.$disconnect();
