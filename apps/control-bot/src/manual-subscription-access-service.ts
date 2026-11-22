@@ -424,15 +424,14 @@ export async function revokeSubscriptionAccessManually(
       const projectBotId = typeof metadata?.projectBotId === "string"
         ? metadata.projectBotId
         : null;
+      if (!initialPayment || !projectBotId) {
+        throw new ManualSubscriptionAccessError("TELEGRAM_RENEWAL_CANCEL_FAILED");
+      }
       const projectBot = await tx.projectBot.findFirst({
-        where: {
-          projectId: target.projectId,
-          ...(projectBotId ? { id: projectBotId } : { isPrimary: true })
-        },
-        orderBy: [{ isPrimary: "desc" }, { createdAt: "desc" }],
+        where: { id: projectBotId, projectId: target.projectId },
         select: { tokenEncrypted: true }
       });
-      if (!initialPayment || !projectBot) {
+      if (!projectBot) {
         throw new ManualSubscriptionAccessError("TELEGRAM_RENEWAL_CANCEL_FAILED");
       }
 
