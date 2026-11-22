@@ -270,3 +270,36 @@ test("delivery withholds an invite for a restricted non-member", {
     assert.equal(grant.deliveryLastError, "SUBSCRIBER_ADMIN_BANNED");
   });
 });
+
+test("invite delivery treats a transport failure as unknown membership, not as permission to invite", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withDeliveryFixture(async ({ subscription, chat }) => {
+    let invitations = 0;
+    const bot = {
+      api: {
+        getChatMember: async () => { throw new Error("ETIMEDOUT"); },
+        createChatInviteLink: async () => {
+          invitations += 1;
+          return { invite_link: "https://t.me/+unsafe-invite" };
+        }
+      }
+    } as unknown as Bot;
+
+    const result = await deliverSubscriptionAccess(
+      bot, subscription.id, [chat.telegramChatId.toString()]
+    );
+    assert.equal(invitations, 0);
+    assert.deepEqual(result.links, []);
+    assert.deepEqual(result.failed, ["Access delivery lease chat"]);
+    const grant = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: {
+        subscriptionId_connectedChatId: {
+          subscriptionId: subscription.id,
+          connectedChatId: chat.id
+        }
+      }
+    });
+    assert.equal(grant.deliveryLastError, "MEMBERSHIP_LOOKUP_FAILED");
+  });
+});
