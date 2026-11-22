@@ -900,6 +900,7 @@ async function processSuccessfulStarsPayment(
         endsAt: currentSubscription.endsAt,
         isInitialActivation: false,
         isRenewal: false,
+        paymentRecordId: payment.id,
         paymentRejected: false,
         paymentWasProcessed: false
       };
@@ -917,6 +918,7 @@ async function processSuccessfulStarsPayment(
         endsAt: currentSubscription.endsAt,
         isInitialActivation: false,
         isRenewal: false,
+        paymentRecordId: payment.id,
         paymentRejected: true,
         paymentWasProcessed: false
       };
@@ -983,6 +985,7 @@ async function processSuccessfulStarsPayment(
           endsAt: currentSubscription.endsAt,
           isInitialActivation: false,
           isRenewal: false,
+          paymentRecordId: payment.id,
           paymentRejected: false,
           paymentWasProcessed: false
         };
@@ -1002,7 +1005,10 @@ async function processSuccessfulStarsPayment(
               telegramStarInitialChargeId: receipt.telegram_payment_charge_id,
               telegramStarSubscriptionState: "ACTIVE"
             }
-          : {})
+          : paymentKind === "RECURRING_RENEWAL" &&
+              currentSubscription.telegramStarSubscriptionState === "FAILED"
+            ? { telegramStarSubscriptionState: "ACTIVE" }
+            : {})
       }
     });
 
@@ -1074,11 +1080,12 @@ async function processSuccessfulStarsPayment(
       endsAt,
       isInitialActivation,
       isRenewal: paymentKind === "RECURRING_RENEWAL",
+      paymentRecordId,
       paymentRejected: false,
       paymentWasProcessed: true
     };
   });
-  const { endsAt, isInitialActivation, isRenewal, paymentRejected, paymentWasProcessed } = transactionResult;
+  const { endsAt, isInitialActivation, isRenewal, paymentRecordId, paymentRejected, paymentWasProcessed } = transactionResult;
 
   if (paymentRejected) {
     await ctx.reply(
@@ -1108,6 +1115,22 @@ async function processSuccessfulStarsPayment(
     });
   };
 
+  const queueRenewalNotification = async (accessEndsAt: Date | null): Promise<void> => {
+    const buyerName = [payment.customer.firstName, payment.customer.lastName]
+      .filter(Boolean)
+      .join(" ") || (payment.customer.username ? "@" + payment.customer.username : "Покупатель Telegram");
+    await enqueueProjectOwnerNotification({
+      projectId,
+      dedupeKey: "payment:renewal:" + receipt.telegram_payment_charge_id,
+      eventType: "subscription_renewal",
+      messageText:
+        "🔁 Автопродление подписки подтверждено\nПроект: «" + payment.project.name + "»\n" +
+        "Подписчик: " + buyerName + "\nТариф: «" + snapshotPlanTitle + "»\n" +
+        "Оплата: " + payment.amount.toString() + " ⭐\n" +
+        (accessEndsAt ? "Доступ действует до: " + accessEndsAt.toLocaleString("ru-RU") : "Срок действия: без ограничения")
+    });
+  };
+
   if (!paymentWasProcessed) {
     // The payment/entitlement transaction commits before the notification queue is written.
     // On a webhook retry, recover a missed first-activation alert from the transactionally
@@ -1116,12 +1139,22 @@ async function processSuccessfulStarsPayment(
       where: { dedupeKey: "telegram-stars:" + receipt.telegram_payment_charge_id },
       select: { payload: true }
     });
+    const eventPayload = successfulEvent?.payload && typeof successfulEvent.payload === "object" &&
+      !Array.isArray(successfulEvent.payload)
+      ? successfulEvent.payload as Record<string, unknown>
+      : null;
+    const processedPaymentId = typeof eventPayload?.paymentId === "string"
+      ? eventPayload.paymentId
+      : payment.id;
     const currentPayment = await prisma.payment.findUnique({
-      where: { id: payment.id },
+      where: { id: processedPaymentId },
       select: { status: true }
     });
     if (shouldQueueNewSubscriberNotification(successfulEvent?.payload, currentPayment?.status ?? "UNKNOWN")) {
       await queueNewSubscriberNotification(endsAt);
+    }
+    if (eventPayload?.isRenewal === true && currentPayment?.status === "SUCCEEDED") {
+      await queueRenewalNotification(endsAt);
     }
 
     await ctx.reply("Этот платёж уже был обработан. Для получения актуальных ссылок используйте /access.");
@@ -1129,7 +1162,7 @@ async function processSuccessfulStarsPayment(
   }
 
   const latestPayment = await prisma.payment.findUnique({
-    where: { id: payment.id },
+    where: { id: paymentRecordId },
     select: { status: true }
   });
 
@@ -1143,19 +1176,7 @@ async function processSuccessfulStarsPayment(
   if (isInitialActivation) {
     await queueNewSubscriberNotification(endsAt);
   } else if (isRenewal) {
-    const buyerName = [payment.customer.firstName, payment.customer.lastName]
-      .filter(Boolean)
-      .join(" ") || (payment.customer.username ? "@" + payment.customer.username : "Покупатель Telegram");
-    await enqueueProjectOwnerNotification({
-      projectId,
-      dedupeKey: "payment:renewal:" + receipt.telegram_payment_charge_id,
-      eventType: "subscription_renewal",
-      messageText:
-        "🔁 Автопродление подписки подтверждено\nПроект: «" + payment.project.name + "»\n" +
-        "Подписчик: " + buyerName + "\nТариф: «" + snapshotPlanTitle + "»\n" +
-        "Оплата: " + payment.amount.toString() + " ⭐\n" +
-        (endsAt ? "Доступ действует до: " + endsAt.toLocaleString("ru-RU") : "Срок действия: без ограничения")
-    });
+    await queueRenewalNotification(endsAt);
   }
 
   const access = await deliverSubscriptionAccess(bot, subscription.id, snapshotChatIds);
