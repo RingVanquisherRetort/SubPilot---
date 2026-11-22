@@ -196,6 +196,7 @@ test("agency audit history and exports obey project roles and omit raw metadata"
     assert.equal(managerExport.eventCount, 1);
     assert.equal(managerExport.truncated, false);
     assert.ok(managerExport.csv.startsWith("\uFEFF"));
+    assert.ok(managerExport.csv.includes("\r\n"));
     assert.ok(managerExport.csv.includes("Managed project"));
     assert.equal(managerExport.csv.includes("Assigned project"), false);
     assert.equal(managerExport.csv.includes("VIEWER_PROJECT_SECRET"), false);
