@@ -12,13 +12,13 @@ import {
 } from "@subpilot/payments";
 import { recordSubscriptionAccessRevocationFailure } from "./project-bot-updates.js";
 
-type Transaction = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$use" | "$extends">;
 type LeaseOwnershipCheck = () => boolean;
 
 export type SubscriptionAccessRemovalResult =
   | "REVOKED"
   | "PRESERVED_BY_OTHER_SUBSCRIPTION"
   | "SKIPPED"
+  | "FAILED"
   | "LEASE_BUSY"
   | "LEASE_LOST";
 
@@ -80,6 +80,7 @@ export async function reconcileSubscriptionAccessRemoval(
       !grant ||
       subscription.customerId !== input.customerId ||
       grant.revokedAt !== null ||
+      grant.revocationNextAttemptAt > requestedAt ||
       !isSubscriptionDueForRevocation(subscription, requestedAt)
     ) return null;
 
@@ -199,21 +200,26 @@ export async function reconcileSubscriptionAccessRemoval(
       ownsLease()
     ) {
       try {
-        await input.bot.api.revokeChatInviteLink(input.connectedChatId ? snapshot.telegramChatId : snapshot.telegramChatId, snapshot.inviteLink);
+        await input.bot.api.revokeChatInviteLink(snapshot.telegramChatId, snapshot.inviteLink);
       } catch (error) {
         if (!isTelegramInviteAlreadyRevoked(error)) {
           await fail("INVITE_REVOKE_FAILED");
-          return "SKIPPED";
+          return "FAILED";
         }
       }
       if (!ownsLease()) return "LEASE_LOST";
     }
 
     if (!snapshot.hasOtherActiveGrant && snapshot.joinedAt) {
+      const telegramUserId = Number(input.telegramUserId);
+      if (!Number.isSafeInteger(telegramUserId) || telegramUserId <= 0) {
+        await fail("INVALID_TELEGRAM_USER_ID");
+        return "FAILED";
+      }
       if (!ownsLease()) return "LEASE_LOST";
       const member = await input.bot.api.getChatMember(
         snapshot.telegramChatId,
-        Number(input.telegramUserId)
+        telegramUserId
       );
       if (
         member.status === "kicked" ||
@@ -222,11 +228,11 @@ export async function reconcileSubscriptionAccessRemoval(
         // Preserve an existing moderator ban as an explicit access denial.
         revocationReason = "ADMIN_EXCLUDED";
       } else {
-        await input.bot.api.banChatMember(snapshot.telegramChatId, Number(input.telegramUserId));
+        await input.bot.api.banChatMember(snapshot.telegramChatId, telegramUserId);
         if (!ownsLease()) return "LEASE_LOST";
         await input.bot.api.unbanChatMember(
           snapshot.telegramChatId,
-          Number(input.telegramUserId),
+          telegramUserId,
           { only_if_banned: true }
         );
         if (!ownsLease()) return "LEASE_LOST";
