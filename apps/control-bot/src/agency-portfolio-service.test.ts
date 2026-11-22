@@ -112,6 +112,15 @@ test("agency portfolio assigns projects to workspace creators and clears stale a
       creatorTelegramId: String(telegramBase + 4n)
     });
     assert.equal(repeatedAssignment.changed, false);
+    await prisma.projectMember.create({
+      data: { projectId: projectTwo.id, userId: manager.id, role: "VIEWER" }
+    });
+    const managerPortfolio = await getAgencyPortfolio({
+      workspaceId: workspace.id,
+      actorUserId: manager.id
+    });
+    assert.equal(managerPortfolio.totalProjects, 1);
+    assert.equal(managerPortfolio.unassignedProjects[0]?.id, projectTwo.id);
 
     await assert.rejects(
       assignAgencyProjectCreator({
@@ -152,7 +161,7 @@ test("agency portfolio assigns projects to workspace creators and clears stale a
 
     const portfolio = await getAgencyPortfolio({
       workspaceId: workspace.id,
-      actorUserId: manager.id
+      actorUserId: owner.id
     });
     assert.equal(portfolio.workspaceName, workspace.name);
     assert.equal(portfolio.totalProjects, 3);
