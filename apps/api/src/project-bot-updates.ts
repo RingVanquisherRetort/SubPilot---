@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Bot, InlineKeyboard, type Context } from "grammy";
 import { prisma } from "@subpilot/database";
+type Transaction = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$use" | "$extends">;
 import {
   evaluatePaymentEligibility,
   getAccessDeliveryFailureState,
@@ -8,7 +9,7 @@ import {
   matchesTelegramStarsRefundReceipt,
   recalculateSubscriptionPeriod
 } from "@subpilot/payments";
-import { enqueueProjectOwnerNotification } from "./owner-notifications.js";
+import { enqueueProjectOwnerNotification, enqueueProjectOwnerNotificationUsing } from "./owner-notifications.js";
 import { hasRequiredSubscriptionChatRights } from "./telegram-chat-access.js";
 import { isPaymentFromProjectBot } from "./telegram-payment-origin.js";
 import { getInvoiceDispatchState } from "./telegram-invoice-state.js";
@@ -443,7 +444,8 @@ const ACCESS_DELIVERY_ERROR_CODES = new Set([
   "SOURCE_BOT_UNAVAILABLE"
 ]);
 
-export async function recordSubscriptionAccessDeliveryFailure(
+async function recordSubscriptionAccessDeliveryFailureUsing(
+  tx: Transaction,
   subscriptionId: string,
   connectedChatId: string,
   errorCode: string,
@@ -452,48 +454,45 @@ export async function recordSubscriptionAccessDeliveryFailure(
   const safeErrorCode = ACCESS_DELIVERY_ERROR_CODES.has(errorCode)
     ? errorCode
     : "INVITE_CREATION_FAILED";
-  const state = await prisma.$transaction(async (tx) => {
-    await tx.$queryRawUnsafe(
-      'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "subscriptionId" = $1 AND "connectedChatId" = $2 FOR UPDATE',
+  await tx.$queryRawUnsafe(
+    'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "subscriptionId" = $1 AND "connectedChatId" = $2 FOR UPDATE',
+    subscriptionId,
+    connectedChatId
+  );
+  const key = { subscriptionId_connectedChatId: { subscriptionId, connectedChatId } };
+  const current = await tx.subscriptionAccessGrant.findUnique({
+    where: key,
+    select: { deliveryAttempts: true }
+  });
+  const state = getAccessDeliveryFailureState(
+    current?.deliveryAttempts ?? 0,
+    now,
+    safeErrorCode
+  );
+  await tx.subscriptionAccessGrant.upsert({
+    where: key,
+    create: {
       subscriptionId,
-      connectedChatId
-    );
-    const key = { subscriptionId_connectedChatId: { subscriptionId, connectedChatId } };
-    const current = await tx.subscriptionAccessGrant.findUnique({
-      where: key,
-      select: { deliveryAttempts: true }
-    });
-    const next = getAccessDeliveryFailureState(
-      current?.deliveryAttempts ?? 0,
-      now,
-      safeErrorCode
-    );
-    await tx.subscriptionAccessGrant.upsert({
-      where: key,
-      create: {
-        subscriptionId,
-        connectedChatId,
-        inviteLink: "",
-        expiresAt: new Date(0),
-        deliveryAttempts: next.attempts,
-        deliveryNextAttemptAt: next.nextAttemptAt,
-        deliveryLastError: next.lastError,
-        deliveryFailedAt: next.failedAt
-      },
-      update: {
-        deliveryAttempts: next.attempts,
-        deliveryNextAttemptAt: next.nextAttemptAt,
-        deliveryLastError: next.lastError,
-        deliveryFailedAt: next.failedAt
-      }
-    });
-    return next;
+      connectedChatId,
+      inviteLink: "",
+      expiresAt: new Date(0),
+      deliveryAttempts: state.attempts,
+      deliveryNextAttemptAt: state.nextAttemptAt,
+      deliveryLastError: state.lastError,
+      deliveryFailedAt: state.failedAt
+    },
+    update: {
+      deliveryAttempts: state.attempts,
+      deliveryNextAttemptAt: state.nextAttemptAt,
+      deliveryLastError: state.lastError,
+      deliveryFailedAt: state.failedAt
+    }
   });
 
   if (state.failedAt) {
     try {
       const [subscription, chat] = await Promise.all([
-        prisma.subscription.findUnique({
+        tx.subscription.findUnique({
           where: { id: subscriptionId },
           select: {
             projectId: true,
@@ -501,14 +500,14 @@ export async function recordSubscriptionAccessDeliveryFailure(
             plan: { select: { title: true } }
           }
         }),
-        prisma.connectedChat.findUnique({
+        tx.connectedChat.findUnique({
           where: { id: connectedChatId },
           select: { title: true, username: true, telegramChatId: true }
         })
       ]);
       if (subscription && chat) {
         const chatName = chat.title ?? chat.username ?? chat.telegramChatId.toString();
-        await enqueueProjectOwnerNotification({
+        await enqueueProjectOwnerNotificationUsing(tx, {
           projectId: subscription.projectId,
           dedupeKey: `subscription:${subscriptionId}:access-delivery-dead-letter:${connectedChatId}:${state.failedAt.getTime()}`,
           eventType: "access_delivery_dead_letter",
@@ -528,11 +527,23 @@ export async function recordSubscriptionAccessDeliveryFailure(
   }
 }
 
-async function clearSubscriptionAccessDeliveryFailure(
+export async function recordSubscriptionAccessDeliveryFailure(
+  subscriptionId: string,
+  connectedChatId: string,
+  errorCode: string,
+  now = new Date()
+): Promise<void> {
+  await prisma.$transaction((tx) =>
+    recordSubscriptionAccessDeliveryFailureUsing(tx, subscriptionId, connectedChatId, errorCode, now)
+  );
+}
+
+async function clearSubscriptionAccessDeliveryFailureUsing(
+  tx: Transaction,
   subscriptionId: string,
   connectedChatId: string
 ): Promise<void> {
-  await prisma.subscriptionAccessGrant.updateMany({
+  await tx.subscriptionAccessGrant.updateMany({
     where: { subscriptionId, connectedChatId, revokedAt: null },
     data: {
       deliveryAttempts: 0,
@@ -544,12 +555,13 @@ async function clearSubscriptionAccessDeliveryFailure(
 }
 
 async function deliverSubscriptionAccessUnlocked(
+  tx: Transaction,
   bot: Bot,
   subscriptionId: string,
   chatIds?: string[],
   isLeaseOwned: () => boolean = () => true
 ): Promise<{ links: string[]; alreadyJoined: string[]; failed: string[] }> {
-  const subscription = await prisma.subscription.findUnique({
+  const subscription = await tx.subscription.findUnique({
     where: { id: subscriptionId },
     include: {
       customer: true,
@@ -573,7 +585,7 @@ async function deliverSubscriptionAccessUnlocked(
     failed: [] as string[]
   };
   const targetChats = chatIds
-    ? await prisma.connectedChat.findMany({
+    ? await tx.connectedChat.findMany({
         where: {
           projectId: subscription.projectId,
           telegramChatId: {
@@ -587,11 +599,11 @@ async function deliverSubscriptionAccessUnlocked(
     if (!isLeaseOwned()) return results;
     const label = chat.title ?? chat.username ?? chat.telegramChatId.toString();
     if (!chat.isActive) {
-      await recordSubscriptionAccessDeliveryFailure(subscription.id, chat.id, "CONNECTED_CHAT_INACTIVE");
+      await recordSubscriptionAccessDeliveryFailureUsing(tx, subscription.id, chat.id, "CONNECTED_CHAT_INACTIVE");
       results.failed.push(label);
       continue;
     }
-    const existing = await prisma.subscriptionAccessGrant.findUnique({
+    const existing = await tx.subscriptionAccessGrant.findUnique({
       where: {
         subscriptionId_connectedChatId: {
           subscriptionId: subscription.id,
@@ -628,7 +640,7 @@ async function deliverSubscriptionAccessUnlocked(
         } catch (error) {
           if (!isTelegramInviteAlreadyRevoked(error)) {
             if (!isLeaseOwned()) return results;
-            await recordSubscriptionAccessDeliveryFailure(subscription.id, chat.id, "INVITE_REVOKE_FAILED");
+            await recordSubscriptionAccessDeliveryFailureUsing(tx, subscription.id, chat.id, "INVITE_REVOKE_FAILED");
             console.error(
               "Could not revoke an unused invite link for an existing member:",
               error instanceof Error ? error.name : "UnknownError"
@@ -640,7 +652,7 @@ async function deliverSubscriptionAccessUnlocked(
       }
 
       if (!isLeaseOwned()) return results;
-      await prisma.subscriptionAccessGrant.upsert({
+      await tx.subscriptionAccessGrant.upsert({
         where: {
           subscriptionId_connectedChatId: {
             subscriptionId: subscription.id,
@@ -684,7 +696,7 @@ async function deliverSubscriptionAccessUnlocked(
           if (!isLeaseOwned()) return results;
         } catch (error) {
           if (!isLeaseOwned()) return results;
-          await recordSubscriptionAccessDeliveryFailure(subscription.id, chat.id, "SUBSCRIBER_UNBAN_FAILED");
+          await recordSubscriptionAccessDeliveryFailureUsing(tx, subscription.id, chat.id, "SUBSCRIBER_UNBAN_FAILED");
           console.error(
             "Could not unban an active subscriber before reusing an invite:",
             error instanceof Error ? error.name : "UnknownError"
@@ -693,7 +705,7 @@ async function deliverSubscriptionAccessUnlocked(
           continue;
         }
       }
-      await clearSubscriptionAccessDeliveryFailure(subscription.id, chat.id);
+      await clearSubscriptionAccessDeliveryFailureUsing(tx, subscription.id, chat.id);
       results.links.push(label + ": " + existing.inviteLink);
       continue;
     }
@@ -714,7 +726,7 @@ async function deliverSubscriptionAccessUnlocked(
 
       if (previousJoinWasCleared && existing) {
         if (!isLeaseOwned()) return results;
-        await prisma.subscriptionAccessGrant.updateMany({
+        await tx.subscriptionAccessGrant.updateMany({
           where: { id: existing.id, revokedAt: null },
           data: { joinedAt: null, inviteLink: "", expiresAt: new Date(0) }
         });
@@ -722,7 +734,7 @@ async function deliverSubscriptionAccessUnlocked(
 
       // Persist a pending delivery row before creating the replacement invite.
       if (!isLeaseOwned()) return results;
-      await prisma.subscriptionAccessGrant.upsert({
+      await tx.subscriptionAccessGrant.upsert({
         where: {
           subscriptionId_connectedChatId: {
             subscriptionId: subscription.id,
@@ -768,7 +780,7 @@ async function deliverSubscriptionAccessUnlocked(
         await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), invite.invite_link).catch(() => undefined);
         return results;
       }
-      await prisma.subscriptionAccessGrant.upsert({
+      await tx.subscriptionAccessGrant.upsert({
         where: {
           subscriptionId_connectedChatId: {
             subscriptionId: subscription.id,
@@ -796,7 +808,7 @@ async function deliverSubscriptionAccessUnlocked(
       results.links.push(label + ": " + invite.invite_link);
     } catch (error) {
       if (isLeaseOwned()) {
-        await recordSubscriptionAccessDeliveryFailure(
+        await recordSubscriptionAccessDeliveryFailureUsing(tx, 
           subscription.id,
           chat.id,
           "INVITE_CREATION_FAILED"
@@ -847,7 +859,7 @@ export async function deliverSubscriptionAccess(
       return { links: [], alreadyJoined: [], failed: [] };
     }
 
-    return deliverSubscriptionAccessUnlocked(bot, subscriptionId, chatIds, isLeaseOwned);
+    return deliverSubscriptionAccessUnlocked(tx, bot, subscriptionId, chatIds, isLeaseOwned);
   }, { maxWait: 10_000, timeout: 120_000 });
 }
 
