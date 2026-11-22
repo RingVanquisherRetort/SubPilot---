@@ -905,19 +905,17 @@ export async function deliverSubscriptionAccess(
         existing.expiresAt > now &&
         !existing.joinedAt
       ) {
-        const cleared = await prisma.$transaction(async (tx) => {
-          await tx.subscriptionAccessGrant.updateMany({
-            where: { id: existing.id, inviteLink: existing.inviteLink, revokedAt: null },
-            data: {
-              deliveryAttempts: 0,
-              deliveryNextAttemptAt: new Date(),
-              deliveryLastError: null,
-              deliveryFailedAt: null
-            }
-          });
+        const persisted = await updateCurrentGrant(existing.inviteLink, {
+          inviteLink: existing.inviteLink,
+          expiresAt: existing.expiresAt,
+          joinedAt: null,
+          deliveryAttempts: 0,
+          deliveryNextAttemptAt: now,
+          deliveryLastError: null,
+          deliveryFailedAt: null
         });
-        void cleared;
-        results.links.push(label + ": " + existing.inviteLink);
+        if (persisted) results.links.push(label + ": " + existing.inviteLink);
+        else results.blocked.push(label);
       } else {
         if (existing.inviteLink && !existing.revokedAt && existing.expiresAt > now) {
           try {
@@ -940,7 +938,7 @@ export async function deliverSubscriptionAccess(
           inviteLink: "",
           expiresAt: new Date(0),
           joinedAt: null,
-          deliveryAttempts: existing.joinedAt ? existing.id ? 0 : 0 : 0,
+          deliveryAttempts: 0,
           deliveryNextAttemptAt: new Date(),
           deliveryLastError: null,
           deliveryFailedAt: null
