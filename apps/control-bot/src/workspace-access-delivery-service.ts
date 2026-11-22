@@ -1,6 +1,31 @@
 import { prisma } from "@subpilot/database";
 import { MAX_ACCESS_DELIVERY_ATTEMPTS } from "@subpilot/payments";
 
+type Transaction = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$use" | "$extends">;
+
+async function lockWorkspace(tx: Transaction, workspaceId: string): Promise<void> {
+  await tx.$queryRawUnsafe(
+    'SELECT "id" FROM "Workspace" WHERE "id" = $1 FOR UPDATE',
+    workspaceId
+  );
+}
+
+async function assertWorkspaceAdmin(
+  tx: Transaction,
+  workspaceId: string,
+  actorUserId: string
+): Promise<void> {
+  const membership = await tx.workspaceMember.findFirst({
+    where: {
+      workspaceId,
+      userId: actorUserId,
+      role: { in: ["OWNER", "ADMIN"] }
+    },
+    select: { id: true }
+  });
+  if (!membership) throw new Error("ACTOR_NOT_AUTHORIZED");
+}
+
 export async function listWorkspaceFailedAccessDeliveries(
   workspaceId: string,
   now = new Date(),
@@ -42,6 +67,9 @@ export async function retryWorkspaceFailedAccessDelivery(input: {
 }): Promise<boolean> {
   const now = input.now ?? new Date();
   return prisma.$transaction(async (tx) => {
+    await lockWorkspace(tx, input.workspaceId);
+    await assertWorkspaceAdmin(tx, input.workspaceId, input.actorUserId);
+
     const grant = await tx.subscriptionAccessGrant.findFirst({
       where: {
         id: input.grantId,
