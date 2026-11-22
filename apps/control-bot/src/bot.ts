@@ -684,7 +684,7 @@ export function createControlBot(token: string): Bot {
       const items = await listActiveProjectSubscriptions({
         workspaceId: project.workspaceId,
         projectId,
-        limit: 20
+        limit: 10
       });
       if (items.length === 0) {
         await ctx.editMessageText("В проекте пока нет активных подписок.", {
@@ -706,7 +706,7 @@ export function createControlBot(token: string): Bot {
       });
       keyboard.text("⬅️ К управлению подписками", "ui:subaccess:" + projectId);
       await ctx.editMessageText(
-        "Активные подписки «" + project.name + "» (до 20):\n\n" +
+        "Активные подписки «" + project.name + "» (до 10):\n\n" +
         rows.join("\n\n") +
         "\n\nОтзыв сначала требует подтверждения. Если у клиента есть другая действующая подписка на ту же площадку, доступ по ней сохранится.",
         { reply_markup: keyboard }
@@ -911,7 +911,7 @@ export function createControlBot(token: string): Bot {
         await ctx.reply("Просматривать и восстанавливать выдачи могут только владелец или администратор проекта.");
         return;
       }
-      const failed = await listWorkspaceFailedAccessDeliveries(project.workspaceId, new Date(), 20, projectId);
+      const failed = await listWorkspaceFailedAccessDeliveries(project.workspaceId, new Date(), 10, projectId);
       if (failed.length === 0) {
         await ctx.editMessageText("В этом проекте нет выдач доступа, исчерпавших лимит автоматических попыток.", {
           reply_markup: new InlineKeyboard().text("⬅️ К управлению подписками", "ui:subaccess:" + projectId)
@@ -924,12 +924,12 @@ export function createControlBot(token: string): Bot {
         keyboard.text("↻ Повторить выдачу №" + (index + 1), "sad:" + grant.id).row();
         return (index + 1) + ". " + grant.subscription.plan.title + " → " + chat + "\n" +
           "Telegram ID: " + grant.subscription.customer.telegramUserId.toString() + "\n" +
-          "Попыток: " + grant.deliveryAttempts + " · ошибка: " + (grant.deliveryLastError ?? "не указана").slice(0, 100);
+          "Попыток: " + grant.deliveryAttempts + " · ошибка: " + (grant.deliveryLastError ?? "не указана").slice(0, 80);
       });
       keyboard.text("⬅️ К управлению подписками", "ui:subaccess:" + projectId);
       await ctx.editMessageText(
         "Неудачные выдачи доступа «" + project.name + "»:\n\n" + rows.join("\n\n") +
-        "\n\nПоказаны до 20 записей. Повторная попытка будет поставлена в очередь и записана в журнал аудита.",
+        "\n\nПоказаны до 10 записей. Повторная попытка будет поставлена в очередь и записана в журнал аудита.",
         { reply_markup: keyboard }
       );
     } catch (error) {
