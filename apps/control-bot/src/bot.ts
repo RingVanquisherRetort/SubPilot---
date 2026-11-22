@@ -2164,8 +2164,8 @@ export function createControlBot(token: string): Bot {
         "Новые уникальные подписчики: " + report.newSubscribers + "\n" +
         "Новые trial: " + report.newTrials + "\nРучные выдачи: " + report.manualGrants + "\n\n" +
         "Истекли: " + report.expiredSubscriptions + "\nДосрочно отменены: " + report.cancelledSubscriptions + "\n" +
-        "Отток: " + report.churnEvents + " событий при базе " + report.activeAtPeriodStart +
-        " подписок на начало периода (" + churnRate + ")\n\n" +
+        "Отток из стартовой базы: " + report.openingBaseChurnEvents + " из " + report.activeAtPeriodStart +
+        " подписок (" + churnRate + ")\n\n" +
         "Платежи: " + report.successfulPayments + "\nПовторные оплаты/продления: " +
         report.renewalPayments + " по " + report.renewingSubscriptions + " подпискам\n" +
         "Возвраты: " + report.refundedPayments + "\n\n" +
