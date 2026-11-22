@@ -195,12 +195,24 @@ async function retryPendingAccessDeliveries(
     try {
       const access = await deliverSubscriptionAccess(bot, subscription.id, chatIds, isLeaseOwned);
       if (!isLeaseOwned()) return;
-      if (access.links.length > 0 && access.failed.length === 0) {
+      if (access.links.length > 0 && access.failed.length === 0 && access.blocked.length === 0) {
         await bot.api.sendMessage(
           Number(subscription.customer.telegramUserId),
           "Платёж подтверждён. Не все ссылки удалось выдать сразу, поэтому SubPilot повторил попытку. Актуальные ссылки для вступления:\n\n" +
           access.links.join("\n")
         );
+      }
+      if (access.blocked.length > 0) {
+        await enqueueProjectOwnerNotification({
+          projectId: subscription.projectId,
+          dedupeKey: "subscription:" + subscription.id + ":access-permission-blocked",
+          eventType: "access_permission_blocked",
+          messageText:
+            "⚠️ Повторная выдача приглашений остановлена: отсутствует активное отдельное право доступа по тарифу «" +
+            subscription.plan.title + "» в проекте «" + subscription.project.name +
+            "». Площадки: " + access.blocked.join(", ") +
+            ". SubPilot не восстановил эти разрешения автоматически."
+        });
       }
       if (access.failed.length > 0) {
         await enqueueProjectOwnerNotification({
