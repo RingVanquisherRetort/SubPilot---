@@ -6,8 +6,7 @@ import {
   evaluatePaymentEligibility,
   getAccessDeliveryFailureState,
   isTelegramInviteAlreadyRevoked,
-  matchesTelegramStarsRefundReceipt,
-  recalculateSubscriptionPeriod
+  matchesTelegramStarsRefundReceipt
 } from "@subpilot/payments";
 import { enqueueProjectOwnerNotification, enqueueProjectOwnerNotificationUsing } from "./owner-notifications.js";
 import { hasRequiredSubscriptionChatRights } from "./telegram-chat-access.js";
@@ -22,6 +21,7 @@ import { classifyTelegramStarsPayment } from "./telegram-star-payment-kind.js";
 import { isSubscriptionAccessPermissionActive, PAID_RENEWAL_RESTORABLE_REVOCATION_REASON } from "./subscription-access-permission.js";
 import { classifyTelegramMembershipDeparture } from "./telegram-membership-departure.js";
 import { getAccessRevocationRetryState } from "./access-revocation-retry.js";
+import { reconcileTelegramStarsRefundUsing } from "./telegram-stars-refund-reconciliation.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
@@ -1610,93 +1610,17 @@ async function processRefundedStarsPayment(
   }
 
   const refundedAt = new Date();
-  await prisma.$transaction(async (tx) => {
-    if (payment.subscriptionId) {
-      await tx.$queryRawUnsafe('SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE', payment.subscriptionId);
-    }
-
-    const updated = await tx.payment.updateMany({
-      where: {
-        id: payment.id,
-        provider: "TELEGRAM_STARS",
-        providerPaymentId: receipt.telegram_payment_charge_id,
-        status: { in: ["SUCCEEDED", "REFUNDING"] }
-      },
-      data: { status: "REFUNDED", refundedAt, refundLastError: null }
-    });
-
-    const refundEventKey = "telegram-stars-refund:" + receipt.telegram_payment_charge_id;
-    await tx.paymentWebhookEvent.upsert({
-      where: { dedupeKey: refundEventKey },
-      create: {
-        connectionId: null,
-        dedupeKey: refundEventKey,
-        providerEventId: receipt.telegram_payment_charge_id,
-        eventType: "telegram.stars.payment.refunded",
-        payload: {
-          paymentId: payment.id,
-          telegramUserId: payment.customer.telegramUserId.toString(),
-          telegramPaymentChargeId: receipt.telegram_payment_charge_id,
-          amount: payment.amount.toString(),
-          currency: payment.currency,
-          source: "telegram_refunded_payment_update"
-        },
-        processedAt: refundedAt
-      },
-      update: { processedAt: refundedAt }
-    });
-
-    if (updated.count !== 1 || !payment.subscriptionId) return;
-
-    const subscription = await tx.subscription.findUnique({
-      where: { id: payment.subscriptionId },
-      select: { status: true, startsAt: true, endsAt: true }
-    });
-    if (!subscription) return;
-
-    // Refund reconciliation may recompute the paid period, but it must never
-    // undo an explicit administrative cancellation of the entitlement.
-    if (subscription.status === "CANCELLED") return;
-
-    const remainingPayments = await tx.payment.findMany({
-      where: { subscriptionId: payment.subscriptionId, status: { in: ["SUCCEEDED", "REFUNDING"] } },
-      orderBy: [{ paidAt: "asc" }, { createdAt: "asc" }],
-      select: { paidAt: true, metadata: true }
-    });
-
-    if (remainingPayments.length === 0) {
-      await tx.subscription.update({
-        where: { id: payment.subscriptionId },
-        data: { status: "EXPIRED", endsAt: refundedAt, cancelledAt: null }
-      });
-      return;
-    }
-
-    const recalculated = recalculateSubscriptionPeriod(remainingPayments, {
-      startsAt: subscription.startsAt,
-      endsAt: subscription.endsAt
-    });
-    if (!recalculated.exact) {
-      const shouldExpire = subscription.status === "EXPIRED" ||
-        (subscription.endsAt !== null && subscription.endsAt <= refundedAt);
-      if (shouldExpire && subscription.status !== "EXPIRED") {
-        await tx.subscription.update({ where: { id: payment.subscriptionId }, data: { status: "EXPIRED" } });
-      }
-      return;
-    }
-
-    const isExpired = recalculated.endsAt !== null && recalculated.endsAt <= refundedAt;
-    await tx.subscription.update({
-      where: { id: payment.subscriptionId },
-      data: {
-        status: isExpired ? "EXPIRED" : "ACTIVE",
-        startsAt: recalculated.startsAt,
-        endsAt: recalculated.endsAt,
-        cancelledAt: null
-      }
-    });
-  });
+  await prisma.$transaction((tx) => reconcileTelegramStarsRefundUsing(tx, {
+    paymentId: payment.id,
+    providerPaymentId: receipt.telegram_payment_charge_id,
+    subscriptionId: payment.subscriptionId,
+    refundedAt,
+    telegramUserId: payment.customer.telegramUserId,
+    amount: payment.amount.toString(),
+    currency: payment.currency
+  }));
 }
+
 /**
  * Processes a single update for a connected project bot.
  * No polling is started; updates are dispatched by the authenticated webhook route.
