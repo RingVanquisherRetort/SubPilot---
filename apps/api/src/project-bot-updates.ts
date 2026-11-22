@@ -441,6 +441,7 @@ const ACCESS_DELIVERY_ERROR_CODES = new Set([
   "CONNECTED_CHAT_INACTIVE",
   "INVITE_REVOKE_FAILED",
   "SUBSCRIBER_UNBAN_FAILED",
+  "SUBSCRIBER_ADMIN_BANNED",
   "INVITE_CREATION_FAILED",
   "SOURCE_BOT_UNAVAILABLE"
 ]);
@@ -688,36 +689,24 @@ async function deliverSubscriptionAccessUnlocked(
       continue;
     }
 
+    // A Telegram ban is an administrator/moderator decision. Never undo it
+    // automatically as part of paid-access delivery, even after an owner
+    // explicitly re-grants the database permission.
+    if (isBanned) {
+      await recordSubscriptionAccessDeliveryFailureUsing(tx, subscription.id, chat.id, "SUBSCRIBER_ADMIN_BANNED");
+      results.failed.push(label);
+      continue;
+    }
+
     const previousJoinWasCleared = Boolean(existing?.joinedAt && !isAlreadyMember);
     const now = new Date();
     if (!previousJoinWasCleared && existing && !existing.revokedAt && existing.inviteLink &&
         existing.expiresAt > now) {
-      if (isBanned) {
-        if (!isLeaseOwned()) return results;
-        try {
-          await bot.api.unbanChatMember(
-            chat.telegramChatId.toString(),
-            telegramUserId,
-            { only_if_banned: true }
-          );
-          if (!isLeaseOwned()) return results;
-        } catch (error) {
-          if (!isLeaseOwned()) return results;
-          await recordSubscriptionAccessDeliveryFailureUsing(tx, subscription.id, chat.id, "SUBSCRIBER_UNBAN_FAILED");
-          console.error(
-            "Could not unban an active subscriber before reusing an invite:",
-            error instanceof Error ? error.name : "UnknownError"
-          );
-          results.failed.push(label);
-          continue;
-        }
-      }
       await clearSubscriptionAccessDeliveryFailureUsing(tx, subscription.id, chat.id);
       results.links.push(label + ": " + existing.inviteLink);
       continue;
     }
 
-    const needsUnban = Boolean(existing?.revokedAt || isBanned);
     try {
       // Revoke the previous link before clearing it from the database. If Telegram
       // rejects the revoke, retain the old link so the next worker pass can retry safely.
@@ -754,16 +743,6 @@ async function deliverSubscriptionAccessUnlocked(
           joinedAt: null
         }
       });
-
-      if (needsUnban) {
-        if (!isLeaseOwned()) return results;
-        await bot.api.unbanChatMember(
-          chat.telegramChatId.toString(),
-          telegramUserId,
-          { only_if_banned: true }
-        );
-        if (!isLeaseOwned()) return results;
-      }
 
       if (!isLeaseOwned()) return results;
       const expiresAt = new Date(Date.now() + INVITE_LIFETIME_SECONDS * 1000);
