@@ -927,7 +927,8 @@ async function processSuccessfulStarsPayment(
         isRenewal: false,
         paymentRecordId: payment.id,
         paymentRejected: false,
-        paymentWasProcessed: false
+        paymentWasProcessed: false,
+        accessSuppressedByAdminRevocation: false
       };
     }
 
@@ -1522,6 +1523,7 @@ export async function handleProjectBotUpdate(
           select: {
             projectId: true,
             customerId: true,
+            status: true,
             telegramStarInitialChargeId: true,
             telegramStarSubscriptionLastUpdateId: true,
             telegramStarSubscriptionSequenceEpoch: true
@@ -1529,6 +1531,7 @@ export async function handleProjectBotUpdate(
         });
         if (
           !current ||
+          current.status === "CANCELLED" ||
           current.projectId !== projectId ||
           current.customerId !== payment.customerId ||
           current.telegramStarInitialChargeId !== payment.providerPaymentId ||
