@@ -16,6 +16,7 @@ import { getSubscriptionGrantChatIds, getSubscriptionGrantTelegramChatIds } from
 import { shouldQueueNewSubscriberNotification } from "./payment-event-notification.js";
 import { shouldProcessTelegramUpdate } from "./telegram-update-order.js";
 import { shouldActivateConnectedChat } from "./connected-chat-quota.js";
+import { parseTelegramStarSubscriptionUpdate } from "./telegram-star-subscription-update.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
@@ -1160,6 +1161,83 @@ export async function handleProjectBotUpdate(
   sequenceEpoch: number
 ): Promise<void> {
   const projectBot = new Bot(botToken);
+
+  const subscriptionUpdate = parseTelegramStarSubscriptionUpdate(update as unknown);
+  if (subscriptionUpdate) {
+    const payment = await prisma.payment.findUnique({
+      where: { id: subscriptionUpdate.invoicePayload },
+      select: {
+        projectId: true,
+        customerId: true,
+        subscriptionId: true,
+        provider: true,
+        currency: true,
+        status: true,
+        metadata: true,
+        customer: { select: { telegramUserId: true } }
+      }
+    });
+    const metadata = payment?.metadata && typeof payment.metadata === "object" && !Array.isArray(payment.metadata)
+      ? payment.metadata as Record<string, unknown>
+      : null;
+
+    // Subscription-state updates are accepted only for a recurring Stars checkout
+    // created by this exact project bot. One-time invoices cannot mutate recurring state.
+    if (
+      payment &&
+      payment.projectId === projectId &&
+      payment.subscriptionId &&
+      payment.provider === "TELEGRAM_STARS" &&
+      payment.currency === "XTR" &&
+      payment.status === "SUCCEEDED" &&
+      payment.customer.telegramUserId === BigInt(subscriptionUpdate.telegramUserId) &&
+      metadata?.source === "project_bot" &&
+      metadata.projectBotId === projectBotId &&
+      metadata.isRecurring === true
+    ) {
+      await prisma.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe(
+          'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+          payment.subscriptionId
+        );
+        const current = await tx.subscription.findUnique({
+          where: { id: payment.subscriptionId! },
+          select: {
+            projectId: true,
+            customerId: true,
+            telegramStarSubscriptionLastUpdateId: true,
+            telegramStarSubscriptionSequenceEpoch: true
+          }
+        });
+        if (
+          !current ||
+          current.projectId !== projectId ||
+          current.customerId !== payment.customerId ||
+          !shouldProcessTelegramUpdate(
+            updateId,
+            current.telegramStarSubscriptionLastUpdateId === null
+              ? null
+              : BigInt(current.telegramStarSubscriptionLastUpdateId),
+            current.telegramStarSubscriptionSequenceEpoch,
+            sequenceEpoch
+          )
+        ) {
+          return;
+        }
+
+        // A buyer cancellation stops future renewals; access remains valid until
+        // the already-paid Telegram subscription period expires.
+        await tx.subscription.update({
+          where: { id: payment.subscriptionId! },
+          data: {
+            telegramStarSubscriptionState: subscriptionUpdate.state,
+            telegramStarSubscriptionLastUpdateId: updateId,
+            telegramStarSubscriptionSequenceEpoch: sequenceEpoch
+          }
+        });
+      });
+    }
+  }
 
   projectBot.on("my_chat_member", async (ctx) => {
     const chat = ctx.myChatMember.chat;
