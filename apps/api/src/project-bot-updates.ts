@@ -2008,7 +2008,6 @@ export async function handleProjectBotUpdate(
       include: {
         plan: { select: { title: true } },
         accessGrants: {
-          where: { revokedAt: null },
           select: { connectedChat: { select: { telegramChatId: true } } }
         }
       },
