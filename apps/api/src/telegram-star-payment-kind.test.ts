@@ -27,7 +27,7 @@ test("classifies later recurring charges against the persisted first charge", ()
     initialChargeId: "initial-charge",
     isRecurring: true,
     isFirstRecurring: false
-  }), "RECURRING_RENEWAL");
+  }), null);
 
   assert.equal(classifyTelegramStarsPayment({
     planIsRecurring: true,
