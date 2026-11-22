@@ -2723,7 +2723,6 @@ export function createControlBot(token: string): Bot {
           TRIAL_ALREADY_USED: "Пробный доступ уже использовался или у клиента есть действующая подписка на этот тариф.",
           SUBSCRIPTION_NOT_FOUND: "Подписка не найдена в активном пространстве.",
           SUBSCRIPTION_NOT_ACTIVE: "Подписка уже не активна.",
-          TELEGRAM_RENEWAL_CANCEL_FAILED: "Не удалось подтвердить отключение автопродления в Telegram. Доступ не отозван. Проверьте исходного бота и повторите попытку."
         };
         await ctx.reply(messages[error.code] ?? "Не удалось выдать доступ.");
       } else {
@@ -2860,7 +2859,8 @@ export function createControlBot(token: string): Bot {
         const messages: Record<string, string> = {
           ACTOR_NOT_AUTHORIZED: "Только владелец или администратор пространства может отзывать доступ.",
           SUBSCRIPTION_NOT_FOUND: "Подписка не найдена в активном пространстве.",
-          SUBSCRIPTION_NOT_ACTIVE: "Подписка уже не активна."
+          SUBSCRIPTION_NOT_ACTIVE: "Подписка уже не активна.",
+          TELEGRAM_RENEWAL_CANCEL_FAILED: "Не удалось подтвердить отключение автопродления в Telegram. Доступ не отозван. Проверьте исходного бота и повторите попытку."
         };
         await ctx.reply(messages[error.code] ?? "Не удалось отозвать доступ.");
       } else {
