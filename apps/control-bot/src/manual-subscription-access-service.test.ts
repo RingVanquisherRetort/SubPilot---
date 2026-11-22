@@ -138,7 +138,8 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
       data: {
         inviteLink: "revoked-invite-link",
         expiresAt: new Date(Date.now() + 60_000),
-        revokedAt: new Date()
+        revokedAt: new Date(),
+        revocationReason: "ADMIN_EXCLUDED"
       }
     });
     const reauthorizedManual = await grantManualSubscriptionAccess(manualInput);
@@ -152,6 +153,7 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
       }
     });
     assert.equal(reauthorizedGrant.revokedAt, null);
+    assert.equal(reauthorizedGrant.revocationReason, null);
     assert.equal(reauthorizedGrant.inviteLink, "");
     assert.equal(reauthorizedGrant.expiresAt.getTime(), 0);
 
