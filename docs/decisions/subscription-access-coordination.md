@@ -2,7 +2,7 @@
 
 **Status:** Open — design and implementation required  
 **Reviewed branch:** `feat/subscription-lifecycle-ui`  
-**Reviewed code snapshot:** `adffff67daf859e14f73c77703ec57512eecf1cf`  
+**Reviewed implementation snapshot:** `d3c29b56f0e7d9cc593de17b95518d089e88900c` (follow-up commits may adjust lock ordering/tests)  
 **Production status:** Not merged; no live Telegram/provider test has been run as part of this review.
 
 ## Why this review exists
@@ -17,13 +17,22 @@ The serialization currently spans remote Telegram API calls, however. That means
 
 The payment/refund handlers lock the same subscription row. As a result, a slow Telegram response can delay a payment, refund or other subscription mutation for the duration of the transaction. A database rollback also cannot roll back a Telegram API side effect that already succeeded.
 
-## Additional cross-subscription race to close
+## Shared customer/chat coordination — first phase implemented
 
-The expiry path checks whether another active grant exists for the same customer and connected chat. That check protects the ordinary, already-committed overlapping-subscription case.
+A transaction-scoped PostgreSQL advisory lock now uses the stable key `(customerId, connectedChatId)`, independent of subscription ID. The helper is exported from `@subpilot/payments` so both API and control-bot services use the same lock implementation.
 
-It does not currently acquire a common lock for the customer/chat pair or lock every competing subscription/grant before acting on Telegram membership. Another subscription can therefore be activated and create its grant after the overlap query but while the expiry worker is carrying out the Telegram removal. The current per-subscription row lock does not serialize two different subscriptions belonging to the same customer.
+The lock is acquired in the currently inspected paths before their access mutation/reconciliation:
+- successful Telegram Stars payment, including both existing grant scopes and the new purchase's destination snapshot;
+- delivery of an invite or recording that the buyer is already a member;
+- expiry/admin-revocation membership reconciliation and the overlapping-entitlement query;
+- Telegram `ADMIN_EXCLUDED` membership updates;
+- manual/trial grant and manual revocation.
 
-This is a correctness concern because Telegram membership is shared by all of a customer's entitlements for a particular chat, even though the grant rows are stored per subscription.
+The manual grant path locks an existing subscription row before taking the scope lock, matching the payment/expiry lock order. New subscription rows are created inside the same transaction before their scope lock is taken. Multi-chat operations acquire distinct scope keys in sorted order.
+
+PostgreSQL integration tests verify that two transactions using the same customer/chat scope serialize even when they represent different subscriptions, while unrelated scopes do not block one another.
+
+This closes the previously identified gap where two different subscriptions could independently decide to change the same buyer's Telegram membership. It does **not** solve the long-transaction problem: the current advisory lock is transaction-scoped and is intentionally held across the existing Telegram calls until the second phase is implemented. Every additional access-changing path must continue to be audited for participation in this shared protocol.
 
 ## Constraints that a refactor must preserve
 
@@ -37,21 +46,21 @@ This is a correctness concern because Telegram membership is shared by all of a 
 8. Lifecycle/webhook worker lease loss must not allow a stale worker to finalize state as though it still owned the operation.
 9. All mutations that can change the desired Telegram state for the same customer/chat must participate in the same coordination protocol.
 
-## Target design to evaluate
+## Second phase: remove remote calls from interactive transactions
 
-Do not replace the current row lock with an unlocked read followed by an API call. A two-phase flow needs a durable operation record and a shared customer/chat coordination boundary.
+Do not replace the current scope lock with an unlocked read followed by an API call. The next phase must preserve serialization while releasing database transactions before Telegram requests.
 
 A viable direction to prototype:
 
-- Introduce a stable coordination identity for `(customerId, connectedChatId)`, independent of subscription ID.
-- In a short database transaction, acquire that scope, re-read all relevant active entitlements and grant/moderation state, then persist a desired-state revision plus a uniquely identified operation/outbox record.
-- Perform Telegram API calls outside the database transaction.
-- Finalize only when the operation/revision still matches. If a newer revision won while the external operation was in flight, do not overwrite it; enqueue or perform a compensating reconciliation toward the latest desired state.
+- In a short transaction, acquire the customer/chat scope and subscription/grant rows in the agreed order, re-read all current entitlements and moderation state, then persist a desired-state revision plus a uniquely identified operation/outbox record.
+- Commit before calling Telegram.
+- Execute the Telegram operation outside the transaction while holding a durable per-scope operation lease with bounded expiry/heartbeat.
+- Finalize only when the operation token/revision still matches. If a newer revision was committed while the external operation was in flight, do not overwrite it; enqueue reconciliation toward the latest desired state.
 - Keep per-invite-link cleanup distinct from member-removal operations. Revoking an old link must not clear a newer link stored by a later delivery.
 - Treat moderation exclusion as a durable deny state. Only an explicit authorized re-grant flow may change that state.
 - Define how a worker lease expiry interacts with an already in-flight Telegram request. A lease token alone cannot fence Telegram itself, because Telegram does not receive the token; a stale response must be made harmless through conditional finalization and reconciliation.
 
-The exact storage model (coordination row, operation/outbox table, generation fields, or a combination) must be selected only after the concurrency tests below demonstrate the required behavior. Do not add migration fields speculatively.
+The exact durable storage model (coordination row, operation/outbox table, generation fields, or a combination) must be selected only after the concurrency tests below demonstrate the required behavior. Do not add migration fields speculatively.
 
 ## Required regression scenarios
 
