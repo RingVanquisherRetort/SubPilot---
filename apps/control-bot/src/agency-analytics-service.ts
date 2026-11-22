@@ -216,6 +216,7 @@ export async function getAgencyAnalytics(input: {
 
     const projectIds = projects.map((project) => project.id);
     const paymentStatuses = ["SUCCEEDED", "REFUNDING", "REFUNDED"] as const;
+    const renewalStatuses = ["SUCCEEDED", "REFUNDING"] as const;
     const activeNowWhere = {
       projectId: { in: projectIds },
       status: "ACTIVE" as const,
@@ -321,7 +322,7 @@ export async function getAgencyAnalytics(input: {
         by: ["projectId", "subscriptionId"],
         where: {
           projectId: { in: projectIds },
-          status: { in: [...paymentStatuses] },
+          status: { in: [...renewalStatuses] },
           paidAt: inPeriod,
           subscriptionId: { not: null }
         },
@@ -331,7 +332,7 @@ export async function getAgencyAnalytics(input: {
         by: ["projectId", "subscriptionId"],
         where: {
           projectId: { in: projectIds },
-          status: { in: [...paymentStatuses] },
+          status: { in: [...renewalStatuses] },
           paidAt: { lt: from },
           subscriptionId: { not: null }
         },
