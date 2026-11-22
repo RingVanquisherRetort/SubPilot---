@@ -115,11 +115,12 @@ Initial research candidates for creators who are individuals: YooMoney, Crypto P
 
 ## Stage 7 — Agency and analytics
 
-- Multi-creator portfolio.
-- Role-based team access.
-- Creator/project switching.
-- Revenue, renewals, churn and subscriber analytics.
-- Audit history and exports.
+- [x] Multi-creator portfolio: assign each agency project to a responsible workspace creator and list projects grouped by creator.
+- [x] Role-based team access for workspace members (OWNER/ADMIN/MANAGER/VIEWER); project-specific member permissions are not part of this implementation.
+- [x] Creator/project navigation: agency portfolio, project list and project detail selection.
+- [ ] Revenue, renewals, churn and subscriber analytics across all agency creators.
+- [ ] Audit history and exports for agency-wide reporting.
+- [ ] Live Telegram acceptance test for creator assignment, reassignment, unassignment and removal cleanup.
 
 ## Stage 8 — International expansion
 
