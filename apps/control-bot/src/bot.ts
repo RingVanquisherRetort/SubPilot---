@@ -2172,7 +2172,7 @@ export function createControlBot(token: string): Bot {
         ? error.code === "NOT_AN_AGENCY"
           ? "Эта команда доступна только в рабочем пространстве типа «Агентство»."
           : error.code === "PERMISSION_DENIED"
-            ? "Для просмотра истории нужны права MANAGER, ADMIN или OWNER."
+            ? "Для просмотра истории нужны права MANAGER на проекте либо роль ADMIN/OWNER."
             : "Не удалось получить историю агентства."
         : "Не удалось получить историю агентства.";
       console.error("Control bot /agencyaudit failed:", error instanceof Error ? error.name : "UnknownError");
@@ -2211,7 +2211,7 @@ export function createControlBot(token: string): Bot {
         ? error.code === "NOT_AN_AGENCY"
           ? "Экспорт доступен только в рабочем пространстве типа «Агентство»."
           : error.code === "PERMISSION_DENIED"
-            ? "Для экспорта истории нужны права MANAGER, ADMIN или OWNER."
+            ? "Для экспорта истории нужны права MANAGER на проекте либо роль ADMIN/OWNER."
             : "Не удалось сформировать выгрузку истории агентства."
         : "Не удалось сформировать выгрузку истории агентства.";
       console.error("Control bot /agencyauditexport failed:", error instanceof Error ? error.name : "UnknownError");
