@@ -2701,7 +2701,18 @@ export async function handleProjectBotUpdate(
             where: { id: grant.id, inviteLink, revokedAt: null },
             data: { inviteLink: "", expiresAt: new Date(0), joinedAt: null }
           });
-          return updated.count === 1;
+          if (updated.count !== 1) return false;
+
+          // The consumed credential has been invalidated and the permission is
+          // still active. Queue a replacement generation atomically so recovery
+          // does not depend solely on this webhook process staying alive.
+          await requestSubscriptionAccessReconciliation(
+            tx,
+            currentSubscription.customerId,
+            [grant.connectedChatId],
+            new Date()
+          );
+          return true;
         });
 
         if (permissionReset) {
