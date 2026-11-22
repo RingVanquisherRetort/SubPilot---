@@ -2729,6 +2729,10 @@ export async function handleProjectBotUpdate(
         return { removeMember: false, shouldRevokeInvite: true };
       }
 
+      // Serialize join confirmation with expiry, payment renewal and other
+      // subscription grants for this buyer/chat.
+      await lockSubscriptionAccessScope(tx, currentSubscription.customerId, grant.connectedChatId);
+
       const permissionActive = isSubscriptionAccessPermissionActive({
         subscriptionStatus: currentSubscription.status,
         subscriptionStartsAt: currentSubscription.startsAt,
