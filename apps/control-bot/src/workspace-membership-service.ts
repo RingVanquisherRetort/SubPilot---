@@ -189,6 +189,26 @@ export async function removeWorkspaceMember(input: {
         }
       });
     }
+    const removedProjectMemberships = await tx.projectMember.deleteMany({
+      where: {
+        userId: target.userId,
+        project: { workspaceId: input.workspaceId }
+      }
+    });
+    if (removedProjectMemberships.count > 0) {
+      await tx.auditLog.create({
+        data: {
+          workspaceId: input.workspaceId,
+          actorUserId: input.actorUserId,
+          action: "PROJECT_MEMBER_ACCESS_CLEARED_MEMBER_REMOVED",
+          resourceType: "ProjectMemberAssignments",
+          metadata: {
+            removedUserId: target.userId,
+            assignmentCount: removedProjectMemberships.count
+          }
+        }
+      });
+    }
 
     await tx.workspaceMember.delete({ where: { id: target.id } });
     if (target.user.activeWorkspaceId === input.workspaceId) {
