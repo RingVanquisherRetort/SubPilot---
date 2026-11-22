@@ -22,7 +22,7 @@ import { isSubscriptionAccessPermissionActive, PAID_RENEWAL_RESTORABLE_REVOCATIO
 import { classifyTelegramMembershipDeparture } from "./telegram-membership-departure.js";
 import { getAccessRevocationRetryState } from "./access-revocation-retry.js";
 import { reconcileTelegramStarsRefundUsing } from "./telegram-stars-refund-reconciliation.js";
-import { lockSubscriptionAccessScope, lockSubscriptionAccessScopes } from "./subscription-access-scope-lock.js";
+import { lockSubscriptionAccessScope, lockSubscriptionAccessScopes } from "@subpilot/payments";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
