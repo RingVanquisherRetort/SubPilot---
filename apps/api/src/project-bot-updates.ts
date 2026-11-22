@@ -928,10 +928,12 @@ async function processSuccessfulStarsPayment(
       ? currentSubscription.endsAt
       : now;
     const isRecurringPayment = paymentKind !== "ONE_TIME";
-    const endsAt = (isRecurringPayment ? expirationFromTelegram : null) ??
-      (snapshotDurationDays
-        ? new Date(currentEnd.getTime() + snapshotDurationDays * 24 * 60 * 60 * 1000)
-        : null);
+    const durationBasedEnd = snapshotDurationDays
+      ? new Date(currentEnd.getTime() + snapshotDurationDays * 24 * 60 * 60 * 1000)
+      : null;
+    const endsAt = isRecurringPayment && expirationFromTelegram
+      ? (expirationFromTelegram > currentEnd ? expirationFromTelegram : currentEnd)
+      : durationBasedEnd;
     const isInitialActivation = paymentKind === "RECURRING_RENEWAL"
       ? false
       : currentSubscription.status !== "ACTIVE";
