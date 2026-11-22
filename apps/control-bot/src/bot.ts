@@ -11,6 +11,12 @@ import {
 } from "./workspace-permissions.js";
 import { isPrivateControlChat } from "./private-control-context.js";
 import {
+  AgencyPortfolioError,
+  assignAgencyProjectCreator,
+  getAgencyPortfolio,
+  unassignAgencyProjectCreator
+} from "./agency-portfolio-service.js";
+import {
   WorkspaceMembershipError,
   createWorkspaceInvite,
   listWorkspaceMembersForAdmin,
@@ -272,7 +278,8 @@ async function canAccessProject(
       workspaceId: true,
       defaultCurrency: true,
       countryCode: true,
-      merchantType: true
+      merchantType: true,
+      creatorUser: { select: { firstName: true, lastName: true, username: true } }
     }
   });
 }
@@ -451,6 +458,9 @@ export function createControlBot(token: string): Bot {
     }
     if (canManageWorkspace) {
       keyboard.text("➕ Создать проект", "ui:newproject").row();
+      if (workspace.type === "AGENCY") {
+        keyboard.text("👥 Портфель авторов", "ui:agencyportfolio").row();
+      }
     }
     keyboard.text("⬅️ Назад", "ui:home");
 
@@ -460,6 +470,52 @@ export function createControlBot(token: string): Bot {
         : `В пространстве «${workspace.name}» пока нет проектов. Создайте первый:`,
       { reply_markup: keyboard }
     );
+  });
+
+  bot.callbackQuery("ui:agencyportfolio", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace } = await getActiveWorkspace(user);
+      const portfolio = await getAgencyPortfolio({
+        workspaceId: workspace.id,
+        actorUserId: user.id
+      });
+      const sections = portfolio.creators.map((creator) =>
+        "👤 " + creator.name + " · " + creator.projects.length + " проект(ов)\n" +
+        creator.projects.map((project) =>
+          "  • " + project.name + " — " + project.status.toLowerCase() + "\n    ID: " + project.id
+        ).join("\n")
+      );
+      if (portfolio.unassignedProjects.length) {
+        sections.push(
+          "⚪ Без ответственного автора · " + portfolio.unassignedProjects.length + " проект(ов)\n" +
+          portfolio.unassignedProjects.map((project) =>
+            "  • " + project.name + " — " + project.status.toLowerCase() + "\n    ID: " + project.id
+          ).join("\n")
+        );
+      }
+      await ctx.editMessageText(
+        "Портфель агентства «" + portfolio.workspaceName + "»\n\n" +
+        "Проектов: " + portfolio.totalProjects + "\n" +
+        "Назначено авторам: " + portfolio.assignedProjects + "\n" +
+        "Без автора: " + portfolio.unassignedProjects.length + "\n\n" +
+        (sections.join("\n\n") || "Пока нет проектов."),
+        { reply_markup: new InlineKeyboard().text("📁 К проектам", "ui:projects").row().text("⬅️ В главное меню", "ui:home") }
+      );
+    } catch (error) {
+      if (error instanceof AgencyPortfolioError) {
+        const messages: Record<string, string> = {
+          NOT_AN_AGENCY: "Портфель авторов доступен только в пространстве типа «Агентство».",
+          PERMISSION_DENIED: "Портфель доступен владельцу, администратору и менеджеру агентства.",
+          ACTOR_NOT_MEMBER: "У вас больше нет доступа к этому агентству."
+        };
+        await ctx.reply(messages[error.code] ?? "Не удалось загрузить портфель агентства.");
+      } else {
+        console.error("Control bot agency portfolio callback failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось загрузить портфель агентства.");
+      }
+    }
   });
 
   bot.callbackQuery("ui:workspaces", async (ctx) => {
@@ -575,7 +631,7 @@ export function createControlBot(token: string): Bot {
       .row()
       .text("⬅️ К проектам", "ui:projects");
     await ctx.editMessageText(
-      `📁 ${project.name}\n\nБоты: ${botCount}\nАктивные площадки: ${chatCount}\nАктивные тарифы: ${planCount}\n\nВыберите раздел:`,
+      `📁 ${project.name}\nАвтор: ${[project.creatorUser?.firstName, project.creatorUser?.lastName].filter(Boolean).join(" ") || (project.creatorUser?.username ? "@" + project.creatorUser.username : "не назначен")}\n\nБоты: ${botCount}\nАктивные площадки: ${chatCount}\nАктивные тарифы: ${planCount}\n\nВыберите раздел:`,
       { reply_markup: keyboard }
     );
   });
@@ -1264,7 +1320,13 @@ export function createControlBot(token: string): Bot {
       const projects = await prisma.project.findMany({
         where: { workspaceId: workspace.id },
         orderBy: { createdAt: "desc" },
-        select: { id: true, name: true, status: true, bots: { select: { username: true, status: true } } }
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          bots: { select: { username: true, status: true } },
+          creatorUser: { select: { firstName: true, lastName: true, username: true } }
+        }
       });
 
       if (projects.length === 0) {
@@ -1279,13 +1341,131 @@ export function createControlBot(token: string): Bot {
         const botInfo = project.bots[0]
           ? `@ ${project.bots[0].username ?? "бот без username"} · ${project.bots[0].status.toLowerCase()}`
           : "бот не подключён";
-        return `${index + 1}. ${project.name} — ${project.status.toLowerCase()}\nID: ${project.id}\n${botInfo}`;
+        const creatorName = [project.creatorUser?.firstName, project.creatorUser?.lastName].filter(Boolean).join(" ") || (project.creatorUser?.username ? "@" + project.creatorUser.username : "не назначен");
+        return `${index + 1}. ${project.name} — ${project.status.toLowerCase()}\nАвтор: ${creatorName}\nID: ${project.id}\n${botInfo}`;
       });
 
       await ctx.reply(`Проекты пространства «${workspace.name}»:\n\n` + lines.join("\n\n"));
     } catch (error) {
       console.error("Control bot /projects failed:", error);
       await ctx.reply("Не удалось загрузить проекты. Попробуйте ещё раз позже.");
+    }
+  });
+
+  bot.command("agencyportfolio", async (ctx) => {
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace } = await getActiveWorkspace(user);
+      const portfolio = await getAgencyPortfolio({
+        workspaceId: workspace.id,
+        actorUserId: user.id
+      });
+      const sections = portfolio.creators.map((creator) =>
+        "👤 " + creator.name + " · " + creator.projects.length + " проект(ов)\n" +
+        creator.projects.map((project) =>
+          "• " + project.name + " — " + project.status.toLowerCase() + " · " + project.id
+        ).join("\n")
+      );
+      if (portfolio.unassignedProjects.length) {
+        sections.push(
+          "Без ответственного автора · " + portfolio.unassignedProjects.length + "\n" +
+          portfolio.unassignedProjects.map((project) =>
+            "• " + project.name + " — " + project.status.toLowerCase() + " · " + project.id
+          ).join("\n")
+        );
+      }
+      await ctx.reply(
+        "Портфель агентства «" + portfolio.workspaceName + "»\n\n" +
+        "Проектов: " + portfolio.totalProjects + " · назначено: " + portfolio.assignedProjects +
+        " · без автора: " + portfolio.unassignedProjects.length + "\n\n" +
+        (sections.join("\n\n") || "Пока нет проектов.")
+      );
+    } catch (error) {
+      if (error instanceof AgencyPortfolioError) {
+        const messages: Record<string, string> = {
+          NOT_AN_AGENCY: "Команда доступна только в агентстве.",
+          PERMISSION_DENIED: "Портфель доступен владельцу, администратору и менеджеру агентства.",
+          ACTOR_NOT_MEMBER: "У вас больше нет доступа к этому агентству."
+        };
+        await ctx.reply(messages[error.code] ?? "Не удалось загрузить портфель.");
+      } else {
+        console.error("Control bot /agencyportfolio failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось загрузить портфель агентства.");
+      }
+    }
+  });
+
+  bot.command("assigncreator", async (ctx) => {
+    const fields = String(ctx.match ?? "").trim().split(/\s+/).filter(Boolean);
+    if (fields.length !== 2 || !fields[0] || !/^\d{1,20}$/.test(fields[1] ?? "")) {
+      await ctx.reply("Формат: /assigncreator PROJECT_ID TELEGRAM_ID\nАвтор должен быть участником активного агентства.");
+      return;
+    }
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace } = await getActiveWorkspace(user);
+      const result = await assignAgencyProjectCreator({
+        workspaceId: workspace.id,
+        actorUserId: user.id,
+        projectId: fields[0],
+        creatorTelegramId: fields[1]
+      });
+      await ctx.reply(
+        result.changed
+          ? "Ответственный автор проекта «" + result.projectName + "» изменён: " +
+            result.previousCreatorName + " → " + result.creatorName + "."
+          : "Проект «" + result.projectName + "» уже закреплён за " + result.creatorName + "."
+      );
+    } catch (error) {
+      if (error instanceof AgencyPortfolioError) {
+        const messages: Record<string, string> = {
+          NOT_AN_AGENCY: "Назначать авторов можно только в агентстве.",
+          PERMISSION_DENIED: "Назначать ответственных авторов могут только OWNER и ADMIN.",
+          CREATOR_NOT_MEMBER: "Автор не найден среди участников активного агентства.",
+          PROJECT_NOT_FOUND: "Проект не найден в активном агентстве.",
+          ACTOR_NOT_MEMBER: "У вас больше нет доступа к агентству."
+        };
+        await ctx.reply(messages[error.code] ?? "Не удалось назначить автора.");
+      } else {
+        console.error("Control bot /assigncreator failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось назначить автора.");
+      }
+    }
+  });
+
+  bot.command("unassigncreator", async (ctx) => {
+    const projectId = String(ctx.match ?? "").trim();
+    if (!projectId) {
+      await ctx.reply("Формат: /unassigncreator PROJECT_ID");
+      return;
+    }
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace } = await getActiveWorkspace(user);
+      const result = await unassignAgencyProjectCreator({
+        workspaceId: workspace.id,
+        actorUserId: user.id,
+        projectId
+      });
+      await ctx.reply(
+        result.changed
+          ? "Ответственный автор проекта «" + result.projectName + "» снят. Прежний автор: " +
+            result.previousCreatorName + "."
+          : "У проекта «" + result.projectName + "» автор не назначен."
+      );
+    } catch (error) {
+      if (error instanceof AgencyPortfolioError) {
+        const messages: Record<string, string> = {
+          NOT_AN_AGENCY: "Снимать автора можно только в агентстве.",
+          PERMISSION_DENIED: "Изменять ответственного автора могут только OWNER и ADMIN.",
+          PROJECT_NOT_FOUND: "Проект не найден в активном агентстве.",
+          ACTOR_NOT_MEMBER: "У вас больше нет доступа к агентству."
+        };
+        await ctx.reply(messages[error.code] ?? "Не удалось снять автора.");
+      } else {
+        console.error("Control bot /unassigncreator failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось снять автора.");
+      }
     }
   });
 
@@ -3865,6 +4045,9 @@ export function createControlBot(token: string): Bot {
       "/start — открыть кабинет\n" +
       "/newproject Название — создать проект\n" +
       "/projects — проекты активного пространства\n" +
+      "/agencyportfolio — портфель агентства по авторам\n" +
+      "/assigncreator PROJECT_ID TELEGRAM_ID — назначить автора проекта\n" +
+      "/unassigncreator PROJECT_ID — снять автора с проекта\n" +
       "/createagency Название — создать агентство\n" +
       "/invite [ROLE] — одноразовая ссылка для участника\n" +
       "/setmemberrole TELEGRAM_ID [ADMIN|MANAGER|VIEWER] — изменить роль участника\n" +
