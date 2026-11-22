@@ -191,9 +191,7 @@ export async function revokeWorkspaceInvite(input: {
       where: { id: input.inviteId, workspaceId: input.workspaceId, usedAt: null },
       select: { id: true, role: true, expiresAt: true }
     });
-    if (!invite || invite.expiresAt.getTime() <= Date.now()) {
-      throw new WorkspaceMembershipError("INVITE_NOT_FOUND");
-    }
+    if (!invite || invite.expiresAt.getTime() <= Date.now()) return false;
     if (role === "ADMIN" && invite.role === "ADMIN") {
       throw new WorkspaceMembershipError("PERMISSION_DENIED");
     }
