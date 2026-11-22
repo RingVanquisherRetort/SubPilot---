@@ -124,6 +124,16 @@ test("PostgreSQL Telegram Stars refunds recalculate paid access and expose fully
     assert.equal(firstRefundResult.paymentUpdated, true);
     assert.equal(firstRefundResult.subscriptionStatus, "ACTIVE");
     assert.equal(firstRefundResult.subscriptionEndsAt?.toISOString(), "2026-12-01T00:00:00.000Z");
+    const scopeAfterFirstRefund = await prisma.subscriptionAccessScope.findUnique({
+      where: {
+        customerId_connectedChatId: {
+          customerId: customer.id,
+          connectedChatId: chat.id
+        }
+      }
+    });
+    assert.equal(scopeAfterFirstRefund?.desiredRevision, 1n);
+    assert.equal(scopeAfterFirstRefund?.appliedRevision, 0n);
 
     const [refundedFirstPayment, activeSubscription, activeGrant, firstRefundEvent] = await Promise.all([
       prisma.payment.findUniqueOrThrow({ where: { id: firstPayment.id } }),
@@ -157,6 +167,15 @@ test("PostgreSQL Telegram Stars refunds recalculate paid access and expose fully
     assert.equal(finalRefundResult.paymentUpdated, true);
     assert.equal(finalRefundResult.subscriptionStatus, "EXPIRED");
     assert.equal(finalRefundResult.subscriptionEndsAt?.toISOString(), finalRefundAt.toISOString());
+    const scopeAfterFinalRefund = await prisma.subscriptionAccessScope.findUniqueOrThrow({
+      where: {
+        customerId_connectedChatId: {
+          customerId: customer.id,
+          connectedChatId: chat.id
+        }
+      }
+    });
+    assert.equal(scopeAfterFinalRefund.desiredRevision, 2n);
 
     const dueSubscriptions = await prisma.subscription.findMany({
       where: {
@@ -197,6 +216,15 @@ test("PostgreSQL Telegram Stars refunds recalculate paid access and expose fully
       })
     );
     assert.equal(duplicateResult.paymentUpdated, false);
+    const scopeAfterDuplicateRefund = await prisma.subscriptionAccessScope.findUniqueOrThrow({
+      where: {
+        customerId_connectedChatId: {
+          customerId: customer.id,
+          connectedChatId: chat.id
+        }
+      }
+    });
+    assert.equal(scopeAfterDuplicateRefund.desiredRevision, 2n);
     const finalSubscription = await prisma.subscription.findUniqueOrThrow({
       where: { id: subscription.id }
     });
