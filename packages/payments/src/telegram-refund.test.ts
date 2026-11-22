@@ -60,15 +60,64 @@ test("rejects refund receipts with a different buyer, bot, charge or amount", ()
   }
 });
 
-test("recalculates a paid recurring chain from each immutable payment snapshot", () => {
+test("recalculates a recurring Stars chain from Telegram's absolute expiry timestamps", () => {
   const first = new Date("2026-01-01T00:00:00.000Z");
   const renewal = new Date("2026-01-31T00:00:00.000Z");
   const result = recalculateSubscriptionPeriod([
-    { paidAt: first, metadata: { durationDays: 30 } },
-    { paidAt: renewal, metadata: { durationDays: 30, isRenewal: true } }
+    {
+      paidAt: first,
+      metadata: {
+        durationDays: 30,
+        isRecurring: true,
+        subscriptionExpirationDate: Date.parse("2026-01-31T00:00:00.000Z") / 1000
+      }
+    },
+    {
+      paidAt: renewal,
+      metadata: {
+        durationDays: 30,
+        isRecurring: true,
+        isRenewal: true,
+        subscriptionExpirationDate: Date.parse("2026-03-02T00:00:00.000Z") / 1000
+      }
+    }
   ], { startsAt: null, endsAt: null });
 
   assert.equal(result.exact, true);
   assert.equal(result.startsAt?.toISOString(), "2026-01-01T00:00:00.000Z");
   assert.equal(result.endsAt?.toISOString(), "2026-03-02T00:00:00.000Z");
+});
+
+test("recurring refund reconciliation preserves an earlier longer paid entitlement", () => {
+  const first = new Date("2026-01-01T00:00:00.000Z");
+  const recurring = new Date("2026-01-31T00:00:00.000Z");
+  const result = recalculateSubscriptionPeriod([
+    { paidAt: first, metadata: { durationDays: 90, isRecurring: false } },
+    {
+      paidAt: recurring,
+      metadata: {
+        durationDays: 30,
+        isRecurring: true,
+        subscriptionExpirationDate: Date.parse("2026-03-02T00:00:00.000Z") / 1000
+      }
+    }
+  ], { startsAt: null, endsAt: null });
+
+  assert.equal(result.exact, true);
+  assert.equal(result.endsAt?.toISOString(), "2026-04-01T00:00:00.000Z");
+});
+
+test("refund period reconstruction falls back when a saved Telegram expiry is invalid", () => {
+  const result = recalculateSubscriptionPeriod([
+    {
+      paidAt: new Date("2026-01-01T00:00:00.000Z"),
+      metadata: { durationDays: 30, isRecurring: true, subscriptionExpirationDate: null }
+    }
+  ], {
+    startsAt: new Date("2025-12-01T00:00:00.000Z"),
+    endsAt: new Date("2026-01-15T00:00:00.000Z")
+  });
+
+  assert.equal(result.exact, false);
+  assert.equal(result.endsAt?.toISOString(), "2026-01-15T00:00:00.000Z");
 });
