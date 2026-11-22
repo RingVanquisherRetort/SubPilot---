@@ -199,7 +199,7 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
         telegramStarSubscriptionState: "ACTIVE"
       }
     });
-    await prisma.payment.create({
+    const recurringAnchorPayment = await prisma.payment.create({
       data: {
         projectId: project.id,
         customerId: recurringCustomer.id,
@@ -240,13 +240,7 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
     // exists and subsequent renewal periods remain paid. Its bot metadata is
     // still the authority for disabling future Telegram renewals.
     await prisma.payment.update({
-      where: {
-        subscriptionId_provider_providerPaymentId: {
-          subscriptionId: recurringSubscription.id,
-          provider: "TELEGRAM_STARS",
-          providerPaymentId: initialChargeId
-        }
-      },
+      where: { id: recurringAnchorPayment.id },
       data: { status: "REFUNDED", refundedAt: new Date() }
     });
 
