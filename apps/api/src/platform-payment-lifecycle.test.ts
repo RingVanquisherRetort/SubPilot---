@@ -132,7 +132,10 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
           price,
           currency: "RUB",
           billingPeriodDays: 30,
-          features: plan.features
+          features: {
+            schemaVersion: 1,
+            limits: { projects: 3, members: 5, plansPerProject: 10, connectedChatsPerProject: 3 }
+          }
         }
       });
       invalidPlanIds.push(invalidPlan.id);
