@@ -19,7 +19,8 @@ test("access-delivery retries use bounded exponential backoff", () => {
 
 test("access-delivery error values are normalized before persistence", () => {
   const state = getAccessDeliveryFailureState(0, new Date(0), " Telegram 403 / chat not found ");
-  assert.equal(state.lastError, "_Telegram_403___chat_not_found_");
+  assert.equal(state.lastError, "Telegram_403___chat_not_found");
+  assert.equal(getAccessDeliveryFailureState(0, new Date(0), "   ").lastError, "UNKNOWN_ACCESS_DELIVERY_ERROR");
 });
 
 test("invalid attempt counts are rejected", () => {
