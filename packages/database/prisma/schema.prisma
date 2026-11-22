@@ -415,11 +415,14 @@ model SubscriptionAccessGrant {
   expiresAt             DateTime
   joinedAt              DateTime?
   revokedAt             DateTime?
-  revocationReason      SubscriptionAccessRevocationReason?
-  deliveryAttempts      Int           @default(0)
-  deliveryNextAttemptAt DateTime      @default(now())
-  deliveryLastError     String?
-  deliveryFailedAt      DateTime?
+  revocationReason       SubscriptionAccessRevocationReason?
+  revocationAttempts     Int           @default(0)
+  revocationNextAttemptAt DateTime     @default(now())
+  revocationLastError    String?
+  deliveryAttempts       Int           @default(0)
+  deliveryNextAttemptAt  DateTime      @default(now())
+  deliveryLastError      String?
+  deliveryFailedAt       DateTime?
   subscription          Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
   connectedChat         ConnectedChat @relation(fields: [connectedChatId], references: [id], onDelete: Cascade)
   createdAt             DateTime      @default(now())
@@ -427,6 +430,8 @@ model SubscriptionAccessGrant {
 
   @@unique([subscriptionId, connectedChatId])
   @@index([connectedChatId, joinedAt, expiresAt])
+  @@index([revokedAt, revocationNextAttemptAt, revocationAttempts])
+  @@index([revocationReason, revocationNextAttemptAt])
   @@index([revokedAt, deliveryAttempts, deliveryNextAttemptAt])
 }
 
