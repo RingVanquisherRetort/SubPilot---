@@ -484,6 +484,85 @@ async function expireSubscriptions(
         grant.connectedChat.username ??
         grant.connectedChat.telegramChatId.toString();
 
+      // An ADMIN_EXCLUDED grant is already logically closed. Retry revoking its
+      // old Telegram invite independently, even while the parent subscription
+      // remains ACTIVE or has already expired.
+      if (
+        grant.revocationReason === "ADMIN_EXCLUDED" &&
+        grant.revokedAt !== null &&
+        grant.inviteLink
+      ) {
+        try {
+          const outcome = await prisma.$transaction(async (tx) => {
+            await tx.$queryRawUnsafe(
+              'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+              subscription.id
+            );
+            await tx.$queryRawUnsafe(
+              'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
+              grant.id
+            );
+            const currentGrant = await tx.subscriptionAccessGrant.findUnique({
+              where: { id: grant.id },
+              select: { inviteLink: true, revokedAt: true, revocationReason: true }
+            });
+            if (
+              !currentGrant ||
+              currentGrant.revocationReason !== "ADMIN_EXCLUDED" ||
+              currentGrant.revokedAt === null ||
+              !currentGrant.inviteLink
+            ) return "SKIPPED" as const;
+
+            if (!isLeaseOwned()) return "LEASE_LOST" as const;
+            try {
+              await bot!.api.revokeChatInviteLink(
+                grant.connectedChat.telegramChatId.toString(),
+                currentGrant.inviteLink
+              );
+            } catch (error) {
+              if (!isTelegramInviteAlreadyRevoked(error)) throw error;
+            }
+            if (!isLeaseOwned()) return "LEASE_LOST" as const;
+
+            await tx.subscriptionAccessGrant.updateMany({
+              where: {
+                id: grant.id,
+                inviteLink: currentGrant.inviteLink,
+                revokedAt: { not: null },
+                revocationReason: "ADMIN_EXCLUDED"
+              },
+              data: {
+                inviteLink: "",
+                expiresAt: new Date(0),
+                revocationAttempts: 0,
+                revocationNextAttemptAt: now,
+                revocationLastError: null
+              }
+            });
+            return "REVOKED" as const;
+          }, { maxWait: 10_000, timeout: 60_000 });
+
+          if (outcome === "LEASE_LOST") return;
+        } catch (error) {
+          removalFailures.push(chatLabel);
+          await recordSubscriptionAccessRevocationFailure(
+            subscription.id,
+            grant.id,
+            "INVITE_REVOKE_FAILED"
+          ).catch((recordError: unknown) => {
+            console.error(
+              "Could not schedule an administrative invite-revocation retry:",
+              recordError instanceof Error ? recordError.name : "UnknownError"
+            );
+          });
+          console.error(
+            "Could not retry an administratively revoked Telegram invite:",
+            error instanceof Error ? error.name : "UnknownError"
+          );
+        }
+        continue;
+      }
+
       try {
         const locked = await prisma.$transaction(async (tx) =>
           withSubscriptionExpiryRowLock(tx, subscription.id, now, async (currentStatus) => {
@@ -557,7 +636,10 @@ async function expireSubscriptions(
                 revokedAt: now,
                 revocationReason: currentStatus === "CANCELLED" ? "ADMIN_REVOKED" : "SUBSCRIPTION_EXPIRED",
                 inviteLink: "",
-                expiresAt: new Date(0)
+                expiresAt: new Date(0),
+                revocationAttempts: 0,
+                revocationNextAttemptAt: now,
+                revocationLastError: null
               }
             });
 
@@ -581,6 +663,16 @@ async function expireSubscriptions(
         }
       } catch (error) {
         removalFailures.push(chatLabel);
+        await recordSubscriptionAccessRevocationFailure(
+          subscription.id,
+          grant.id,
+          "ACCESS_REVOCATION_FAILED"
+        ).catch((recordError: unknown) => {
+          console.error(
+            "Could not schedule an access-revocation retry:",
+            recordError instanceof Error ? recordError.name : "UnknownError"
+          );
+        });
         console.error(
           "Could not revoke expired subscription access:",
           error instanceof Error ? error.name : "UnknownError"
@@ -593,6 +685,19 @@ async function expireSubscriptions(
       select: { status: true, endsAt: true }
     });
     if (!current) continue;
+
+    if (removalFailures.length > 0) {
+      await enqueueProjectOwnerNotification({
+        projectId: subscription.projectId,
+        dedupeKey: "subscription:" + subscription.id + ":access-revocation-pending",
+        eventType: "access_revocation_pending",
+        messageText:
+          "⚠️ SubPilot не смог завершить отзыв доступа или старых приглашений по тарифу «" +
+          subscription.plan.title + "» в проекте «" + subscription.project.name +
+          "». Проблемные площадки: " + removalFailures.join(", ") +
+          ". Повторные попытки запланированы с увеличивающимися интервалами. Проверьте права исходного бота."
+      });
+    }
 
     const stillActive = current.status === "ACTIVE" &&
       (current.endsAt === null || current.endsAt > now);
@@ -613,18 +718,6 @@ async function expireSubscriptions(
           `🔔 Срок тарифа закончился\nПроект: «${subscription.project.name}»\n` +
           `Тариф: «${subscription.plan.title}»\n` +
           "SubPilot запустил автоматическое отключение доступа."
-      });
-    }
-
-    if (removalFailures.length > 0) {
-      await enqueueProjectOwnerNotification({
-        projectId: subscription.projectId,
-        dedupeKey: "subscription:" + subscription.id + ":access-revocation-pending",
-        eventType: "access_revocation_pending",
-        messageText:
-          "⚠️ SubPilot не смог полностью отключить истёкший доступ по тарифу «" +
-          subscription.plan.title + "» в проекте «" + subscription.project.name +
-          "». Проверьте права исходного бота и подключённые площадки: " + removalFailures.join(", ")
       });
     }
 
