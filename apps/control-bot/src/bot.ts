@@ -13,6 +13,7 @@ import { isPrivateControlChat } from "./private-control-context.js";
 import {
   WorkspaceMembershipError,
   createWorkspaceInvite,
+  listWorkspaceMembersForAdmin,
   removeWorkspaceMember,
   revokeWorkspaceInvite,
   setWorkspaceMemberRole
@@ -1416,26 +1417,21 @@ export function createControlBot(token: string): Bot {
   bot.command("members", async (ctx) => {
     try {
       const user = await upsertTelegramUser(ctx);
-      const { workspace, role } = await getActiveWorkspace(user);
-      if (!ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])) {
-        await ctx.reply("Список участников с Telegram ID доступен только владельцу и администратору пространства.");
-        return;
-      }
-      const members = await prisma.workspaceMember.findMany({
-        where: { workspaceId: workspace.id },
-        include: { user: true },
-        orderBy: { createdAt: "asc" }
+      const { workspace } = await getActiveWorkspace(user);
+      const directory = await listWorkspaceMembersForAdmin({
+        workspaceId: workspace.id,
+        actorUserId: user.id
       });
-
-      const lines = members.map((member, index) => {
-        const name = [member.user.firstName, member.user.lastName].filter(Boolean).join(" ")
-          || (member.user.username ? `@${member.user.username}` : "Пользователь");
-        const username = member.user.username ? `@${member.user.username}` : "без username";
-        return `${index + 1}. ${name}\n${username} · ${member.role.toLowerCase()}\nTelegram ID: ${member.user.telegramId.toString()}`;
+      const lines = directory.members.map((member, index) => {
+        const name = [member.firstName, member.lastName].filter(Boolean).join(" ")
+          || (member.username ? "@" + member.username : "Пользователь");
+        const username = member.username ? "@" + member.username : "без username";
+        return (index + 1) + ". " + name + "\n" + username + " · " +
+          member.role.toLowerCase() + "\nTelegram ID: " + member.telegramId;
       });
 
       await ctx.reply(
-        `Участники пространства «${workspace.name}»:\n\n` +
+        "Участники пространства «" + directory.workspaceName + "»:\n\n" +
         lines.join("\n\n") +
         "\n\nПригласить участника: /invite"
       );
