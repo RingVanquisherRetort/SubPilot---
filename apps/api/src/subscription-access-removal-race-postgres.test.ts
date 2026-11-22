@@ -81,6 +81,7 @@ test("renewal fences an in-flight expiry removal without holding a DB transactio
         connectedChatId: chat.id,
         inviteLink: "",
         expiresAt: new Date(0),
+        revocationNextAttemptAt: new Date(now.getTime() - 1_000),
         joinedAt: new Date(now.getTime() - 60_000)
       }
     });
