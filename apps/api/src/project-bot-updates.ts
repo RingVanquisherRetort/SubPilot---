@@ -909,7 +909,7 @@ async function processSuccessfulStarsPayment(
 
     const currentAnchorPayment = await tx.payment.findUnique({
       where: { id: payment.id },
-      select: { status: true }
+      select: { status: true, metadata: true }
     });
     if (!currentAnchorPayment) {
       throw new Error("The original Telegram Stars payment disappeared during processing.");
@@ -986,7 +986,9 @@ async function processSuccessfulStarsPayment(
             isRenewal: true,
             originalPaymentId: payment.id,
             telegramPaymentChargeId: receipt.telegram_payment_charge_id,
-            subscriptionExpirationDate: receipt.subscription_expiration_date ?? null
+            ...(expirationTimestamp !== undefined
+              ? { subscriptionExpirationDate: expirationTimestamp }
+              : {})
           }
         },
         select: { id: true }
@@ -1003,7 +1005,19 @@ async function processSuccessfulStarsPayment(
         data: {
           status: "SUCCEEDED",
           providerPaymentId: receipt.telegram_payment_charge_id,
-          paidAt: now
+          paidAt: now,
+          ...(paymentKind === "INITIAL_RECURRING" && expirationTimestamp !== undefined
+            ? {
+                metadata: {
+                  ...(currentAnchorPayment.metadata &&
+                  typeof currentAnchorPayment.metadata === "object" &&
+                  !Array.isArray(currentAnchorPayment.metadata)
+                    ? currentAnchorPayment.metadata as Record<string, unknown>
+                    : {}),
+                  subscriptionExpirationDate: expirationTimestamp
+                }
+              }
+            : {})
         }
       });
 
