@@ -430,8 +430,14 @@ export function createControlBot(token: string): Bot {
     const user = await upsertTelegramUser(ctx);
     const { workspace, role } = await getActiveWorkspace(user);
     const canManageWorkspace = MANAGER_ROLES.includes(role as typeof MANAGER_ROLES[number]);
+    const projectScope = workspace.type === "AGENCY" && !ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])
+      ? { OR: [
+          { creatorUserId: user.id },
+          { members: { some: { userId: user.id } } }
+        ] }
+      : {};
     const projects = await prisma.project.findMany({
-      where: { workspaceId: workspace.id, status: { not: "ARCHIVED" } },
+      where: { workspaceId: workspace.id, status: { not: "ARCHIVED" }, ...projectScope },
       orderBy: { createdAt: "desc" },
       take: 30
     });
@@ -582,21 +588,12 @@ export function createControlBot(token: string): Bot {
       await ctx.editMessageText("Проект не найден или у вас нет доступа.", { reply_markup: backHomeKeyboard() });
       return;
     }
-    const [botCount, chatCount, planCount, membership] = await Promise.all([
+    const [botCount, chatCount, planCount] = await Promise.all([
       prisma.projectBot.count({ where: { projectId, status: "ACTIVE" } }),
       prisma.connectedChat.count({ where: { projectId, isActive: true } }),
-      prisma.creatorPlan.count({ where: { projectId, status: "ACTIVE" } }),
-      prisma.workspaceMember.findUnique({
-        where: {
-          workspaceId_userId: {
-            workspaceId: project.workspaceId,
-            userId: user.id
-          }
-        },
-        select: { role: true }
-      })
+      prisma.creatorPlan.count({ where: { projectId, status: "ACTIVE" } })
     ]);
-    const canManageProject = Boolean(membership && MANAGER_ROLES.includes(membership.role as typeof MANAGER_ROLES[number]));
+    const canManageProject = MANAGER_ROLES.includes(project.accessRole as typeof MANAGER_ROLES[number]);
     const keyboard = new InlineKeyboard();
     if (canManageProject) {
       keyboard.text("🤖 Подключить бота", `ui:connect:${projectId}`).row();
@@ -645,24 +642,13 @@ export function createControlBot(token: string): Bot {
     if (!projectId) return;
     const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
     if (!project) return;
-    const [plans, membership] = await Promise.all([
-      prisma.creatorPlan.findMany({
-        where: { projectId, status: "ACTIVE" },
-        include: { _count: { select: { chats: true, subscriptions: true } } },
-        orderBy: { sortOrder: "asc" },
-        take: 30
-      }),
-      prisma.workspaceMember.findUnique({
-        where: {
-          workspaceId_userId: {
-            workspaceId: project.workspaceId,
-            userId: user.id
-          }
-        },
-        select: { role: true }
-      })
-    ]);
-    const canManageProject = Boolean(membership && MANAGER_ROLES.includes(membership.role as typeof MANAGER_ROLES[number]));
+    const plans = await prisma.creatorPlan.findMany({
+      where: { projectId, status: "ACTIVE" },
+      include: { _count: { select: { chats: true, subscriptions: true } } },
+      orderBy: { sortOrder: "asc" },
+      take: 30
+    });
+    const canManageProject = MANAGER_ROLES.includes(project.accessRole as typeof MANAGER_ROLES[number]);
     const keyboard = new InlineKeyboard();
     for (const plan of plans) {
       keyboard.text(
@@ -715,16 +701,7 @@ export function createControlBot(token: string): Bot {
     if (!projectId || !planId) return;
     const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
     if (!project) return;
-    const membership = await prisma.workspaceMember.findUnique({
-      where: {
-        workspaceId_userId: {
-          workspaceId: project.workspaceId,
-          userId: user.id
-        }
-      },
-      select: { role: true }
-    });
-    const canManageProject = Boolean(membership && MANAGER_ROLES.includes(membership.role as typeof MANAGER_ROLES[number]));
+    const canManageProject = MANAGER_ROLES.includes(project.accessRole as typeof MANAGER_ROLES[number]);
     const plan = await prisma.creatorPlan.findFirst({
       where: { id: planId, projectId },
       include: {
@@ -782,18 +759,7 @@ export function createControlBot(token: string): Bot {
     const project = plan
       ? await canAccessProject(plan.projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"])
       : null;
-    const membership = project
-      ? await prisma.workspaceMember.findUnique({
-          where: {
-            workspaceId_userId: {
-              workspaceId: project.workspaceId,
-              userId: user.id
-            }
-          },
-          select: { role: true }
-        })
-      : null;
-    const canManageProject = Boolean(membership && MANAGER_ROLES.includes(membership.role as typeof MANAGER_ROLES[number]));
+    const canManageProject = Boolean(project && MANAGER_ROLES.includes(project.accessRole as typeof MANAGER_ROLES[number]));
     if (!plan || !project) {
       await ctx.reply("Тариф не найден или у вас нет доступа.");
       return;
@@ -1300,9 +1266,15 @@ export function createControlBot(token: string): Bot {
   bot.command("projects", async (ctx) => {
     try {
       const user = await upsertTelegramUser(ctx);
-      const { workspace } = await getActiveWorkspace(user);
+      const { workspace, role } = await getActiveWorkspace(user);
+      const projectScope = workspace.type === "AGENCY" && !ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])
+        ? { OR: [
+            { creatorUserId: user.id },
+            { members: { some: { userId: user.id } } }
+          ] }
+        : {};
       const projects = await prisma.project.findMany({
-        where: { workspaceId: workspace.id },
+        where: { workspaceId: workspace.id, ...projectScope },
         orderBy: { createdAt: "desc" },
         select: {
           id: true,
