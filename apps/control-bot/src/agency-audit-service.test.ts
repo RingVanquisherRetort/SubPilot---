@@ -67,7 +67,7 @@ test("agency audit history and exports obey project roles and omit raw metadata"
         workspaceId: workspace.id,
         name: "Assigned project",
         slug: "audit-assigned-" + suffix,
-        creatorUserId: manager.id
+        creatorUserId: viewer.id
       }
     });
     const managedProject = await prisma.project.create({
@@ -172,7 +172,7 @@ test("agency audit history and exports obey project roles and omit raw metadata"
     assert.equal(managerHistory.workspaceName, workspace.name);
     assert.deepEqual(
       managerHistory.events.map((event) => event.action).sort(),
-      ["ASSIGNED_PROJECT_CHANGED", "MANAGED_PROJECT_CHANGED"]
+      ["MANAGED_PROJECT_CHANGED"]
     );
     assert.equal(managerHistory.events.some((event) => "metadata" in event), false);
     assert.equal(managerHistory.events.every((event) =>
@@ -193,10 +193,11 @@ test("agency audit history and exports obey project roles and omit raw metadata"
       periodDays: 7,
       now: new Date(now.getTime() + 60_000)
     });
-    assert.equal(managerExport.eventCount, 2);
+    assert.equal(managerExport.eventCount, 1);
     assert.equal(managerExport.truncated, false);
     assert.ok(managerExport.csv.startsWith("\uFEFF"));
-    assert.ok(managerExport.csv.includes("Assigned project"));
+    assert.ok(managerExport.csv.includes("Managed project"));
+    assert.equal(managerExport.csv.includes("Assigned project"), false);
     assert.equal(managerExport.csv.includes("VIEWER_PROJECT_SECRET"), false);
     assert.equal(managerExport.csv.includes("UNASSIGNED_PROJECT_SECRET"), false);
     assert.equal(managerExport.csv.includes("never expose"), false);
@@ -219,8 +220,8 @@ test("agency audit history and exports obey project roles and omit raw metadata"
       actorUserId: viewer.id,
       limit: 10
     });
-    assert.deepEqual(projectManagerViewerHistory.events.map((event) => event.action), [
-      "MANAGED_PROJECT_CHANGED"
+    assert.deepEqual(projectManagerViewerHistory.events.map((event) => event.action).sort(), [
+      "ASSIGNED_PROJECT_CHANGED", "MANAGED_PROJECT_CHANGED"
     ]);
     await assert.rejects(
       listAgencyAuditHistory({ workspaceId: workspace.id, actorUserId: unassignedViewer.id }),
