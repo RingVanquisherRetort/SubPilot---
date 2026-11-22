@@ -48,7 +48,7 @@ test("different customer/chat scopes do not block one another", {
   skip: !process.env.DATABASE_URL
 }, async () => {
   const { prisma } = await import("@subpilot/database");
-  const { lockSubscriptionAccessScope } = await import("./subscription-access-scope-lock.js");
+  const { lockSubscriptionAccessScope } = await import("@subpilot/payments");
   const firstLocked = deferred();
   const releaseFirst = deferred();
   let secondAcquired = false;
