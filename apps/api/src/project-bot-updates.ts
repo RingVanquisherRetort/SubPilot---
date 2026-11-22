@@ -1461,6 +1461,10 @@ async function processRefundedStarsPayment(
     });
     if (!subscription) return;
 
+    // Refund reconciliation may recompute the paid period, but it must never
+    // undo an explicit administrative cancellation of the entitlement.
+    if (subscription.status === "CANCELLED") return;
+
     const remainingPayments = await tx.payment.findMany({
       where: { subscriptionId: payment.subscriptionId, status: { in: ["SUCCEEDED", "REFUNDING"] } },
       orderBy: [{ paidAt: "asc" }, { createdAt: "asc" }],
