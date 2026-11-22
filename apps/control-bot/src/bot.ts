@@ -78,6 +78,7 @@ import {
   exportAgencyAuditHistory,
   listAgencyAuditHistory
 } from "./agency-audit-service.js";
+import { AgencyAnalyticsError, getAgencyAnalytics } from "./agency-analytics-service.js";
 import {
   assertWorkspaceQuotaInTransaction,
   formatWorkspaceQuotaError,
@@ -2126,6 +2127,89 @@ export function createControlBot(token: string): Bot {
     } catch (error) {
       console.error("Control bot /auditlog failed:", error instanceof Error ? error.name : "UnknownError");
       await ctx.reply("Не удалось загрузить историю проекта.");
+    }
+  });
+
+  bot.command("agencystats", async (ctx) => {
+    const fields = String(ctx.match ?? "").trim().split(/\s+/).filter(Boolean);
+    const days = fields[0] === undefined ? 30 : Number(fields[0]);
+    if (fields.length > 1 || !Number.isSafeInteger(days) || days < 1 || days > 365) {
+      await ctx.reply("Формат: /agencystats [DAYS]\nПериод: от 1 до 365 дней, по умолчанию 30.");
+      return;
+    }
+    try {
+      const actor = await upsertTelegramUser(ctx);
+      const { workspace } = await getActiveWorkspace(actor);
+      const report = await getAgencyAnalytics({
+        workspaceId: workspace.id,
+        actorUserId: actor.id,
+        periodDays: days
+      });
+      const currencyLines = report.revenueByCurrency.length
+        ? report.revenueByCurrency.map((item) =>
+            "• " + item.currency + ": поступления " + item.grossAmount +
+            ", возвраты " + item.refundedAmount + ", итог " + item.netAmount +
+            " (" + item.payments + " оплат / " + item.refundedPayments + " возвратов)"
+          )
+        : ["• За выбранный период оплат и возвратов нет."];
+      const churnRate = report.activeAtPeriodStart > 0
+        ? report.churnRatePercent.toFixed(2) + "%"
+        : "н/д (нет активных на начало периода)";
+      const summary =
+        "Статистика агентства «" + report.workspaceName + "» за " + report.periodDays + " дней\n" +
+        report.from.toLocaleDateString("ru-RU") + " — " + report.to.toLocaleDateString("ru-RU") + "\n\n" +
+        "Активные подписки сейчас: " + report.activeSubscriptions + "\n" +
+        "Уникальные активные подписчики: " + report.uniqueActiveSubscribers + "\n" +
+        "Новые подписки: " + report.newSubscriptions + "\n" +
+        "Новые уникальные подписчики: " + report.newSubscribers + "\n" +
+        "Новые trial: " + report.newTrials + "\nРучные выдачи: " + report.manualGrants + "\n\n" +
+        "Истекли: " + report.expiredSubscriptions + "\nДосрочно отменены: " + report.cancelledSubscriptions + "\n" +
+        "Отток: " + report.churnEvents + " событий при базе " + report.activeAtPeriodStart +
+        " подписок на начало периода (" + churnRate + ")\n\n" +
+        "Платежи: " + report.successfulPayments + "\nПовторные оплаты/продления: " +
+        report.renewalPayments + " по " + report.renewingSubscriptions + " подпискам\n" +
+        "Возвраты: " + report.refundedPayments + "\n\n" +
+        "Финансы (валюты не смешиваются):\n" + currencyLines.join("\n") + "\n\n" +
+        "Проекты и авторы:";
+      let chunk = summary;
+      for (const [index, project] of report.projects.slice(0, 10).entries()) {
+        const projectRevenue = project.revenueByCurrency.length
+          ? project.revenueByCurrency.map((item) =>
+              item.currency + " " + item.grossAmount + " / возвраты " + item.refundedAmount +
+              " / итог " + item.netAmount
+            ).join("; ")
+          : "нет оплат";
+        const row = "\n\n" + (index + 1) + ". " + project.projectName +
+          "\nАвтор: " + project.creatorName +
+          "\nАктивные: " + project.activeSubscriptions +
+          "; новые: " + project.newSubscriptions +
+          "; истекли: " + project.expiredSubscriptions +
+          "; отменены: " + project.cancelledSubscriptions +
+          "\nПродления: " + project.renewalPayments +
+          "; возвраты: " + project.refundedPayments +
+          "\nВыручка: " + projectRevenue;
+        if (chunk.length + row.length > 3500) {
+          await ctx.reply(chunk);
+          chunk = row.trim();
+        } else {
+          chunk += row;
+        }
+      }
+      if (report.projects.length > 10) {
+        chunk += "\n\nПоказаны первые 10 из " + report.projects.length +
+          " доступных проектов. Детализация отсортирована по числу активных подписок.";
+      }
+      await ctx.reply(chunk + "\n\nЭто агрегированная статистика; персональные карточки подписчиков не показываются.");
+    } catch (error) {
+      const message = error instanceof AgencyAnalyticsError
+        ? error.code === "NOT_AN_AGENCY"
+          ? "Эта команда доступна только в рабочем пространстве типа «Агентство»."
+          : error.code === "PERMISSION_DENIED"
+            ? "Для просмотра статистики нужны права MANAGER на проекте либо роль ADMIN/OWNER."
+            : "Не удалось сформировать статистику агентства."
+        : "Не удалось сформировать статистику агентства.";
+      console.error("Control bot /agencystats failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply(message);
     }
   });
 
@@ -4242,6 +4326,7 @@ export function createControlBot(token: string): Bot {
       "/restoreproject ID — восстановить проект\n" +
       "/createplan ID | Название | Цена | Дней — создать тариф\n" +
       "/projectstats PROJECT_ID [DAYS] — агрегированная статистика проекта\n" +
+      "/agencystats [DAYS] — сводная аналитика агентства по доступным проектам\\n" +
       "/auditlog PROJECT_ID [LIMIT] — история действий проекта\n" +
       "/agencyaudit [LIMIT] — история агентства по доступным проектам\n" +
       "/agencyauditexport [DAYS] — выгрузить историю агентства в CSV\n" +
