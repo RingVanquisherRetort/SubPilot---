@@ -828,6 +828,11 @@ export async function deliverSubscriptionAccess(
       return updated.count === 1;
     }, { maxWait: 10_000, timeout: 15_000 });
 
+    const resultCountsBefore = {
+      links: results.links.length,
+      alreadyJoined: results.alreadyJoined.length,
+      blocked: results.blocked.length
+    };
     try {
       if (!chat.isActive) {
         await fail("CONNECTED_CHAT_INACTIVE");
@@ -990,7 +995,25 @@ export async function deliverSubscriptionAccess(
         continue;
       }
       const completed = await completeSubscriptionAccessScope(prisma, lease);
-      if (!completed) {
+      const settledScope = completed
+        ? await prisma.subscriptionAccessScope.findUnique({
+            where: {
+              customerId_connectedChatId: {
+                customerId: prepared.customerId,
+                connectedChatId: chat.id
+              }
+            },
+            select: { desiredRevision: true, appliedRevision: true }
+          })
+        : null;
+      if (
+        !completed ||
+        !settledScope ||
+        settledScope.desiredRevision > settledScope.appliedRevision
+      ) {
+        results.links.length = resultCountsBefore.links;
+        results.alreadyJoined.length = resultCountsBefore.alreadyJoined;
+        results.blocked.length = resultCountsBefore.blocked;
         results.failed.push(label);
         continue;
       }
