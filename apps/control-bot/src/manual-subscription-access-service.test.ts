@@ -168,6 +168,101 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
     assert.ok(cancelled.cancelledAt);
     assert.ok(cancelled.endsAt && cancelled.endsAt.getTime() <= Date.now());
 
+    // A recurring Stars entitlement may only be administratively revoked after
+    // Telegram confirms that future renewals have been disabled.
+    const projectBot = await prisma.projectBot.create({
+      data: {
+        projectId: project.id,
+        telegramBotId: telegramBase + 100n,
+        tokenEncrypted: "test-encrypted-bot-token",
+        status: "ACTIVE",
+        isPrimary: true
+      }
+    });
+    const recurringCustomer = await prisma.projectCustomer.create({
+      data: {
+        projectId: project.id,
+        telegramUserId: telegramBase + 20n,
+        firstName: "Recurring buyer"
+      }
+    });
+    const initialChargeId = "initial-charge-" + suffix;
+    const recurringSubscription = await prisma.subscription.create({
+      data: {
+        projectId: project.id,
+        customerId: recurringCustomer.id,
+        planId: plan.id,
+        status: "ACTIVE",
+        startsAt: new Date(Date.now() - 60_000),
+        endsAt: new Date(Date.now() + 30 * 24 * 60 * 60_000),
+        telegramStarInitialChargeId: initialChargeId,
+        telegramStarSubscriptionState: "ACTIVE"
+      }
+    });
+    await prisma.payment.create({
+      data: {
+        projectId: project.id,
+        customerId: recurringCustomer.id,
+        subscriptionId: recurringSubscription.id,
+        provider: "TELEGRAM_STARS",
+        providerPaymentId: initialChargeId,
+        idempotencyKey: "initial:" + suffix,
+        amount: "100",
+        currency: "XTR",
+        status: "SUCCEEDED",
+        paidAt: new Date(Date.now() - 60_000),
+        metadata: {
+          source: "project_bot",
+          isRecurring: true,
+          projectBotId: projectBot.id
+        }
+      }
+    });
+
+    await assert.rejects(
+      revokeSubscriptionAccessManually({
+        subscriptionId: recurringSubscription.id,
+        workspaceId: workspace.id,
+        actorUserId: owner.id
+      }, {
+        cancelTelegramRenewal: async () => false
+      }),
+      (error: unknown) => error instanceof ManualSubscriptionAccessError &&
+        error.code === "TELEGRAM_RENEWAL_CANCEL_FAILED"
+    );
+    const stillActive = await prisma.subscription.findUniqueOrThrow({
+      where: { id: recurringSubscription.id }
+    });
+    assert.equal(stillActive.status, "ACTIVE");
+    assert.equal(stillActive.telegramStarSubscriptionState, "ACTIVE");
+
+    let cancellationRequest: {
+      telegramUserId: bigint;
+      telegramPaymentChargeId: string;
+      encryptedBotToken: string;
+    } | undefined;
+    const recurringRevocation = await revokeSubscriptionAccessManually({
+      subscriptionId: recurringSubscription.id,
+      workspaceId: workspace.id,
+      actorUserId: owner.id
+    }, {
+      cancelTelegramRenewal: async (request) => {
+        cancellationRequest = request;
+        return true;
+      }
+    });
+    assert.equal(recurringRevocation.recurringRenewalCancelled, true);
+    assert.equal(cancellationRequest?.telegramUserId, recurringCustomer.telegramUserId);
+    assert.equal(cancellationRequest?.telegramPaymentChargeId, initialChargeId);
+    assert.equal(cancellationRequest?.encryptedBotToken, "test-encrypted-bot-token");
+
+    const recurringCancelled = await prisma.subscription.findUniqueOrThrow({
+      where: { id: recurringSubscription.id }
+    });
+    assert.equal(recurringCancelled.status, "CANCELLED");
+    assert.equal(recurringCancelled.telegramStarSubscriptionState, "CANCELED");
+    assert.ok(recurringCancelled.endsAt && recurringCancelled.endsAt.getTime() <= Date.now());
+
     const revokeAudit = await prisma.auditLog.findFirst({
       where: {
         action: "SUBSCRIPTION_ACCESS_REVOKE_REQUESTED",
