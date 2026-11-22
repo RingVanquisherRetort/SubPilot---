@@ -139,7 +139,7 @@ export async function claimSubscriptionAccessScope(
   db: ScopeLeaseExecutor,
   customerId: string,
   connectedChatId: string,
-  options: { now?: Date; leaseTtlMs?: number } = {}
+  options: { now?: Date; leaseTtlMs?: number; onlyActiveEntitlements?: boolean } = {}
 ): Promise<SubscriptionAccessScopeLease | null> {
   const now = options.now ?? new Date();
   const ttlMs = options.leaseTtlMs ?? DEFAULT_SUBSCRIPTION_ACCESS_SCOPE_LEASE_TTL_MS;
@@ -148,6 +148,18 @@ export async function claimSubscriptionAccessScope(
   }
   const leaseExpiresAt = new Date(now.getTime() + ttlMs);
   const leaseToken = randomUUID();
+  const activeEntitlementPredicate = options.onlyActiveEntitlements
+    ? '  AND EXISTS ( ' +
+      '    SELECT 1 FROM "SubscriptionAccessGrant" AS access_grant ' +
+      '    JOIN "Subscription" AS sub_row ON sub_row."id" = access_grant."subscriptionId" ' +
+      '    WHERE access_grant."connectedChatId" = scope."connectedChatId" ' +
+      '      AND access_grant."revokedAt" IS NULL ' +
+      '      AND sub_row."customerId" = scope."customerId" ' +
+      '      AND sub_row."status" = \'ACTIVE\' ' +
+      '      AND (sub_row."startsAt" IS NULL OR sub_row."startsAt" <= $1) ' +
+      '      AND (sub_row."endsAt" IS NULL OR sub_row."endsAt" > $1) ' +
+      '  ) '
+    : "";
   const rows = await db.$queryRawUnsafe<ScopeLeaseRow[]>(
     'UPDATE "SubscriptionAccessScope" AS scope ' +
     'SET "leaseToken" = $2, "leaseExpiresAt" = $3, ' +
@@ -156,6 +168,7 @@ export async function claimSubscriptionAccessScope(
     '  AND scope."desiredRevision" > scope."appliedRevision" ' +
     '  AND (scope."nextAttemptAt" IS NULL OR scope."nextAttemptAt" <= $1) ' +
     '  AND (scope."leaseExpiresAt" IS NULL OR scope."leaseExpiresAt" <= $1) ' +
+    activeEntitlementPredicate +
     'RETURNING scope."id", scope."customerId", scope."connectedChatId", ' +
     '          scope."desiredRevision", scope."appliedRevision", scope."leaseToken", ' +
     '          scope."leaseExpiresAt", scope."attempts"',
