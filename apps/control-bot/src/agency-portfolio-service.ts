@@ -77,7 +77,15 @@ export async function getAgencyPortfolio(input: {
       MANAGER_ROLES
     );
     const projects = await tx.project.findMany({
-      where: { workspaceId: input.workspaceId },
+      where: {
+        workspaceId: input.workspaceId,
+        ...(workspace.role === "MANAGER"
+          ? { OR: [
+              { creatorUserId: input.actorUserId },
+              { members: { some: { userId: input.actorUserId } } }
+            ] }
+          : {})
+      },
       orderBy: [{ status: "asc" }, { createdAt: "desc" }],
       select: {
         id: true,
