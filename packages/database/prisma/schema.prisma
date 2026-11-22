@@ -62,6 +62,12 @@ enum SubscriptionGrantType {
   TRIAL
 }
 
+enum TelegramStarSubscriptionState {
+  ACTIVE
+  CANCELED
+  FAILED
+}
+
 enum PaymentProvider {
   TELEGRAM_STARS
   YOOKASSA
@@ -377,6 +383,10 @@ model Subscription {
   cancelledAt  DateTime?
   reminder3dAt DateTime?
   reminder1dAt DateTime?
+  telegramStarInitialChargeId String? @unique
+  telegramStarSubscriptionState TelegramStarSubscriptionState?
+  telegramStarSubscriptionLastUpdateId Int?
+  telegramStarSubscriptionSequenceEpoch Int?
   project      Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
   customer     ProjectCustomer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
   plan         CreatorPlan          @relation(fields: [planId], references: [id], onDelete: Restrict)
