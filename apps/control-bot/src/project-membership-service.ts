@@ -42,6 +42,53 @@ async function requireProjectAdmin(
   }
 }
 
+export async function listProjectMembers(input: {
+  workspaceId: string;
+  actorUserId: string;
+  projectId: string;
+}): Promise<{
+  projectName: string;
+  creator: { name: string; telegramId: string } | null;
+  members: Array<{ name: string; telegramId: string; role: ProjectMemberRole }>;
+}> {
+  return prisma.$transaction(async (tx) => {
+    await lockWorkspace(tx, input.workspaceId);
+    await requireProjectAdmin(tx, input.workspaceId, input.actorUserId);
+    const project = await tx.project.findFirst({
+      where: { id: input.projectId, workspaceId: input.workspaceId },
+      select: {
+        name: true,
+        creatorUser: {
+          select: { firstName: true, lastName: true, username: true, telegramId: true }
+        },
+        members: {
+          include: {
+            user: {
+              select: { firstName: true, lastName: true, username: true, telegramId: true }
+            }
+          },
+          orderBy: { createdAt: "asc" }
+        }
+      }
+    });
+    if (!project) throw new ProjectMembershipError("PROJECT_NOT_FOUND");
+    const display = (user: { firstName: string | null; lastName: string | null; username: string | null }) =>
+      [user.firstName, user.lastName].filter(Boolean).join(" ").trim() ||
+      (user.username ? "@" + user.username : "Участник");
+    return {
+      projectName: project.name,
+      creator: project.creatorUser
+        ? { name: display(project.creatorUser), telegramId: project.creatorUser.telegramId.toString() }
+        : null,
+      members: project.members.map((membership) => ({
+        name: display(membership.user),
+        telegramId: membership.user.telegramId.toString(),
+        role: membership.role
+      }))
+    };
+  }, { isolationLevel: "ReadCommitted" });
+}
+
 export async function setProjectMemberAccess(input: {
   workspaceId: string;
   actorUserId: string;
