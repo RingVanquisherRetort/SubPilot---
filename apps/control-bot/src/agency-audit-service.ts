@@ -37,7 +37,7 @@ function displayActor(user: {
 
 function csvCell(value: string): string {
   // Prevent spreadsheet formula execution while retaining RFC 4180 quoting.
-  const safe = /^[\\s]*[=+\\-@]/.test(value) ? "'" + value : value;
+  const safe = /^[\s]*[=+\\-@]/.test(value) ? "'" + value : value;
   return '"' + safe.replace(/"/g, '""') + '"';
 }
 
@@ -60,7 +60,7 @@ export function buildAgencyAuditCsv(events: readonly AgencyAuditEvent[]): string
   ]);
   return "\uFEFF" + [columns, ...rows]
     .map((row) => row.map(csvCell).join(","))
-    .join("\\r\\n") + "\\r\\n";
+    .join("\r\n") + "\r\n";
 }
 
 async function loadAgencyAuditEvents(input: {
