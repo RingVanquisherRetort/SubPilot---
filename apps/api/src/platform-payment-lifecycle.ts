@@ -505,7 +505,7 @@ export async function createPlatformPaymentCheckout(
     prisma.platformPlan.findUnique({ where: { code: input.planCode } }),
     prisma.platformPaymentProviderConnection.findUnique({ where: { id: input.providerConnectionId } })
   ]);
-  if (!plan || !plan.isActive || !/[1-9]/.test(plan.price.toString())) {
+  if (!plan || !plan.isActive || plan.price.comparedTo(0) <= 0) {
     throw new PlatformPaymentLifecycleError("PLAN_NOT_AVAILABLE");
   }
   if (!connection || connection.provider !== "YOOKASSA" || connection.status !== "ACTIVE") {
