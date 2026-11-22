@@ -7,7 +7,13 @@ import {
 import { Bot, InlineKeyboard } from "grammy";
 import { prisma } from "@subpilot/database";
 import { decryptSecret } from "@subpilot/security";
-import { isTelegramInviteAlreadyRevoked, MAX_ACCESS_DELIVERY_ATTEMPTS } from "@subpilot/payments";
+import {
+  claimNextSubscriptionAccessScope,
+  completeSubscriptionAccessScope,
+  failSubscriptionAccessScope,
+  isTelegramInviteAlreadyRevoked,
+  MAX_ACCESS_DELIVERY_ATTEMPTS
+} from "@subpilot/payments";
 import {
   deliverSubscriptionAccess,
   recordSubscriptionAccessDeliveryFailure,
@@ -28,6 +34,7 @@ const PENDING_PAYMENT_TTL_MS = 24 * 60 * 60 * 1000;
 const BATCH_SIZE = 100;
 const WORKER_LEASE_HEARTBEAT_MS = 60_000;
 type LeaseOwnershipCheck = () => boolean;
+const MAX_ACCESS_SCOPE_RECONCILIATIONS_PER_PASS = 25;
 
 async function cancelStalePendingPayments(
   now: Date,
@@ -96,6 +103,144 @@ async function getProjectBot(projectId: string, projectBotId?: string): Promise<
       error instanceof Error ? error.name : "UnknownError"
     );
     return null;
+  }
+}
+
+/**
+ * Drain dirty customer/chat scopes that still have a current active entitlement.
+ * Revocations are deliberately left to the separate expiry/admin-removal path
+ * until that path is migrated to the same out-of-transaction protocol.
+ */
+async function reconcilePendingSubscriptionAccessScopes(
+  now: Date,
+  isLeaseOwned: LeaseOwnershipCheck = () => true
+): Promise<void> {
+  for (let index = 0; index < MAX_ACCESS_SCOPE_RECONCILIATIONS_PER_PASS; index += 1) {
+    if (!isLeaseOwned()) return;
+    const lease = await claimNextSubscriptionAccessScope(prisma, {
+      now: new Date(),
+      onlyActiveEntitlements: true
+    });
+    if (!lease) return;
+
+    try {
+      const candidates = await prisma.subscriptionAccessGrant.findMany({
+        where: {
+          connectedChatId: lease.connectedChatId,
+          revokedAt: null,
+          subscription: {
+            customerId: lease.customerId,
+            status: "ACTIVE",
+            AND: [
+              { OR: [{ startsAt: null }, { startsAt: { lte: now } }] },
+              { OR: [{ endsAt: null }, { endsAt: { gt: now } }] }
+            ]
+          }
+        },
+        include: {
+          connectedChat: { select: { telegramChatId: true } },
+          subscription: {
+            include: {
+              customer: true,
+              plan: { select: { title: true } },
+              payments: {
+                where: { status: "SUCCEEDED" },
+                orderBy: { paidAt: "desc" },
+                take: 1,
+                select: { metadata: true }
+              }
+            }
+          }
+        },
+        orderBy: { createdAt: "asc" }
+      });
+
+      if (!isLeaseOwned()) return;
+      if (candidates.length === 0) {
+        await completeSubscriptionAccessScope(prisma, lease, new Date());
+        continue;
+      }
+
+      // Prefer a reusable valid invite, then a previously joined grant. This
+      // avoids creating a second independent invite when subscriptions overlap
+      // for the same customer and Telegram chat.
+      const candidate =
+        candidates.find((grant) =>
+          !grant.joinedAt &&
+          Boolean(grant.inviteLink) &&
+          !grant.revokedAt &&
+          grant.expiresAt > now
+        ) ??
+        candidates.find((grant) => Boolean(grant.joinedAt)) ??
+        candidates[0]!;
+
+      const metadata = candidate.subscription.payments[0]?.metadata &&
+        typeof candidate.subscription.payments[0].metadata === "object" &&
+        !Array.isArray(candidate.subscription.payments[0].metadata)
+        ? candidate.subscription.payments[0].metadata as Record<string, unknown>
+        : {};
+      const sourceProjectBotId = typeof metadata.projectBotId === "string"
+        ? metadata.projectBotId
+        : undefined;
+      const bot = await getProjectBot(candidate.subscription.projectId, sourceProjectBotId);
+      if (!isLeaseOwned()) return;
+
+      const retryAt = new Date(Date.now() + Math.min(
+        60 * 60 * 1000,
+        60_000 * (2 ** Math.min(Math.max(lease.attempts - 1, 0), 6))
+      ));
+      if (!bot) {
+        await recordSubscriptionAccessDeliveryFailure(
+          candidate.subscriptionId,
+          lease.connectedChatId,
+          "SOURCE_BOT_UNAVAILABLE",
+          now
+        );
+        await failSubscriptionAccessScope(prisma, lease, {
+          retryAt,
+          errorCode: "SOURCE_BOT_UNAVAILABLE"
+        });
+        continue;
+      }
+
+      const access = await deliverSubscriptionAccess(
+        bot,
+        candidate.subscriptionId,
+        [candidate.connectedChat.telegramChatId.toString()],
+        isLeaseOwned,
+        lease
+      );
+      if (!isLeaseOwned()) return;
+
+      if (access.links.length > 0 && access.failed.length === 0 && access.blocked.length === 0) {
+        const telegramUserId = Number(candidate.subscription.customer.telegramUserId);
+        if (Number.isSafeInteger(telegramUserId) && telegramUserId > 0) {
+          await bot.api.sendMessage(
+            telegramUserId,
+            "Доступ по подписке «" + candidate.subscription.plan.title +
+              "» готов. Ваша персональная ссылка для вступления действует 24 часа:\n\n" +
+              access.links.join("\n")
+          ).catch((error: unknown) => {
+            console.error(
+              "Could not send a reconciled subscription invite to the buyer:",
+              error instanceof Error ? error.name : "UnknownError"
+            );
+          });
+        }
+      }
+    } catch (error) {
+      await failSubscriptionAccessScope(prisma, lease, {
+        retryAt: new Date(Date.now() + Math.min(
+          60 * 60 * 1000,
+          60_000 * (2 ** Math.min(Math.max(lease.attempts - 1, 0), 6))
+        )),
+        errorCode: "ACCESS_SCOPE_WORKER_FAILED"
+      }).catch(() => false);
+      console.error(
+        "Subscription access scope reconciliation failed:",
+        error instanceof Error ? error.name : "UnknownError"
+      );
+    }
   }
 }
 
@@ -771,6 +916,7 @@ export async function runSubscriptionLifecycle(now = new Date()): Promise<void> 
     release: releaseSubscriptionLifecycleLease,
     stages: [
       (isLeaseOwned) => cancelStalePendingPayments(now, isLeaseOwned),
+      (isLeaseOwned) => reconcilePendingSubscriptionAccessScopes(now, isLeaseOwned),
       (isLeaseOwned) => retryPendingAccessDeliveries(now, isLeaseOwned),
       (isLeaseOwned) => sendRenewalReminders(now, isLeaseOwned),
       (isLeaseOwned) => expireSubscriptions(now, isLeaseOwned),
