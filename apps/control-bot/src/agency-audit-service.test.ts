@@ -31,6 +31,7 @@ test("agency audit history and exports obey project roles and omit raw metadata"
     const manager = await makeUser(2, "Audit Manager");
     const viewer = await makeUser(3, "Audit Viewer");
     const outsider = await makeUser(4, "Audit Outsider");
+    const unassignedViewer = await makeUser(5, "Unassigned Audit Viewer");
 
     const workspace = await prisma.workspace.create({
       data: {
@@ -42,7 +43,8 @@ test("agency audit history and exports obey project roles and omit raw metadata"
           create: [
             { userId: owner.id, role: "OWNER" },
             { userId: manager.id, role: "MANAGER" },
-            { userId: viewer.id, role: "VIEWER" }
+            { userId: viewer.id, role: "VIEWER" },
+            { userId: unassignedViewer.id, role: "VIEWER" }
           ]
         }
       }
@@ -92,6 +94,7 @@ test("agency audit history and exports obey project roles and omit raw metadata"
     await prisma.projectMember.createMany({
       data: [
         { projectId: managedProject.id, userId: manager.id, role: "MANAGER" },
+        { projectId: managedProject.id, userId: viewer.id, role: "MANAGER" },
         { projectId: viewerProject.id, userId: viewer.id, role: "VIEWER" },
         { projectId: viewerProject.id, userId: manager.id, role: "VIEWER" }
       ]
@@ -194,8 +197,16 @@ test("agency audit history and exports obey project roles and omit raw metadata"
     assert.ok(safeCsv.includes("'+CMD"));
     assert.ok(safeCsv.includes("'@external"));
 
+    const projectManagerViewerHistory = await listAgencyAuditHistory({
+      workspaceId: workspace.id,
+      actorUserId: viewer.id,
+      limit: 10
+    });
+    assert.deepEqual(projectManagerViewerHistory.events.map((event) => event.action), [
+      "MANAGED_PROJECT_CHANGED"
+    ]);
     await assert.rejects(
-      listAgencyAuditHistory({ workspaceId: workspace.id, actorUserId: viewer.id }),
+      listAgencyAuditHistory({ workspaceId: workspace.id, actorUserId: unassignedViewer.id }),
       (error: unknown) => error instanceof AgencyAuditError && error.code === "PERMISSION_DENIED"
     );
     await assert.rejects(
