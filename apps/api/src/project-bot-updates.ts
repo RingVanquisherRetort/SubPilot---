@@ -22,6 +22,7 @@ import { isSubscriptionAccessPermissionActive, PAID_RENEWAL_RESTORABLE_REVOCATIO
 import { classifyTelegramMembershipDeparture } from "./telegram-membership-departure.js";
 import { getAccessRevocationRetryState } from "./access-revocation-retry.js";
 import { reconcileTelegramStarsRefundUsing } from "./telegram-stars-refund-reconciliation.js";
+import { lockSubscriptionAccessScope, lockSubscriptionAccessScopes } from "./subscription-access-scope-lock.js";
 
 type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
@@ -656,6 +657,9 @@ async function deliverSubscriptionAccessUnlocked(
     if (!isLeaseOwned()) return results;
     const label = chat.title ?? chat.username ?? chat.telegramChatId.toString();
 
+    // Coordinate this chat across all subscriptions for the same buyer.
+    await lockSubscriptionAccessScope(tx, subscription.customerId, chat.id);
+
     // Lock and validate the concrete chat permission before any Telegram API call.
     // An active billing subscription cannot recreate a missing or revoked grant.
     await tx.$queryRawUnsafe(
@@ -992,6 +996,45 @@ async function processSuccessfulStarsPayment(
       throw new Error("The original Telegram Stars payment disappeared during processing.");
     }
 
+    // Lock every existing and newly purchased customer/chat scope before changing
+    // the entitlement. This serializes this payment with expiry/delivery of any
+    // other subscription belonging to the same buyer in the same Telegram chat.
+    let connectedChatIds: string[] = [];
+    if (snapshotChatIds !== undefined) {
+      const telegramChatIds = snapshotChatIds
+        .filter((value) => /^-?\d+$/.test(value))
+        .map((value) => BigInt(value));
+      if (telegramChatIds.length > 0) {
+        const chats = await tx.connectedChat.findMany({
+          where: {
+            projectId,
+            telegramChatId: { in: telegramChatIds }
+          },
+          select: { id: true, isActive: true }
+        });
+        connectedChatIds = getSubscriptionGrantChatIds(chats);
+      }
+    } else {
+      const planChats = await tx.creatorPlanChat.findMany({
+        where: { creatorPlanId: currentSubscription.planId },
+        select: {
+          connectedChatId: true,
+          connectedChat: { select: { isActive: true } }
+        }
+      });
+      connectedChatIds = getSubscriptionGrantChatIds(
+        planChats.map((chat) => ({ id: chat.connectedChatId, isActive: chat.connectedChat.isActive }))
+      );
+    }
+    const existingGrantScopes = await tx.subscriptionAccessGrant.findMany({
+      where: { subscriptionId: subscription.id },
+      select: { connectedChatId: true }
+    });
+    await lockSubscriptionAccessScopes(tx, currentSubscription.customerId, [
+      ...connectedChatIds,
+      ...existingGrantScopes.map((grant) => grant.connectedChatId)
+    ]);
+
     const eventKey = "telegram-stars:" + receipt.telegram_payment_charge_id;
     const alreadyRecorded = await tx.paymentWebhookEvent.findUnique({
       where: { dedupeKey: eventKey },
@@ -1229,34 +1272,6 @@ async function processSuccessfulStarsPayment(
 
     // Persist pending access-delivery rows in the same transaction as payment
     // confirmation. The lifecycle worker can recover after a process interruption.
-    let connectedChatIds: string[] = [];
-    if (snapshotChatIds !== undefined) {
-      const telegramChatIds = snapshotChatIds
-        .filter((value) => /^-?\d+$/.test(value))
-        .map((value) => BigInt(value));
-      if (telegramChatIds.length > 0) {
-        const chats = await tx.connectedChat.findMany({
-          where: {
-            projectId,
-            telegramChatId: { in: telegramChatIds }
-          },
-          select: { id: true, isActive: true }
-        });
-        connectedChatIds = getSubscriptionGrantChatIds(chats);
-      }
-    } else {
-      const planChats = await tx.creatorPlanChat.findMany({
-        where: { creatorPlanId: currentSubscription.planId },
-        select: {
-          connectedChatId: true,
-          connectedChat: { select: { isActive: true } }
-        }
-      });
-      connectedChatIds = getSubscriptionGrantChatIds(
-        planChats.map((chat) => ({ id: chat.connectedChatId, isActive: chat.connectedChat.isActive }))
-      );
-    }
-
     if (!accessSuppressedByAdminRevocation && connectedChatIds.length > 0) {
       await tx.subscriptionAccessGrant.createMany({
         data: connectedChatIds.map((connectedChatId) => ({
@@ -2392,6 +2407,7 @@ export async function handleProjectBotUpdate(
             tx.subscription.findUnique({
               where: { id: grant.subscriptionId },
               select: {
+                customerId: true,
                 status: true,
                 startsAt: true,
                 endsAt: true,
@@ -2404,6 +2420,7 @@ export async function handleProjectBotUpdate(
             })
           ]);
           if (!currentSubscription || !currentGrant) return null;
+          await lockSubscriptionAccessScope(tx, currentSubscription.customerId, grant.connectedChatId);
 
           if (departureKind === "ADMIN_EXCLUSION") {
             // A Telegram moderation decision applies to this person's permission
