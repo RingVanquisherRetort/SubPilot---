@@ -1,4 +1,5 @@
 import { prisma } from "@subpilot/database";
+import { lockSubscriptionAccessScopes } from "../../api/src/subscription-access-scope-lock.js";
 import { Bot } from "grammy";
 import { decryptSecret } from "@subpilot/security";
 
@@ -210,6 +211,8 @@ export async function grantManualSubscriptionAccess(input: AccessOperationInput 
     validateDuration(durationDays);
 
     const customer = await ensureCustomer(tx, project.id, telegramUserId);
+    const connectedChatIds = plan.chats.map((chat) => chat.connectedChatId);
+    await lockSubscriptionAccessScopes(tx, customer.id, connectedChatIds);
     const existing = await tx.subscription.findFirst({
       where: {
         projectId: project.id,
@@ -252,7 +255,6 @@ export async function grantManualSubscriptionAccess(input: AccessOperationInput 
       subscriptionId = created.id;
     }
 
-    const connectedChatIds = plan.chats.map((chat) => chat.connectedChatId);
     await ensureAccessGrantRows(tx, subscriptionId, connectedChatIds, now);
     await tx.auditLog.create({
       data: {
@@ -307,6 +309,8 @@ export async function grantTrialSubscriptionAccess(input: AccessOperationInput &
     validateDuration(durationDays);
 
     const customer = await ensureCustomer(tx, project.id, telegramUserId);
+    const connectedChatIds = plan.chats.map((chat) => chat.connectedChatId);
+    await lockSubscriptionAccessScopes(tx, customer.id, connectedChatIds);
     const priorTrial = await tx.subscription.findFirst({
       where: {
         customerId: customer.id,
@@ -340,7 +344,6 @@ export async function grantTrialSubscriptionAccess(input: AccessOperationInput &
         endsAt
       }
     });
-    const connectedChatIds = plan.chats.map((chat) => chat.connectedChatId);
     await ensureAccessGrantRows(tx, created.id, connectedChatIds, now);
     await tx.auditLog.create({
       data: {
@@ -404,7 +407,7 @@ export async function revokeSubscriptionAccessManually(
         projectId: true,
         project: { select: { workspaceId: true, name: true } },
         plan: { select: { title: true } },
-        customer: { select: { telegramUserId: true } },
+        customer: { select: { id: true, telegramUserId: true } },
         status: true,
         telegramStarInitialChargeId: true,
         telegramStarSubscriptionState: true
@@ -416,6 +419,16 @@ export async function revokeSubscriptionAccessManually(
     if (target.status !== "ACTIVE") {
       throw new ManualSubscriptionAccessError("SUBSCRIPTION_NOT_ACTIVE");
     }
+
+    const targetGrants = await tx.subscriptionAccessGrant.findMany({
+      where: { subscriptionId: target.id },
+      select: { connectedChatId: true }
+    });
+    await lockSubscriptionAccessScopes(
+      tx,
+      target.customer.id,
+      targetGrants.map((grant) => grant.connectedChatId)
+    );
 
     const hasRecurringAnchor = Boolean(target.telegramStarInitialChargeId);
     if (target.telegramStarInitialChargeId && target.telegramStarSubscriptionState !== "CANCELED") {
