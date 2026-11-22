@@ -13,6 +13,7 @@ import { isPrivateControlChat } from "./private-control-context.js";
 import { getAccessibleProject } from "./project-access-service.js";
 import {
   ProjectMembershipError,
+  listProjectMembers,
   removeProjectMemberAccess,
   setProjectMemberAccess
 } from "./project-membership-service.js";
@@ -608,6 +609,9 @@ export function createControlBot(token: string): Bot {
     if (canManageProject) {
       keyboard.text("💳 Способы оплаты", `ui:payment-methods:${projectId}`).row();
     }
+    if (project.workspaceType === "AGENCY" && ADMIN_ROLES.includes(project.accessRole as typeof ADMIN_ROLES[number])) {
+      keyboard.text("👥 Доступ к проекту", `ui:projectmembers:${projectId}`).row();
+    }
     keyboard.text("📊 История платежей", `ui:payments:${projectId}`)
       .row()
       .text("⬅️ К проектам", "ui:projects");
@@ -615,6 +619,39 @@ export function createControlBot(token: string): Bot {
       `📁 ${project.name}\nАвтор: ${[project.creatorUser?.firstName, project.creatorUser?.lastName].filter(Boolean).join(" ") || (project.creatorUser?.username ? "@" + project.creatorUser.username : "не назначен")}\n\nБоты: ${botCount}\nАктивные площадки: ${chatCount}\nАктивные тарифы: ${planCount}\n\nВыберите раздел:`,
       { reply_markup: keyboard }
     );
+  });
+
+  bot.callbackQuery(/^ui:projectmembers:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const projectId = ctx.match[1];
+    if (!projectId) return;
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
+      if (!project || project.workspaceType !== "AGENCY") {
+        await ctx.reply("Управлять доступом к проекту могут только OWNER/ADMIN агентства.");
+        return;
+      }
+      const directory = await listProjectMembers({
+        workspaceId: project.workspaceId, actorUserId: user.id, projectId
+      });
+      const rows = [
+        directory.creator
+          ? "Ответственный автор: " + directory.creator.name + " · MANAGER · ID " + directory.creator.telegramId
+          : "Ответственный автор: не назначен",
+        ...directory.members.map((member) => member.name + " · " + member.role + " · ID " + member.telegramId)
+      ];
+      await ctx.editMessageText(
+        "Доступ к проекту «" + directory.projectName + "»\n\n" +
+        "OWNER/ADMIN агентства имеют полный доступ. Назначенный автор автоматически имеет MANAGER только в этом проекте.\n\n" +
+        rows.join("\n") +
+        "\n\n/setprojectmember PROJECT_ID TELEGRAM_ID MANAGER|VIEWER\n/removeprojectmember PROJECT_ID TELEGRAM_ID",
+        { reply_markup: new InlineKeyboard().text("⬅️ К проекту", "ui:project:" + projectId).row().text("К проектам", "ui:projects") }
+      );
+    } catch (error) {
+      console.error("Project member directory failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось загрузить доступ к проекту.");
+    }
   });
 
   bot.callbackQuery(/^ui:connect:(.+)$/, async (ctx) => {
@@ -1260,6 +1297,116 @@ export function createControlBot(token: string): Bot {
     } catch (error) {
       console.error("Control bot /newproject failed:", error);
       await ctx.reply(formatWorkspaceQuotaError(error));
+    }
+  });
+
+  bot.command("projectmembers", async (ctx) => {
+    const projectId = String(ctx.match ?? "").trim();
+    if (!projectId) {
+      await ctx.reply("Формат: /projectmembers PROJECT_ID");
+      return;
+    }
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace } = await getActiveWorkspace(user);
+      const directory = await listProjectMembers({
+        workspaceId: workspace.id, actorUserId: user.id, projectId
+      });
+      const rows = [
+        directory.creator ? "Ответственный автор: " + directory.creator.name + " · MANAGER" : "Ответственный автор: не назначен",
+        ...directory.members.map((member) => member.name + " · " + member.role + " · Telegram ID " + member.telegramId)
+      ];
+      await ctx.reply(
+        "Доступ к проекту «" + directory.projectName + "»:\n\n" +
+        rows.join("\n") +
+        "\n\n/setprojectmember PROJECT_ID TELEGRAM_ID MANAGER|VIEWER\n/removeprojectmember PROJECT_ID TELEGRAM_ID"
+      );
+    } catch (error) {
+      if (error instanceof ProjectMembershipError) {
+        await ctx.reply(error.code === "PERMISSION_DENIED"
+          ? "Список проектной команды доступен только OWNER/ADMIN агентства."
+          : "Проект не найден в активном агентстве.");
+      } else {
+        console.error("/projectmembers failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось загрузить проектную команду.");
+      }
+    }
+  });
+
+  bot.command("setprojectmember", async (ctx) => {
+    const fields = String(ctx.match ?? "").trim().split(/\s+/).filter(Boolean);
+    const projectId = fields[0] ?? "";
+    const telegramId = fields[1] ?? "";
+    const role = (fields[2] ?? "").toUpperCase();
+    if (fields.length !== 3 || !projectId || !/^\d{1,20}$/.test(telegramId) ||
+        !["MANAGER", "VIEWER"].includes(role)) {
+      await ctx.reply("Формат: /setprojectmember PROJECT_ID TELEGRAM_ID [MANAGER|VIEWER]");
+      return;
+    }
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace } = await getActiveWorkspace(user);
+      const result = await setProjectMemberAccess({
+        workspaceId: workspace.id,
+        actorUserId: user.id,
+        projectId,
+        targetTelegramId: telegramId,
+        role: role as "MANAGER" | "VIEWER"
+      });
+      await ctx.reply(result.changed
+        ? "Доступ к проекту «" + result.projectName + "» для " + result.memberName +
+          " установлен: " + (result.previousRole ?? "нет доступа") + " → " + result.role + "."
+        : "У " + result.memberName + " уже установлена роль " + result.role + ".");
+    } catch (error) {
+      if (error instanceof ProjectMembershipError) {
+        const messages: Record<string, string> = {
+          NOT_AN_AGENCY: "Проектные роли доступны только в агентствах.",
+          ACTOR_NOT_MEMBER: "У вас больше нет доступа к агентству.",
+          PERMISSION_DENIED: "Назначать проектные роли могут только OWNER/ADMIN агентства.",
+          PROJECT_NOT_FOUND: "Проект не найден или находится в архиве.",
+          MEMBER_NOT_FOUND: "Пользователь не является участником этого агентства.",
+          CREATOR_HAS_MANAGER_ACCESS: "Ответственный автор автоматически имеет MANAGER. Сначала измените или снимите назначение автора."
+        };
+        await ctx.reply(messages[error.code] ?? "Не удалось назначить доступ.");
+      } else {
+        console.error("/setprojectmember failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось назначить доступ к проекту.");
+      }
+    }
+  });
+
+  bot.command("removeprojectmember", async (ctx) => {
+    const fields = String(ctx.match ?? "").trim().split(/\s+/).filter(Boolean);
+    const projectId = fields[0] ?? "";
+    const telegramId = fields[1] ?? "";
+    if (fields.length !== 2 || !projectId || !/^\d{1,20}$/.test(telegramId)) {
+      await ctx.reply("Формат: /removeprojectmember PROJECT_ID TELEGRAM_ID");
+      return;
+    }
+    try {
+      const user = await upsertTelegramUser(ctx);
+      const { workspace } = await getActiveWorkspace(user);
+      const result = await removeProjectMemberAccess({
+        workspaceId: workspace.id, actorUserId: user.id, projectId, targetTelegramId: telegramId
+      });
+      await ctx.reply(result.removed
+        ? "Доступ " + result.role + " для " + result.memberName + " к проекту «" + result.projectName + "» снят."
+        : "У " + result.memberName + " нет отдельного доступа к этому проекту.");
+    } catch (error) {
+      if (error instanceof ProjectMembershipError) {
+        const messages: Record<string, string> = {
+          NOT_AN_AGENCY: "Проектные роли доступны только в агентствах.",
+          ACTOR_NOT_MEMBER: "У вас больше нет доступа к агентству.",
+          PERMISSION_DENIED: "Менять проектные роли могут только OWNER/ADMIN агентства.",
+          PROJECT_NOT_FOUND: "Проект не найден.",
+          MEMBER_NOT_FOUND: "Пользователь не является участником этого агентства.",
+          CREATOR_HAS_MANAGER_ACCESS: "Нельзя снять доступ с назначенного автора. Сначала измените или снимите назначение автора."
+        };
+        await ctx.reply(messages[error.code] ?? "Не удалось снять доступ.");
+      } else {
+        console.error("/removeprojectmember failed:", error instanceof Error ? error.name : "UnknownError");
+        await ctx.reply("Не удалось снять доступ к проекту.");
+      }
     }
   });
 
@@ -4000,6 +4147,9 @@ export function createControlBot(token: string): Bot {
       "SubPilot — управление платными Telegram-сообществами.\n\n" +
       "/start — открыть кабинет\n" +
       "/newproject Название — создать проект\n" +
+      "/projectmembers PROJECT_ID — состав проектной команды\n" +
+      "/setprojectmember PROJECT_ID TELEGRAM_ID [MANAGER|VIEWER] — выдать проектный доступ\n" +
+      "/removeprojectmember PROJECT_ID TELEGRAM_ID — снять проектный доступ\n" +
       "/projects — проекты активного пространства\n" +
       "/agencyportfolio — портфель агентства по авторам\n" +
       "/assigncreator PROJECT_ID TELEGRAM_ID — назначить автора проекта\n" +
