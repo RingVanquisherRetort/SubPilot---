@@ -2163,6 +2163,40 @@ test("default review preserves membership until an authorized operator observes 
   });
 });
 
+test("Telegram kicked during manual review does not invent a moderator exclusion", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ grant, project }) => {
+    const owner = await prisma.project.findUniqueOrThrow({
+      where: { id: project.id },
+      select: { workspace: { select: { createdById: true } } }
+    });
+    await prisma.subscriptionAccessGrant.update({
+      where: { id: grant.id },
+      data: {
+        inviteLink: "",
+        revocationLastError: "MEMBER_BAN_OWNERSHIP_UNCERTAIN"
+      }
+    });
+    const bot = { api: {
+      getChatMember: async () => ({ status: "kicked" })
+    } } as unknown as Bot;
+    assert.equal(await confirmPendingAccessModerationReview(
+      project.id, owner.workspace.createdById, grant.id, bot
+    ), "CONFIRMED");
+    const saved = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id }
+    });
+    assert.ok(saved.revokedAt);
+    assert.equal(saved.revocationReason, "SUBSCRIPTION_EXPIRED",
+      "kicked can originate from an old timed bot ban, not necessarily a moderator");
+    assert.equal(await prisma.auditLog.count({
+      where: { projectId: project.id, resourceId: grant.id,
+        action: "ACCESS_MODERATION_REVIEW_CONFIRMED" }
+    }), 1);
+  });
+});
+
 test("a delayed manual membership check cannot close a new scope revision", {
   skip: !process.env.DATABASE_URL
 }, async () => {
