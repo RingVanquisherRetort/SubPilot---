@@ -9,6 +9,8 @@
 
 - Purchase creation persists a pending payment and immutable invoice metadata (project bot, plan, destinations, recurring mode, terms) before calling Telegram.
 - Invoice dispatch records a durable start marker before the external send. A lost response is treated as ambiguous and suppresses duplicate invoice sends.
+- A pending invoice with any dispatch marker is not locally expired or automatically reissued: Telegram provides no local cancellation/fencing primitive for an already-sent invoice. Only never-dispatched pending payments are expired. Existing legacy cancelled-but-dispatched records are also treated as ambiguous and block replacement invoices.
+- A successful late receipt can reactivate an invoice-timed-out subscription. An explicit adminAccessRevokedAt marker distinguishes an administrative revoke from an invoice timeout, so a late payment cannot silently become a paid-but-unfulfilled order.
 - Pre-checkout validates the invoice anchor, originating project bot, buyer, amount, currency, project status and destination snapshot.
 - Successful-payment processing is serialized on the subscription row and records a charge-keyed webhook event in the same transaction as payment/entitlement changes.
 - Existing tests cover invoice dispatch state, checkout destination snapshots, bot-origin validation and PostgreSQL advisory-lock single-claim behavior.
@@ -29,6 +31,7 @@
 - A durable due timestamp and claim fence allow lifecycle-worker retry after an ambiguous response or process restart.
 - A stale worker may no longer clear a successor's live claim. If the successor has already finished, the stale response schedules a repair pass.
 - A pending administrative cancellation blocks a buyer resume from overriding the administrator's desired state.
+- Confirmed manual revocation writes adminAccessRevokedAt; successful-payment processing checks this explicit marker rather than treating every CANCELLED subscription as an admin revoke. Legacy markers are backfilled from access grants, recurring anchors and audit history.
 - Existing PostgreSQL coverage exercises ambiguous buyer cancellation and late buyer state changes; the new stale-worker/successor-claim test covers the overlapping remote-request boundary.
 
 ## B4 — Refund and entitlement recalculation
@@ -62,10 +65,13 @@ Retry policy: 10 failed/unconfirmed attempts with bounded backoff; on exhaustion
 - `apps/api/src/subscription-lifecycle.ts`
 - `apps/api/src/telegram-stars-refund-reconciliation.ts`
 - `apps/api/src/telegram-stars-refund-reconciliation-postgres.test.ts`
+- `apps/api/src/telegram-invoice-state.ts`
+- `apps/api/src/telegram-invoice-state.test.ts`
 - `apps/control-bot/src/manual-subscription-access-service.ts`
 - `apps/control-bot/src/manual-subscription-access-service.test.ts`
 - `packages/database/prisma/schema.prisma`
 - `packages/database/prisma/migrations/20261123140000_admin_stars_cancel_intent/migration.sql`
+- `packages/database/prisma/migrations/20261123150000_admin_access_revocation_marker/migration.sql`
 - `packages/payments/package.json`
 - `packages/payments/src/admin-stars-cancellation.ts`
 - `packages/payments/src/index.ts`
@@ -74,6 +80,9 @@ Retry policy: 10 failed/unconfirmed attempts with bounded backoff; on exhaustion
 ## New regression coverage
 
 - A stale Stars worker cannot clear a successor claim while its Telegram request is in flight.
+- A successful Stars payment arriving after the local pending-payment timeout reactivates the entitlement unless an explicit admin-revocation marker exists.
+- A successful Stars payment arriving after a confirmed admin revoke remains recorded but cannot reopen access.
+- PostgreSQL stale-payment cleanup leaves any possibly dispatched invoice pending and cancels only never-dispatched payments; invoice-state unit tests cover the ambiguity gate.
 - A pending admin cancellation prevents a buyer resume from changing the desired Telegram state back to active.
 - An authenticated Stars cancellation webhook wakes a pending admin revoke for worker finalization.
 - A recurring Stars payment arriving during admin cancellation is recorded but cannot restore access.
@@ -90,10 +99,13 @@ GitHub Actions run [45150189396](https://github.com/RingVanquisherRetort/SubPilo
 
 This is automated PostgreSQL/CI evidence only, not a live Telegram or payment acceptance test.
 
+A subsequent P0 hardening pass added the explicit admin-revocation marker and made invoice expiry/reissue conservative. The CI run for the resulting HEAD is pending; do not treat the earlier green run as validation of these follow-up commits.
+
 ## Residual risks / acceptance limits
 
 1. Telegram does not provide a database fencing token or compare-and-swap for `editUserStarSubscription`. Local claim tokens fence database finalization only. A remote request already in flight cannot be cancelled; retries converge toward the durable desired state.
 2. If Telegram accepted cancellation but both its response and the authenticated subscription update are permanently lost, the worker retries the same cancellation intent. After 10 unconfirmed attempts it stops automatic retries and leaves an auditable pending intent for operator retry; the entitlement remains in its current state (ACTIVE or naturally EXPIRED) until confirmation.
 3. Telegram Stars invoice creation, actual charge capture, real renewal timing, real refund delivery, webhook retry ordering and the remote effects of `editUserStarSubscription` cannot be proven by PostgreSQL mocks/CI.
+4. A dispatched invoice cannot be revoked by the local worker. It is therefore retained as pending indefinitely and blocks automatic replacement; if the buyer cannot find the original invoice message, operator support is required. A payment received after an explicit admin revoke is recorded and flagged for review; the local system cannot prevent Telegram from charging an already-issued invoice.
 4. No real Telegram or payment-provider operation was performed. Live acceptance remains a separate gated activity.
 5. This document does not close AUD-018. Direction A and the combined P0 review remain required.
