@@ -1764,7 +1764,7 @@ export async function processSuccessfulStarsPayment(
   await ctx.reply(messageParts.join("\n\n"));
 }
 
-async function processRefundedStarsPayment(
+export async function processRefundedStarsPayment(
   projectBotId: string,
   ctx: Context
 ): Promise<void> {
