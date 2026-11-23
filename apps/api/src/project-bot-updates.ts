@@ -1154,7 +1154,7 @@ export async function deliverSubscriptionAccess(
   return results;
 }
 
-async function processSuccessfulStarsPayment(
+export async function processSuccessfulStarsPayment(
   bot: Bot,
   projectId: string,
   projectBotId: string,
