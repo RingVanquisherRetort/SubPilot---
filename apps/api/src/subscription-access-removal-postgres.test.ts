@@ -1,6 +1,6 @@
 import { queueBuyerRenewal, applyBuyerRenewal } from "./buyer-stars-renewal.js";
 import { reconcileLateStarsCancellation } from "./late-stars-cancellation.js";
-import { deliverSubscriptionAccess, validatePreCheckout } from "./project-bot-updates.js";
+import { deliverSubscriptionAccess, handleProjectBotUpdate, validatePreCheckout } from "./project-bot-updates.js";
 import { hasActiveInviteEntrantGrant } from "./invite-entry-entitlement.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -375,6 +375,83 @@ test("channel expiry persists its timed ban intent before contacting Telegram", 
     } finally {
       await prisma.telegramRemovalIntent.deleteMany({ where: { botId, telegramChatId: chat.telegramChatId } });
     }
+  });
+});
+
+
+test("authenticated Stars cancellation webhook persists recovery state and rejects an older update", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, customer, project }) => {
+    const projectBot = await prisma.projectBot.create({
+      data: {
+        projectId: project.id,
+        telegramBotId: BigInt(Date.now()) + 900_000_000n,
+        tokenEncrypted: "test-encrypted-bot-token",
+        status: "ACTIVE",
+        isPrimary: true
+      }
+    });
+    const charge = "webhook-recovery-" + randomUUID();
+    await prisma.subscription.update({
+      where: { id: subscription.id },
+      data: {
+        status: "ACTIVE",
+        endsAt: new Date(Date.now() + 30 * 86_400_000),
+        telegramStarInitialChargeId: charge,
+        telegramStarSubscriptionState: "ACTIVE"
+      }
+    });
+    const payment = await prisma.payment.create({
+      data: {
+        projectId: project.id,
+        customerId: customer.id,
+        subscriptionId: subscription.id,
+        provider: "TELEGRAM_STARS",
+        providerPaymentId: charge,
+        idempotencyKey: "webhook-recovery:" + randomUUID(),
+        amount: "100",
+        currency: "XTR",
+        status: "SUCCEEDED",
+        paidAt: new Date(),
+        metadata: {
+          source: "project_bot",
+          isRecurring: true,
+          projectBotId: projectBot.id
+        }
+      }
+    });
+
+    const updateId = 700_000_000;
+    const makeUpdate = (state: "active" | "canceled") => ({
+      update_id: updateId,
+      subscription: {
+        user: { id: Number(customer.telegramUserId) },
+        invoice_payload: payment.id,
+        state
+      }
+    });
+    const token = "123456789:test-token";
+    await handleProjectBotUpdate(
+      token, project.id, projectBot.id,
+      makeUpdate("canceled") as never, updateId, 0
+    );
+    const afterCancel = await prisma.subscription.findUniqueOrThrow({
+      where: { id: subscription.id }
+    });
+    assert.equal(afterCancel.telegramStarSubscriptionState, "CANCELED");
+    assert.equal(afterCancel.telegramStarSubscriptionLastUpdateId, updateId);
+    assert.equal(afterCancel.status, "ACTIVE", "buyer cancellation must not revoke the paid period");
+
+    await handleProjectBotUpdate(
+      token, project.id, projectBot.id,
+      makeUpdate("active") as never, updateId - 1, 0
+    );
+    const afterStale = await prisma.subscription.findUniqueOrThrow({
+      where: { id: subscription.id }
+    });
+    assert.equal(afterStale.telegramStarSubscriptionState, "CANCELED");
+    assert.equal(afterStale.telegramStarSubscriptionLastUpdateId, updateId);
   });
 });
 
