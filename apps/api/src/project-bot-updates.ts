@@ -1332,7 +1332,7 @@ export async function processSuccessfulStarsPayment(
     // This also covers a one-time or first-recurring charge that was already in flight
     // when the administrator revoked an ACTIVE subscription without a charge anchor.
     const accessSuppressedByAdminRevocation =
-      currentSubscription.status === "CANCELLED" || currentSubscription.adminStarsCancelPending;
+      currentSubscription.adminAccessRevokedAt !== null || currentSubscription.adminStarsCancelPending;
     const isInitialRecurring = paymentKind === "INITIAL_RECURRING";
 
     const currentEnd = currentSubscription.endsAt && currentSubscription.endsAt > now
