@@ -438,7 +438,9 @@ export async function revokeSubscriptionAccessManually(
     if (!target || target.project.workspaceId !== input.workspaceId) {
       throw new ManualSubscriptionAccessError("SUBSCRIPTION_NOT_FOUND");
     }
-    if (target.status !== "ACTIVE") {
+    const canResumePendingAdminCancellation =
+      target.adminStarsCancelPending && ["EXPIRED", "CANCELLED"].includes(target.status);
+    if (target.status !== "ACTIVE" && !canResumePendingAdminCancellation) {
       throw new ManualSubscriptionAccessError("SUBSCRIPTION_NOT_ACTIVE");
     }
 
