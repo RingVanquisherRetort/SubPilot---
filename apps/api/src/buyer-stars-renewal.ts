@@ -60,10 +60,12 @@ export async function applyBuyerRenewal(id: string, botId: string, edit: Edit) {
     if (committed.count) return true;
   }
   // A superseded request may have reached Telegram after its successor completed.
+  // Never clear a successor's live claim. If the successor already finished,
+  // claim is null and we enqueue one more pass to repair a possibly late remote
+  // response from this stale request. If it is still in flight, let it finish.
   await prisma.subscription.updateMany({
-    where: { id, buyerStarsBotId: botId, buyerStarsChargeId: charge,
-      OR: [{ buyerStarsClaim: null }, { buyerStarsClaim: { not: claim } }] },
-    data: { buyerStarsClaim: null, buyerStarsDueAt: new Date() }
+    where: { id, buyerStarsBotId: botId, buyerStarsChargeId: charge, buyerStarsClaim: null },
+    data: { buyerStarsDueAt: new Date() }
   });
   return false;
 }
