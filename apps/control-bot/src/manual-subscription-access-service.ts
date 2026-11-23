@@ -46,7 +46,7 @@ function parseTelegramUserId(value: string): bigint {
 
 /** Resolve only previously observed project customers; Telegram has no arbitrary username lookup API. */
 export async function resolveProjectCustomerTelegramId(projectId: string, identifier: string): Promise<string> {
-  if (/^\\d{1,20}$/.test(identifier)) return parseTelegramUserId(identifier).toString();
+  if (/^\d{1,20}$/.test(identifier)) return parseTelegramUserId(identifier).toString();
   const username = identifier.replace(/^@/, "");
   if (!/^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(username)) {
     throw new ManualSubscriptionAccessError("INVALID_TELEGRAM_USER_ID");

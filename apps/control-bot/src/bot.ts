@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import { Bot, InputFile, InlineKeyboard, type Context } from "grammy";
 import { prisma } from "@subpilot/database";
 import { decryptSecret, encryptSecret } from "@subpilot/security";
@@ -94,6 +94,7 @@ import {
   recalculateSubscriptionPeriod,
   type CreatorMerchantType
 } from "@subpilot/payments";
+import { selectedGrantRecipient } from "./grant-recipient.js";
 import { parseOptionalRecurringFlag } from "./recurring-plan-input.js";
 
 const BOT_TOKEN_PATTERN = /^\d{5,15}:[A-Za-z0-9_-]{20,}$/;
@@ -137,13 +138,21 @@ type PendingPlatformProviderSecret =
   | { kind: "CREATE"; connection: PlatformProviderConnectionInput; expiresAt: number }
   | { kind: "ROTATE"; connectionId: string; expiresAt: number };
 
+type GrantAction = {
+  kind: "grant_manual_subscription" | "grant_trial_subscription";
+  projectId: string;
+  planId: string;
+  requestId: number;
+  defaultDays: number | null;
+  selectedUserId?: number;
+};
+
 type PendingTextActionInput =
   | { kind: "new_project" }
   | { kind: "new_agency" }
   | { kind: "create_plan"; projectId: string }
   | { kind: "edit_plan"; projectId: string; planId: string }
-  | { kind: "grant_manual_subscription"; projectId: string; planId: string }
-  | { kind: "grant_trial_subscription"; projectId: string; planId: string };
+  | GrantAction;
 
 type PendingTextAction = PendingTextActionInput & { expiresAt: number };
 
@@ -786,26 +795,22 @@ export function createControlBot(token: string): Bot {
       return;
     }
     const projectId = project.id;
-    if (kind === "manual") {
-      setPendingTextAction(ctx.from.id, { kind: "grant_manual_subscription", projectId, planId });
-      await ctx.reply(
-        "Ручная выдача по тарифу «" + plan.title + "».\n\n" +
-        "Отправьте: @username | DAYS или TELEGRAM_ID | DAYS\n" +
-        "DAYS необязателен (тогда используется срок тарифа); 0 означает бессрочный доступ. Максимум — 3650 дней.",
-        { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
-      );
-    } else {
-      setPendingTextAction(ctx.from.id, { kind: "grant_trial_subscription", projectId, planId });
-      await ctx.reply(
-        "Пробный доступ по тарифу «" + plan.title + "».\n\n" +
-        "Отправьте: @username | DAYS или TELEGRAM_ID | DAYS\n" +
-        (plan.trialDays > 0
-          ? "DAYS необязателен: будет использован настроенный пробный срок — " + plan.trialDays + " дн."
-          : "У тарифа не задан пробный срок, поэтому DAYS нужно указать явно.") +
-        "\nСрок — от 1 до 3650 дней.",
-        { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
-      );
-    }
+    const requestId = randomInt(1, 0x80000000);
+    setPendingTextAction(ctx.from.id, {
+      kind: kind === "manual" ? "grant_manual_subscription" : "grant_trial_subscription",
+      projectId, planId, requestId,
+      defaultDays: kind === "manual" ? plan.durationDays : plan.trialDays || null
+    });
+    await ctx.reply(
+      "Кому выдать " + (kind === "trial" ? "пробный " : "") + "доступ по тарифу «" + plan.title + "»?\n" +
+      "Нажмите «Выбрать человека». Можно также отправить @username знакомого боту покупателя или его ID. " +
+      "При вводе вручную можно добавить срок, например @username | 7.",
+      { reply_markup: {
+        keyboard: [[{ text: "👤 Выбрать человека", request_users: {
+          request_id: requestId, user_is_bot: false, max_quantity: 1, request_name: true
+        } }], [{ text: "/cancel" }]], resize_keyboard: true, one_time_keyboard: true
+      } }
+    );
   });
 
   bot.callbackQuery(/^sar:([^:]+)$/, async (ctx) => {
@@ -3836,7 +3841,31 @@ export function createControlBot(token: string): Bot {
       pendingTextActions.delete(ctx.from.id);
       pendingPlatformProviderSecrets.delete(ctx.from.id);
     }
-    await ctx.reply("Текущая операция отменена.");
+    await ctx.reply("Текущая операция отменена.", { reply_markup: { remove_keyboard: true } });
+  });
+
+  bot.on("message:users_shared", async (ctx) => {
+    const action = pendingTextActions.get(ctx.from.id);
+    const shared = ctx.message.users_shared;
+    if (!action || (action.kind !== "grant_manual_subscription" && action.kind !== "grant_trial_subscription")) {
+      await ctx.reply("Сначала откройте выдачу доступа и выберите тариф.");
+      return;
+    }
+    const recipient = selectedGrantRecipient(action, shared);
+    if (!recipient) {
+      await ctx.reply("Этот выбор уже недоступен. Используйте последний запрос на выдачу доступа.");
+      return;
+    }
+    action.selectedUserId = recipient.user_id;
+    const trial = action.kind === "grant_trial_subscription";
+    const hasDefault = !trial || action.defaultDays !== null;
+    const label = action.defaultDays ? action.defaultDays + " дн." : "бессрочно";
+    await ctx.reply(
+      "Получатель: " + ([recipient.first_name, recipient.last_name].filter(Boolean).join(" ") || "выбранный пользователь") +
+      ".\n" + (hasDefault ? "Нажмите «Выдать: " + label + "» или введите срок в днях." : "Введите срок пробного доступа в днях."),
+      { reply_markup: { keyboard: [...(hasDefault ? [[{ text: "Выдать: " + label }]] : []), [{ text: "/cancel" }]],
+        resize_keyboard: true, one_time_keyboard: true } }
+    );
   });
 
   bot.on("message:text", async (ctx) => {
@@ -4049,9 +4078,15 @@ export function createControlBot(token: string): Bot {
       if (pendingAction.kind === "grant_manual_subscription" ||
           pendingAction.kind === "grant_trial_subscription") {
         const isTrial = pendingAction.kind === "grant_trial_subscription";
-        const fields = input.split("|").map((field) => field.trim());
+        const selected = pendingAction.selectedUserId;
+        const defaultLabel = pendingAction.defaultDays ? pendingAction.defaultDays + " дн." : "бессрочно";
+        const useDefault = selected && input === "Выдать: " + defaultLabel &&
+          (!isTrial || pendingAction.defaultDays !== null);
+        const fields = selected
+          ? [String(selected), useDefault ? "" : input]
+          : input.split("|").map((field) => field.trim());
         const telegramUserId = fields[0];
-        const daysText = fields[1] || undefined;
+        const daysText = useDefault ? String(pendingAction.defaultDays ?? 0) : fields[1] || undefined;
         const parsedDays = daysText === undefined ? undefined : Number(daysText);
         const validDuration = daysText === undefined ||
           (/^\d+$/.test(daysText) &&
@@ -4060,11 +4095,9 @@ export function createControlBot(token: string): Bot {
               ? (parsedDays as number) >= 1 && (parsedDays as number) <= 3650
               : (parsedDays as number) >= 0 && (parsedDays as number) <= 3650));
         if (fields.length > 2 || !telegramUserId || !(/^\d{1,20}$/.test(telegramUserId) || /^@?[A-Za-z0-9_]{5,32}$/.test(telegramUserId)) || !validDuration) {
-          setPendingTextAction(ctx.from.id, pendingAction.kind === "grant_trial_subscription"
-            ? { kind: "grant_trial_subscription", projectId: pendingAction.projectId, planId: pendingAction.planId }
-            : { kind: "grant_manual_subscription", projectId: pendingAction.projectId, planId: pendingAction.planId });
+          setPendingTextAction(ctx.from.id, pendingAction);
           await ctx.reply(
-            "Проверьте формат: @username | DAYS или TELEGRAM_ID | DAYS. " +
+            (selected ? "Введите срок в днях. " : "Выберите человека или отправьте @username | DAYS. ") +
             (isTrial ? "DAYS — от 1 до 3650; можно не указывать, если срок задан в тарифе." :
               "DAYS — от 0 до 3650; 0 означает бессрочный доступ, пропуск использует срок тарифа."),
             { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
@@ -4123,7 +4156,9 @@ export function createControlBot(token: string): Bot {
         } catch (error) {
           if (error instanceof ManualSubscriptionAccessError) {
             const messages: Partial<Record<ManualSubscriptionAccessError["code"], string>> = {
-              INVALID_TELEGRAM_USER_ID: "Telegram ID должен быть положительным числом.",
+              USERNAME_NOT_FOUND: "Этот @username пока неизвестен проекту. Начните выдачу заново и нажмите «Выбрать человека».",
+              USERNAME_AMBIGUOUS: "По этому имени найдено несколько записей. Начните выдачу заново и выберите человека в Telegram.",
+              INVALID_TELEGRAM_USER_ID: "Выберите человека или введите корректный @username или ID.",
               INVALID_DURATION: "Срок должен быть от 1 до 3650 дней; для ручной выдачи 0 означает бессрочный доступ.",
               ACTOR_NOT_AUTHORIZED: "Только владелец или администратор пространства может выдавать доступ.",
               PROJECT_NOT_FOUND: "Проект не найден или архивирован.",

@@ -19,6 +19,7 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
     grantManualSubscriptionAccess,
     grantTrialSubscriptionAccess,
     listActiveProjectSubscriptions,
+    resolveProjectCustomerTelegramId,
     ManualSubscriptionAccessError,
     revokeSubscriptionAccessManually
   } = await import("./manual-subscription-access-service.js");
@@ -99,6 +100,8 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
         error.code === "ACTOR_NOT_AUTHORIZED"
     );
 
+    const pickedId = String(telegramBase + 10n);
+    assert.equal(await resolveProjectCustomerTelegramId(project.id, pickedId), pickedId);
     const manualInput = {
       workspaceId: workspace.id,
       projectId: project.id,
