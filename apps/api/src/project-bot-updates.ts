@@ -639,11 +639,11 @@ export async function recordSubscriptionAccessRevocationFailure(
           dedupeKey: "access-moderation-review:" + grantId,
           eventType: "ACCESS_MODERATION_REVIEW",
           messageText:
-            "Требуется ручная проверка доступа после завершения подписки.\\n" +
-            "Чат: " + (details.connectedChat.title || details.connectedChat.telegramChatId.toString()) + "\\n" +
-            "Telegram chat ID: " + details.connectedChat.telegramChatId.toString() + "\\n" +
-            "Telegram user ID: " + details.subscription.customer.telegramUserId.toString() + "\\n" +
-            "Причина: " + errorCode + "\\n" +
+            "Требуется ручная проверка доступа после завершения подписки.\n" +
+            "Чат: " + (details.connectedChat.title || details.connectedChat.telegramChatId.toString()) + "\n" +
+            "Telegram chat ID: " + details.connectedChat.telegramChatId.toString() + "\n" +
+            "Telegram user ID: " + details.subscription.customer.telegramUserId.toString() + "\n" +
+            "Причина: " + errorCode + "\n" +
             "SubPilot не блокировал участника и не отменял решения модератора. Проверьте участника в Telegram."
         });
       }
