@@ -26,6 +26,7 @@ import {
 import { getSubscriptionGrantTelegramChatIds } from "./subscription-grant-persistence.js";
 import { buildExpiredSubscriptionNotice } from "./subscription-messages.js";
 import { runLifecyclePassWithLease } from "./subscription-lifecycle-runner.js";
+import { shouldCancelStalePendingPayment } from "./telegram-invoice-state.js";
 import { lockSubscriptionAccessScopes, requestSubscriptionAccessReconciliation } from "@subpilot/payments";
 import { reconcileSubscriptionAccessRemoval } from "./subscription-access-removal.js";
 import {
@@ -40,7 +41,7 @@ const WORKER_LEASE_HEARTBEAT_MS = 60_000;
 type LeaseOwnershipCheck = () => boolean;
 const MAX_ACCESS_SCOPE_RECONCILIATIONS_PER_PASS = 25;
 
-async function cancelStalePendingPayments(
+export async function cancelStalePendingPayments(
   now: Date,
   isLeaseOwned: LeaseOwnershipCheck = () => true
 ): Promise<void> {
@@ -51,13 +52,14 @@ async function cancelStalePendingPayments(
       status: "PENDING",
       createdAt: { lte: cutoff }
     },
-    select: { id: true, subscriptionId: true },
+    select: { id: true, subscriptionId: true, metadata: true },
     orderBy: { createdAt: "asc" },
     take: BATCH_SIZE
   });
 
   for (const payment of stalePayments) {
     if (!isLeaseOwned()) return;
+    if (!shouldCancelStalePendingPayment(payment.metadata)) continue;
     await prisma.$transaction(async (tx) => {
       const cancelled = await tx.payment.updateMany({
         where: {
