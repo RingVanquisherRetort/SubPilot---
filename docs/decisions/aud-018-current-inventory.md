@@ -62,3 +62,15 @@ GitHub Actions run [45123755090](https://github.com/RingVanquisherRetort/SubPilo
 ## Validation boundary
 
 The branch source was inspected through GitHub at the SHA above. No local test command was run as part of this source inventory, no live Telegram/payment API was contacted, and no production data or secrets were accessed.
+
+
+## Verification update — 2026-11-23 (integration branch)
+
+The earlier source inventory and CI section above describe the historical HEAD `05e239d`; they are not the latest verification baseline. Subsequent work on `audit-018/integration` has added:
+
+- PostgreSQL tests using the actual `processSuccessfulStarsPayment` handler: a renewal receipt after durable admin-cancel intent, duplicate charge/event idempotency, and an in-flight receipt waiting on the admin's subscription row lock. Owner-review notifications are deduplicated per charge. CI passed at [45254175621](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45254175621) (`d794e618`).
+- Authenticated Stars buyer cancellation/resume updates, stale update ordering, and newer/older sequence epochs while an admin cancellation remains pending. CI passed at [45254989889](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45254989889) (`89c086ff`).
+- Recovery from a persisted Telegram cancellation confirmation with pending admin intent after a simulated worker crash: local cancellation and audit finalize without repeating Telegram I/O, and repeated recovery does not duplicate the audit event. CI passed at [45255458268](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45255458268) (`8451fd57`).
+- A delayed in-flight Telegram membership ban racing with paid renewal. The test asserts stale database finalization is fenced and reconciliation remains due; it explicitly **does not** claim to undo the already-issued Telegram ban. At the time of this note, [45257239067](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45257239067) (`0de64de7`) has upgrade-validation success but validate/unit tests are still running.
+
+**Residual safety boundary:** Telegram has no DB revision or fencing-token support for a ban already in flight. A newer paid entitlement may be correct in SubPilot while Telegram still applies an older removal; automatic unbanning could override human moderation. Treat this as an unresolved P0 product/operational tradeoff requiring explicit policy and live controlled tests. The old-invite-URL/replacement-URL race remains a separate P1 acceptance case. These CI runs do not authorize closing AUD-018, deploying, or merging to `main`.
