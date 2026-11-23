@@ -1000,3 +1000,79 @@ test("a pending admin Stars cancellation blocks buyer resume and keeps the remot
     assert.equal(saved.buyerStarsDueAt, null);
   });
 });
+
+
+test("a late successful Stars payment reactivates an invoice-timed-out subscription, not an admin-revoked one", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, project, customer, chat, plan }) => {
+    await prisma.subscriptionAccessGrant.deleteMany({
+      where: { subscriptionId: subscription.id }
+    });
+    await prisma.subscription.update({
+      where: { id: subscription.id },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: new Date(Date.now() - 60_000),
+        adminAccessRevokedAt: null
+      }
+    });
+    const payment = await prisma.payment.create({
+      data: {
+        projectId: project.id,
+        customerId: customer.id,
+        subscriptionId: subscription.id,
+        provider: "TELEGRAM_STARS",
+        amount: "100",
+        currency: "XTR",
+        status: "CANCELLED",
+        metadata: {
+          source: "project_bot",
+          productType: "TELEGRAM_CHANNEL_ACCESS",
+          checkoutSurface: "TELEGRAM_BOT",
+          projectBotId: "source-bot",
+          planId: plan.id,
+          planTitle: plan.title,
+          durationDays: 30,
+          isRecurring: false,
+          chatIds: [chat.telegramChatId.toString()],
+          invoiceDispatchStartedAt: new Date(Date.now() - 25 * 60 * 60_000).toISOString()
+        }
+      }
+    });
+    const fakeBot = {
+      api: {
+        getChatMember: async () => ({ status: "member" })
+      }
+    } as unknown as Bot;
+    const fakeContext = {
+      from: { id: Number(customer.telegramUserId) },
+      message: {
+        successful_payment: {
+          invoice_payload: payment.id,
+          telegram_payment_charge_id: "late-timeout-charge-" + randomUUID(),
+          currency: "XTR",
+          total_amount: 100
+        }
+      },
+      reply: async () => ({} as never)
+    } as never;
+
+    await processSuccessfulStarsPayment(fakeBot, project.id, "source-bot", fakeContext);
+
+    const [savedSubscription, savedPayment, event, savedGrant] = await Promise.all([
+      prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id } }),
+      prisma.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+      prisma.paymentWebhookEvent.findFirst({
+        where: { dedupeKey: { startsWith: "telegram-stars:late-timeout-charge-" } }
+      }),
+      prisma.subscriptionAccessGrant.findFirst({ where: { subscriptionId: subscription.id } })
+    ]);
+    assert.equal(savedPayment.status, "SUCCEEDED");
+    assert.equal(savedSubscription.status, "ACTIVE");
+    assert.equal(savedSubscription.adminAccessRevokedAt, null);
+    assert.ok(savedSubscription.endsAt && savedSubscription.endsAt > new Date());
+    assert.equal((event?.payload as Record<string, unknown> | undefined)?.accessSuppressedByAdminRevocation, false);
+    assert.ok(savedGrant);
+  });
+});
