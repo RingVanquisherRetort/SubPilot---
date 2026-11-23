@@ -15,7 +15,7 @@ test("PostgreSQL receipt recheck observes a committed admin revoke under the sub
   skip: !process.env.DATABASE_URL
 }, async () => {
   const suffix = randomUUID().replace(/-/g, "").slice(0, 12);
-  const telegramBase = BigInt(Date.now()) * 1_000_000n + BigInt(Math.floor(Math.random() * 100_000));
+  const telegramBase = BigInt(1_000_000_000 + Math.floor(Math.random() * 1_000_000_000));
   let actorId: string | undefined;
   let workspaceId: string | undefined;
   const firstLocked = deferred();
