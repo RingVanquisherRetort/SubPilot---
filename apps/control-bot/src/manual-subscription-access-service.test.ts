@@ -471,6 +471,10 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
     assert.equal(exhaustedIntent.adminStarsCancelAttempts, 10);
     assert.equal(exhaustedIntent.adminStarsCancelDueAt, null);
     assert.equal(exhaustedIntent.adminStarsCancelLastError, "TELEGRAM_CANCEL_UNCONFIRMED");
+    await prisma.subscription.update({
+      where: { id: exhaustedSubscription.id },
+      data: { status: "EXPIRED", endsAt: new Date(Date.now() - 1_000) }
+    });
 
     const explicitRetry = await revokeSubscriptionAccessManually({
       subscriptionId: exhaustedSubscription.id,
@@ -481,7 +485,7 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
     const explicitlyRecovered = await prisma.subscription.findUniqueOrThrow({
       where: { id: exhaustedSubscription.id }
     });
-    assert.equal(explicitlyRecovered.status, "CANCELLED");
+    assert.equal(explicitlyRecovered.status, "EXPIRED");
     assert.equal(explicitlyRecovered.adminStarsCancelPending, false);
     assert.equal(explicitlyRecovered.adminStarsCancelAttempts, 0);
 
