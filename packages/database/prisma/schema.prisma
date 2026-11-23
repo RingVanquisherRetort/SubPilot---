@@ -390,6 +390,7 @@ model Subscription {
   startsAt     DateTime?
   endsAt       DateTime?
   cancelledAt  DateTime?
+  adminAccessRevokedAt DateTime?
   reminder3dAt DateTime?
   reminder1dAt DateTime?
   buyerStarsBotId String?
