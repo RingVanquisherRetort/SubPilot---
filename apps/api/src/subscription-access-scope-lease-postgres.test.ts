@@ -154,7 +154,9 @@ test("PostgreSQL scope lease coalesces revisions, rejects stale owners, and retr
       now: new Date(now.getTime() + 7_000)
     }), null);
 
-    const retried = await claimNextSubscriptionAccessScope(prisma, {
+    // Other PostgreSQL test files can leave unrelated dirty scopes due.
+    // Reclaim the fixture's own scope rather than an arbitrary global row.
+    const retried = await claimSubscriptionAccessScope(prisma, customer.id, chat.id, {
       now: new Date(retryAt.getTime() + 1)
     });
     assert.ok(retried);
