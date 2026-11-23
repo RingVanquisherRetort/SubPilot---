@@ -8,3 +8,7 @@ ALTER TABLE "Subscription"
 
 CREATE INDEX "Subscription_adminStarsCancelDueAt_idx"
   ON "Subscription"("adminStarsCancelDueAt");
+
+ALTER TABLE "Subscription"
+  ADD COLUMN "adminStarsCancelAttempts" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN "adminStarsCancelLastError" TEXT;
