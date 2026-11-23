@@ -13,6 +13,7 @@ import {
   requestSubscriptionAccessReconciliation
 } from "@subpilot/payments";
 import { reconcileSubscriptionAccessRemoval } from "./subscription-access-removal.js";
+import { cancelStalePendingPayments } from "./subscription-lifecycle.js";
 
 type Fixture = {
   subscription: { id: string };
@@ -1140,5 +1141,53 @@ test("a late payment cannot reopen a subscription with an explicit admin revocat
     assert.equal(savedSubscription.status, "CANCELLED");
     assert.equal(savedSubscription.adminAccessRevokedAt?.toISOString(), revokedAt.toISOString());
     assert.equal((event?.payload as Record<string, unknown> | undefined)?.accessSuppressedByAdminRevocation, true);
+  });
+});
+
+
+test("stale invoice cleanup keeps dispatched Telegram invoices payable and cancels only never-dispatched payments", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, project, customer }) => {
+    const createdAt = new Date(Date.now() - 25 * 60 * 60_000);
+    const dispatched = await prisma.payment.create({
+      data: {
+        projectId: project.id,
+        customerId: customer.id,
+        subscriptionId: subscription.id,
+        provider: "TELEGRAM_STARS",
+        amount: "100",
+        currency: "XTR",
+        status: "PENDING",
+        createdAt,
+        metadata: {
+          source: "project_bot",
+          projectBotId: "source-bot",
+          invoiceDispatchStartedAt: createdAt.toISOString()
+        }
+      }
+    });
+    const notDispatched = await prisma.payment.create({
+      data: {
+        projectId: project.id,
+        customerId: customer.id,
+        subscriptionId: subscription.id,
+        provider: "TELEGRAM_STARS",
+        amount: "100",
+        currency: "XTR",
+        status: "PENDING",
+        createdAt,
+        metadata: { source: "project_bot", projectBotId: "source-bot" }
+      }
+    });
+
+    await cancelStalePendingPayments(new Date(), () => true);
+
+    const [savedDispatched, savedNotDispatched] = await Promise.all([
+      prisma.payment.findUniqueOrThrow({ where: { id: dispatched.id } }),
+      prisma.payment.findUniqueOrThrow({ where: { id: notDispatched.id } })
+    ]);
+    assert.equal(savedDispatched.status, "PENDING");
+    assert.equal(savedNotDispatched.status, "CANCELLED");
   });
 });
