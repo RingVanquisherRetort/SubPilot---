@@ -1,8 +1,8 @@
 # Subscription access coordination — open architecture review
 
-**Status:** Open — active delivery and expiry/member removal use the durable customer/chat scope coordinator; Stars cancellation intents are staged outside interactive transactions. Webhook invite-security fencing, remote moderation ordering and crash-boundary recovery remain.  
+**Status:** Open — active delivery and expiry/member removal use the durable customer/chat scope coordinator; Stars cancellation intents are staged outside interactive transactions. Remote moderation ordering, manual-revoke crash recovery and webhook URL-generation regression coverage remain.  
 **Reviewed branch:** `feat/subscription-lifecycle-ui`  
-**Reviewed implementation snapshot:** `c36c1bdb0fa45ad4b24fd42b4e668e5fe52c907e` (source review; full CI for this exact HEAD still required)
+**Reviewed implementation snapshot:** `7e77c2ebaab91b8b88d2a4a091741b9a6d7cfd88` (source review; CI run `45122005897` passed)
 **Production status:** Not merged; no live Telegram/provider test has been run as part of this review.
 
 ## Execution update — 23 November 2026 (supersedes historical snapshot below)
@@ -20,6 +20,16 @@ The prior analysis below is retained as a historical record of the `f226305c` re
 
 For the verified current side-effect inventory and P0 acceptance gaps at the reviewed HEAD, see [`aud-018-current-inventory.md`](aud-018-current-inventory.md).
 
+## Second-pass execution update — 23 November 2026
+
+The exact reviewed HEAD is now `7e77c2e`; CI run [45122005897](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45122005897) passed both validate and upgrade-validation. Typecheck, unit tests, clean PostgreSQL migrations, Prisma generation and legacy upgrade/data checks passed. This is not live Telegram acceptance.
+
+A second source pass refined two earlier findings:
+
+- The admin-exclusion webhook increments the scope desired revision under the customer/chat advisory lock before its external invite revoke. The remote revoke is not held under a claimed scope lease, but it targets the captured old invite URL, and the database cleanup compares that same URL before clearing it. Wrong-user/stale-entry recovery also uses URL-specific comparisons. This is a coverage gap requiring a delayed old-URL/replacement-URL race test; source inspection alone does not establish that it can revoke a newer URL.
+- An invite created by Telegram whose response is lost is unknowable to SubPilot and cannot be compensated. The request is one-member and expires after 24 hours; the URL is not sent to the buyer until persistence and lease validation succeed. Record this as a bounded orphan-resource limitation, not a proven leaked buyer credential.
+
+The remaining high-risk work is timed-ban/moderator ordering, payment webhook versus admin/manual revoke, and manual-revoke crash recovery. The latter can be recovered if Telegram's authenticated star_subscription update persists CANCELED before an operator retry; that dependency still needs a PostgreSQL test for timely, delayed and absent updates. No merge, production deployment or live API call was performed.
 ## Why this review exists
 
 The current subscription lifecycle deliberately serializes expiry and successful payment changes by locking the `Subscription` row. This prevents the simple race where expiry checks an old end date, a payment extends the same subscription, and the worker then revokes access based on stale data.
@@ -29,7 +39,7 @@ The first implementation had several remote-call/transaction couplings. The invi
 - `expireSubscriptions` still holds subscription/grant and customer/chat advisory locks while it may call `revokeChatInviteLink`, `getChatMember`, `banChatMember` and `unbanChatMember`.
 - Manual recurring-subscription revocation in `revokeSubscriptionAccessManually` has been staged: credentials and the current subscription are snapshotted in a short transaction, `editUserStarSubscription` runs after commit, and a second short transaction re-authorizes, re-reads the subscription and commits cancellation/audit/revision state.
 - `deliverSubscriptionAccess` has been migrated: it snapshots and conditionally finalizes in short transactions, while `getChatMember`, `revokeChatInviteLink` and `createChatInviteLink` execute outside interactive transactions under a durable customer/chat lease.
-- The `ADMIN_EXCLUDED` stale-invite cleanup and compromised-invite/member-removal flows perform Telegram calls outside their short snapshot/finalization transactions, but are not yet all fenced by the durable scope lease.
+- The `ADMIN_EXCLUDED` stale-invite cleanup and compromised-invite/member-removal flows perform Telegram calls outside their short snapshot/finalization transactions and are not claimed under the durable scope lease. Their current calls target captured invite URLs and compare the same URL before local cleanup; delayed old-URL versus replacement-URL tests remain required.
 
 The payment/refund handlers still serialize their local entitlement mutations on the subscription row. The migrated delivery path no longer holds that row lock while waiting for Telegram. Expiry/member removal can still delay subscription mutations. Recurring cancellation can leave local state behind if the process stops after Telegram confirms cancellation.
 
