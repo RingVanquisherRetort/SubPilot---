@@ -192,6 +192,7 @@ export async function reconcileAdminStarsCancellation(
           ? { status: "CANCELLED", endsAt: finalizedAt, cancelledAt: finalizedAt }
           : {}),
         telegramStarSubscriptionState: "CANCELED",
+        adminAccessRevokedAt: finalizedAt,
         adminStarsCancelPending: false,
         adminStarsCancelDueAt: null,
         adminStarsCancelBotId: null,
