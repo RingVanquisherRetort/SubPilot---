@@ -239,6 +239,30 @@ test("PostgreSQL receipt recheck observes a committed admin revoke under the sub
       where: { subscriptionId: subscription.id }
     }), 0);
 
+    // Telegram can retry the same receipt after both transactions commit.
+    // The duplicate must not grant access or duplicate ledger/notification rows.
+    await processSuccessfulStarsPayment(bot, project.id, projectBotId, racingCtx);
+    assert.equal(await prisma.payment.count({
+      where: { subscriptionId: subscription.id, providerPaymentId: racingChargeId }
+    }), 1);
+    assert.equal(await prisma.paymentWebhookEvent.count({
+      where: { dedupeKey: "telegram-stars:" + racingChargeId }
+    }), 1);
+    assert.equal(await prisma.subscriptionAccessGrant.count({
+      where: { subscriptionId: subscription.id }
+    }), 0);
+    const postReplay = await prisma.subscription.findUniqueOrThrow({
+      where: { id: subscription.id }
+    });
+    assert.equal(postReplay.adminStarsCancelPending, true);
+    assert.equal(postReplay.endsAt?.toISOString(), originalEndsAt.toISOString());
+    assert.equal(await prisma.ownerNotification.count({
+      where: {
+        projectId: project.id,
+        eventType: "renewal_after_admin_revocation_review"
+      }
+    }), 2, "each distinct late charge should alert the owner once, even on replay");
+
   } finally {
     releaseFirst.resolve();
     if (first) await first.catch(() => undefined);
