@@ -163,11 +163,17 @@ export async function reconcileAdminStarsCancellation(
       connectedChatIds,
       finalizedAt
     );
+    const actor = current.adminStarsCancelActorUserId
+      ? await tx.user.findUnique({
+          where: { id: current.adminStarsCancelActorUserId },
+          select: { id: true }
+        })
+      : null;
     await tx.auditLog.create({
       data: {
         workspaceId: current.adminStarsCancelWorkspaceId,
         projectId: current.projectId,
-        actorUserId: current.adminStarsCancelActorUserId,
+        actorUserId: actor?.id ?? null,
         action: "SUBSCRIPTION_ACCESS_REVOKE_CONFIRMED",
         resourceType: "Subscription",
         resourceId: subscriptionId,
