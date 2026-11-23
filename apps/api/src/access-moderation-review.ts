@@ -35,7 +35,14 @@ export async function listPendingAccessModerationReviews(
           "LEGACY_GROUP_REMOVAL_REVIEW"
         ]
       },
-      subscription: { projectId }
+      subscription: {
+        projectId,
+        OR: [
+          { status: "EXPIRED" },
+          { status: "CANCELLED" },
+          { status: "ACTIVE", endsAt: { lte: new Date() } }
+        ]
+      }
     },
     select: {
       id: true,
