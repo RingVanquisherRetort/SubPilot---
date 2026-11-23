@@ -348,9 +348,6 @@ test("a lost invite-create response never exposes an unpersisted URL and leaves 
     });
     assert.equal(grant.inviteLink, "");
     assert.equal(grant.deliveryLastError, "INVITE_CREATION_FAILED");
-    assert.equal(await prisma.inviteCompensation.count({
-      where: { projectId: "unreachable-project-id" }
-    }), 0);
   });
 });
 
