@@ -361,13 +361,36 @@ export async function reconcileSubscriptionAccessRemoval(
         await fail("MEMBER_MODERATION_REVIEW_REQUIRED");
         return "FAILED";
       } else if (member.status === "member") {
-        // Telegram has no atomic conditional kick and no moderation revision.
-        // A timed ban can overwrite a concurrent moderator ban, even if our
-        // database lease is current. Do not mutate an already joined member.
-        // Keep the grant unresolved and surface it for operator review.
+        // Immediate revocation must remove a joined subscriber. A permanent
+        // ban removes channel membership without a follow-up unban that could
+        // undo a moderator's decision. Telegram has no conditional ban API:
+        // a concurrent moderation action remains a documented race.
+        if (currentSnapshot.chatType === "GROUP") {
+          await fail("LEGACY_GROUP_REMOVAL_REVIEW");
+          return "FAILED";
+        }
         if (!await isCurrentRevision()) return "LEASE_LOST";
-        await fail("MEMBER_MODERATION_REVIEW_REQUIRED");
-        return "FAILED";
+        try {
+          await input.bot.api.banChatMember(currentSnapshot.telegramChatId, telegramUserId);
+        } catch {
+          // Telegram may have applied the ban even when the response was lost.
+          // Never unban or blindly retry an ambiguous mutation.
+          await fail("MEMBER_BAN_OWNERSHIP_UNCERTAIN");
+          return "FAILED";
+        }
+        if (!await isCurrentRevision()) return "LEASE_LOST";
+        try {
+          const afterBan = await input.bot.api.getChatMember(
+            currentSnapshot.telegramChatId, telegramUserId
+          );
+          if (afterBan.status !== "kicked") {
+            await fail("MEMBER_MODERATION_REVIEW_REQUIRED");
+            return "FAILED";
+          }
+        } catch {
+          await fail("MEMBER_BAN_OWNERSHIP_UNCERTAIN");
+          return "FAILED";
+        }
       }
     }
 
