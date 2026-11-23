@@ -134,3 +134,7 @@ These items have been inspected in source; the table does not claim that every s
 An absent member (`left`) needs only local grant finalization. Restricted members, administrators and owners require moderation review; expiry records a failure and does not mutate their Telegram permissions. PostgreSQL regressions check all four statuses. Ordinary member removal and webhook recovery still require review for external races.
 
 Invite delivery now records grant failure and scope retry in one transaction under the customer/chat lock. A superseded lookup cannot consume the new entitlement's retry budget. A PostgreSQL test changes the revision during the external lookup and checks both grant and queue state.
+
+### Compromised invite entry
+
+After a different buyer consumes an invite, the project bot checks the entrant’s own active grant for the chat. The compromised URL still goes through cleanup and rotation. An already absent or excluded entrant requires no membership mutation. Unresolved membership is reported to the owner; this path does not ban or unban the entrant. Automatic removal with external race protection remains open. The other stale-entry handler and ordinary expiry still need a consistent removal protocol.

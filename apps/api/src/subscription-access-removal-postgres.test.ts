@@ -1,3 +1,4 @@
+import { hasActiveInviteEntrantGrant } from "./invite-entry-entitlement.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
@@ -311,3 +312,17 @@ for (const status of ["left", "restricted", "administrator", "creator"] as const
     });
   });
 }
+
+test("an entrant using another buyer's invite is checked against their own active access", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, customer, chat, grant, project }) => {
+    const allowed = () => hasActiveInviteEntrantGrant(project.id, chat.id, customer.telegramUserId);
+    assert.equal(await allowed(), false);
+    await prisma.subscription.update({ where: { id: subscription.id }, data: { status: "ACTIVE", endsAt: null } });
+    assert.equal(await allowed(), true);
+    assert.equal(await hasActiveInviteEntrantGrant(project.id, chat.id, customer.telegramUserId + 1n), false);
+    await prisma.subscriptionAccessGrant.update({ where: { id: grant.id }, data: { revokedAt: new Date(), revocationReason: "ADMIN_REVOKED" } });
+    assert.equal(await allowed(), false);
+  });
+});

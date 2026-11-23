@@ -1,3 +1,4 @@
+import { hasActiveInviteEntrantGrant } from "./invite-entry-entitlement.js";
 import { randomUUID } from "node:crypto";
 import { Bot, InlineKeyboard, type Context } from "grammy";
 import { prisma } from "@subpilot/database";
@@ -2792,11 +2793,19 @@ export async function handleProjectBotUpdate(
         }
       }
 
-      let unintendedUserRemoved = false;
+      let entryResolved = false;
       try {
-        await projectBot.api.banChatMember(ctx.chat.id, newMember.user.id);
-        await projectBot.api.unbanChatMember(ctx.chat.id, newMember.user.id, { only_if_banned: true });
-        unintendedUserRemoved = true;
+        if (!await hasActiveInviteEntrantGrant(projectId, grant.connectedChatId, telegramUserId)) {
+          const member = await projectBot.api.getChatMember(ctx.chat.id, newMember.user.id);
+          if (member.status === "left" || member.status === "kicked" ||
+              (member.status === "restricted" && !member.is_member)) {
+            entryResolved = true;
+          }
+          // Membership cannot be removed here without racing a concurrent
+          // grant or moderator decision. Escalate through the owner notification.
+        } else {
+          entryResolved = true;
+        }
       } catch (error) {
         console.error(
           "Could not remove an unintended invite-link user:",
@@ -2845,7 +2854,7 @@ export async function handleProjectBotUpdate(
         });
       }
 
-      if (!inviteRevoked || !unintendedUserRemoved) {
+      if (!inviteRevoked || !entryResolved) {
         await enqueueProjectOwnerNotification({
           projectId,
           dedupeKey: "security:invite-mismatch:" + grant.id + ":" + newMember.user.id,
