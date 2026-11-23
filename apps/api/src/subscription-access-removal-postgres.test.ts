@@ -401,3 +401,38 @@ test("late Stars cancellation survives an ambiguous Telegram reply without reope
     assert.equal(row.lateStarsCancelDueAt, null);
   });
 });
+
+test("renewal during an in-flight Telegram ban keeps the grant active and queues repair", { skip: !process.env.DATABASE_URL }, async () => {
+  await withFixture(async ({ subscription, customer, chat, grant }) => {
+    const botId = 64832n;
+    let bans = 0;
+    const bot = { token: "64832:test", api: {
+      revokeChatInviteLink: async () => true,
+      getChatMember: async () => ({ status: "member" }),
+      banChatMember: async () => {
+        bans++;
+        await prisma.$transaction(async tx => {
+          await tx.$queryRawUnsafe('SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE', subscription.id);
+          await lockSubscriptionAccessScope(tx, customer.id, chat.id);
+          await tx.subscription.update({ where: { id: subscription.id }, data: { status: "ACTIVE", endsAt: new Date(Date.now() + 86_400_000) } });
+          await requestSubscriptionAccessReconciliation(tx, customer.id, [chat.id]);
+        });
+        return true;
+      }
+    } } as unknown as Bot;
+    try {
+      const result = await reconcileSubscriptionAccessRemoval({ bot, subscriptionId: subscription.id,
+        customerId: customer.id, connectedChatId: chat.id, telegramUserId: customer.telegramUserId });
+      assert.equal(bans, 1);
+      assert.equal(result, "LEASE_LOST");
+      const saved = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } });
+      assert.equal(saved.revokedAt, null);
+      const scope = await prisma.subscriptionAccessScope.findUniqueOrThrow({
+        where: { customerId_connectedChatId: { customerId: customer.id, connectedChatId: chat.id } }
+      });
+      assert.ok(scope.desiredRevision > scope.appliedRevision);
+    } finally {
+      await prisma.telegramRemovalIntent.deleteMany({ where: { botId, telegramChatId: chat.telegramChatId } });
+    }
+  });
+});
