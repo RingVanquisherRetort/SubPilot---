@@ -1593,3 +1593,61 @@ test("administrative cancellation removes a joined channel subscriber and verifi
     assert.equal(saved.revocationReason, "ADMIN_REVOKED");
   });
 });
+
+test("moderation committed during an in-flight ban survives a late Telegram error", { skip: !process.env.DATABASE_URL }, async () => {
+  await withFixture(async ({ subscription, customer, chat, grant, project }) => {
+    const bot = { api: {
+      revokeChatInviteLink: async () => true,
+      getChatMember: async () => ({ status: "member" }),
+      banChatMember: async () => {
+        await prisma.$transaction(async (tx) => {
+          await lockSubscriptionAccessScope(tx, customer.id, chat.id);
+          await tx.subscriptionAccessGrant.update({ where: { id: grant.id }, data: {
+            revokedAt: new Date(), revocationReason: "ADMIN_EXCLUDED", revocationLastError: null
+          } });
+          await requestSubscriptionAccessReconciliation(tx, customer.id, [chat.id]);
+        });
+        throw new Error("telegram response lost");
+      }
+    } } as unknown as Bot;
+    await reconcileSubscriptionAccessRemoval({
+      bot, subscriptionId: subscription.id, customerId: customer.id,
+      connectedChatId: chat.id, telegramUserId: customer.telegramUserId
+    });
+    const saved = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } });
+    assert.equal(saved.revocationReason, "ADMIN_EXCLUDED");
+    assert.equal(saved.revocationLastError, null);
+    assert.equal(saved.revocationAttempts, 0);
+    assert.equal(await prisma.ownerNotification.count({ where: { projectId: project.id, eventType: "ACCESS_MODERATION_REVIEW" } }), 0);
+  });
+});
+
+test("successor observes an applied ban after worker loss before finalization", { skip: !process.env.DATABASE_URL }, async () => {
+  await withFixture(async ({ subscription, customer, chat, grant }) => {
+    let owned = true;
+    let bans = 0;
+    let observations = 0;
+    const bot = { api: {
+      revokeChatInviteLink: async () => true,
+      getChatMember: async () => { observations++; return { status: bans ? "kicked" : "member" }; },
+      banChatMember: async () => { bans++; owned = false; return true; }
+    } } as unknown as Bot;
+    const input = { bot, subscriptionId: subscription.id, customerId: customer.id,
+      connectedChatId: chat.id, telegramUserId: customer.telegramUserId };
+    assert.equal(await reconcileSubscriptionAccessRemoval({ ...input, isLifecycleLeaseOwned: () => owned }), "LEASE_LOST");
+    const where = { id: grant.id };
+    const interrupted = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where });
+    assert.equal(interrupted.revokedAt, null);
+    assert.equal(interrupted.revocationLastError, "MEMBER_BAN_IN_PROGRESS");
+    await prisma.subscriptionAccessScope.update({
+      where: { customerId_connectedChatId: { customerId: customer.id, connectedChatId: chat.id } },
+      data: { leaseExpiresAt: new Date(0) }
+    });
+    assert.equal(await reconcileSubscriptionAccessRemoval(input), "FAILED");
+    const parked = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where });
+    assert.equal(parked.revocationLastError, "MEMBER_BAN_OWNERSHIP_UNCERTAIN");
+    assert.equal(parked.revokedAt, null);
+    assert.equal(observations, 2);
+    assert.equal(bans, 1);
+  });
+});

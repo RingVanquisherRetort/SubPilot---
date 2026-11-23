@@ -4,7 +4,6 @@ import {
   claimSubscriptionAccessScope,
   completeSubscriptionAccessScope,
   DEFAULT_SUBSCRIPTION_ACCESS_SCOPE_LEASE_TTL_MS,
-  failSubscriptionAccessScope,
   isTelegramInviteAlreadyRevoked,
   lockSubscriptionAccessScope,
   renewSubscriptionAccessScopeLease,
@@ -51,7 +50,7 @@ function isAdminExcludedInviteDue(
 /**
  * Revoke a single customer/chat entitlement without holding an interactive
  * transaction over Telegram calls. The durable scope lease fences the remote
- * operation against payment, manual-grant and delivery revisions.
+ * result in PostgreSQL. Telegram itself cannot enforce this lease.
  */
 export async function reconcileSubscriptionAccessRemoval(
   input: {
@@ -297,14 +296,10 @@ export async function reconcileSubscriptionAccessRemoval(
   ));
   const fail = async (errorCode: string): Promise<void> => {
     if (!ownsLease()) return;
-    await recordSubscriptionAccessRevocationFailure(input.subscriptionId, currentSnapshot.grantId, errorCode);
-    await failSubscriptionAccessScope(prisma, lease, {
-      retryAt: errorCode === "MEMBER_MODERATION_REVIEW_REQUIRED" ||
-        errorCode === "MEMBER_BAN_OWNERSHIP_UNCERTAIN" ||
-        errorCode === "LEGACY_GROUP_REMOVAL_REVIEW"
-        ? new Date("2100-01-01T00:00:00.000Z")
-        : retryAt,
-      errorCode: "ACCESS_SCOPE_" + errorCode
+    await recordSubscriptionAccessRevocationFailure(input.subscriptionId, currentSnapshot.grantId, errorCode, new Date(), {
+      lease, retryAt: errorCode === "MEMBER_MODERATION_REVIEW_REQUIRED" ||
+        errorCode === "MEMBER_BAN_OWNERSHIP_UNCERTAIN" || errorCode === "LEGACY_GROUP_REMOVAL_REVIEW"
+        ? new Date("2100-01-01T00:00:00.000Z") : retryAt
     });
   };
 
@@ -343,10 +338,13 @@ export async function reconcileSubscriptionAccessRemoval(
       // A ban observed after MEMBER_UNBAN_FAILED is ambiguous: a moderator
       // could have applied a new ban. Never automatically unban that state.
       if (!await isCurrentRevision()) return "LEASE_LOST";
+      if (currentSnapshot.revocationLastError === "MEMBER_BAN_IN_PROGRESS" && member.status !== "left") {
+        await fail("MEMBER_BAN_OWNERSHIP_UNCERTAIN");
+        return "FAILED";
+      }
       if (member.status === "kicked" &&
         (currentSnapshot.revocationLastError === "MEMBER_UNBAN_FAILED" ||
-          currentSnapshot.revocationLastError === "MEMBER_BAN_OWNERSHIP_UNCERTAIN" ||
-          currentSnapshot.revocationLastError === "MEMBER_BAN_IN_PROGRESS")) {
+          currentSnapshot.revocationLastError === "MEMBER_BAN_OWNERSHIP_UNCERTAIN")) {
         // The user may still be banned by our previous failed cleanup, or by
         // a moderator who banned them afterwards. Never guess and unban.
         await fail("MEMBER_BAN_OWNERSHIP_UNCERTAIN");
@@ -370,6 +368,23 @@ export async function reconcileSubscriptionAccessRemoval(
           return "FAILED";
         }
         if (!await isCurrentRevision()) return "LEASE_LOST";
+        // A successor must be able to distinguish an interrupted removal from
+        // a previously observed moderator ban, even when Telegram lost the reply.
+        const marked = await prisma.$transaction(async (tx) => {
+          await tx.$queryRawUnsafe('SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE', currentSnapshot.grantId);
+          const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+            'SELECT "id" FROM "SubscriptionAccessScope" WHERE "id" = $1 AND "leaseToken" = $2 ' +
+            'AND "desiredRevision" = $3 AND "leaseExpiresAt" > clock_timestamp() FOR UPDATE',
+            lease.id, lease.leaseToken, lease.revision
+          );
+          if (!rows.length) return false;
+          const updated = await tx.subscriptionAccessGrant.updateMany({
+            where: { id: currentSnapshot.grantId, revokedAt: null },
+            data: { revocationLastError: "MEMBER_BAN_IN_PROGRESS" }
+          });
+          return updated.count === 1;
+        });
+        if (!marked || !await isCurrentRevision()) return "LEASE_LOST";
         try {
           await input.bot.api.banChatMember(currentSnapshot.telegramChatId, telegramUserId);
         } catch {
@@ -395,7 +410,6 @@ export async function reconcileSubscriptionAccessRemoval(
     }
 
     if (!ownsLease()) return "LEASE_LOST";
-    const now = new Date();
     const finalized = await prisma.$transaction(async (tx) => {
       await tx.$queryRawUnsafe(
         'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
@@ -411,6 +425,7 @@ export async function reconcileSubscriptionAccessRemoval(
         lease.id
       );
 
+      const now = new Date();
       const [scope, subscription, grant] = await Promise.all([
         tx.subscriptionAccessScope.findUnique({
           where: { id: lease.id },

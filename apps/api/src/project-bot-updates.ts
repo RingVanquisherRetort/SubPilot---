@@ -562,7 +562,8 @@ export async function recordSubscriptionAccessRevocationFailure(
   subscriptionId: string,
   grantId: string,
   errorCode: string,
-  now = new Date()
+  now = new Date(),
+  fence?: { lease: SubscriptionAccessScopeLease; retryAt: Date }
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
     await tx.$queryRawUnsafe(
@@ -573,6 +574,17 @@ export async function recordSubscriptionAccessRevocationFailure(
       'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
       grantId
     );
+    if (fence) {
+      const checkedAt = new Date();
+      const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+        'SELECT "id" FROM "SubscriptionAccessScope" WHERE "id" = $1 AND "leaseToken" = $2 ' +
+        'AND "desiredRevision" = $3 AND "leaseExpiresAt" > clock_timestamp() FOR UPDATE',
+        fence.lease.id, fence.lease.leaseToken, fence.lease.revision
+      );
+      if (!rows.length || !await failSubscriptionAccessScope(tx, fence.lease, {
+        now: checkedAt, retryAt: fence.retryAt, errorCode: "ACCESS_SCOPE_" + errorCode
+      })) return;
+    }
     const [subscription, current] = await Promise.all([
       tx.subscription.findUnique({
         where: { id: subscriptionId },
@@ -585,7 +597,8 @@ export async function recordSubscriptionAccessRevocationFailure(
           revokedAt: true,
           revocationReason: true,
           inviteLink: true,
-          revocationAttempts: true
+          revocationAttempts: true,
+          revocationLastError: true
         }
       })
     ]);
@@ -604,6 +617,8 @@ export async function recordSubscriptionAccessRevocationFailure(
     const pendingNaturalRevocation = current.revokedAt === null && subscriptionStillDue;
     if (!pendingAdminExcludedInvite && !pendingNaturalRevocation) return;
 
+    if (current.revocationLastError === "MEMBER_BAN_IN_PROGRESS" &&
+        errorCode !== "MEMBER_MODERATION_REVIEW_REQUIRED") errorCode = "MEMBER_BAN_OWNERSHIP_UNCERTAIN";
     const retry = getAccessRevocationRetryState(current.revocationAttempts, now, errorCode);
     const requiresManualReview = errorCode === "MEMBER_MODERATION_REVIEW_REQUIRED" ||
       errorCode === "MEMBER_BAN_OWNERSHIP_UNCERTAIN" ||
@@ -642,7 +657,7 @@ export async function recordSubscriptionAccessRevocationFailure(
             "Telegram chat ID: " + details.connectedChat.telegramChatId.toString() + "\n" +
             "Telegram user ID: " + details.subscription.customer.telegramUserId.toString() + "\n" +
             "Причина: " + errorCode + "\n" +
-            "SubPilot не блокировал участника и не отменял решения модератора. Проверьте участника в Telegram."
+            "Проверьте статус участника и ограничения в Telegram."
         });
       }
     }
