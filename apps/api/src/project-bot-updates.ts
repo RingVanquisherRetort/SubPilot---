@@ -1331,7 +1331,8 @@ async function processSuccessfulStarsPayment(
     // A successful receipt must never reopen an explicitly cancelled entitlement.
     // This also covers a one-time or first-recurring charge that was already in flight
     // when the administrator revoked an ACTIVE subscription without a charge anchor.
-    const accessSuppressedByAdminRevocation = currentSubscription.status === "CANCELLED";
+    const accessSuppressedByAdminRevocation =
+      currentSubscription.status === "CANCELLED" || currentSubscription.adminStarsCancelPending;
     const isInitialRecurring = paymentKind === "INITIAL_RECURRING";
 
     const currentEnd = currentSubscription.endsAt && currentSubscription.endsAt > now
@@ -1907,7 +1908,8 @@ export async function handleProjectBotUpdate(
             status: true,
             telegramStarInitialChargeId: true,
             telegramStarSubscriptionLastUpdateId: true,
-            telegramStarSubscriptionSequenceEpoch: true
+            telegramStarSubscriptionSequenceEpoch: true,
+            adminStarsCancelPending: true
           }
         });
         if (
@@ -1935,7 +1937,10 @@ export async function handleProjectBotUpdate(
           data: {
             telegramStarSubscriptionState: subscriptionUpdate.state,
             telegramStarSubscriptionLastUpdateId: updateId,
-            telegramStarSubscriptionSequenceEpoch: sequenceEpoch
+            telegramStarSubscriptionSequenceEpoch: sequenceEpoch,
+            ...(current.adminStarsCancelPending && subscriptionUpdate.state === "CANCELED"
+              ? { adminStarsCancelDueAt: new Date(), adminStarsCancelClaim: null }
+              : {})
           }
         });
       });
