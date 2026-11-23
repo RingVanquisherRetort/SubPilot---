@@ -236,8 +236,10 @@ export async function confirmPendingAccessModerationReview(
       },
       data: {
         revokedAt: now,
-        revocationReason: preflight.membership === "kicked" ? "ADMIN_EXCLUDED" :
-          subscription.status === "CANCELLED" ? "ADMIN_REVOKED" : "SUBSCRIPTION_EXPIRED",
+        // Telegram "kicked" describes current membership, not who issued the ban.
+        // A timed SubPilot removal can also yield "kicked"; never turn that
+        // observation alone into a permanent moderator exclusion.
+        revocationReason: subscription.status === "CANCELLED" ? "ADMIN_REVOKED" : "SUBSCRIPTION_EXPIRED",
         inviteLink: "",
         expiresAt: new Date(0),
         revocationAttempts: 0,
