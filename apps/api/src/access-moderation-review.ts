@@ -171,7 +171,7 @@ export async function confirmPendingAccessModerationReview(
   bot: Pick<Bot, "api">
 ): Promise<"CONFIRMED" | "UNAUTHORIZED" | "NO_LONGER_PENDING" |
   "ENTITLEMENT_ACTIVE" | "MEMBER_STILL_PRESENT" | "INVITE_CLEANUP_REQUIRED" |
-  "TELEGRAM_CHECK_FAILED"> {
+  "TELEGRAM_CHECK_FAILED" | "RECONCILIATION_IN_PROGRESS"> {
   const preflight = await inspectPendingAccessModerationReview(
     projectId, actorUserId, grantId, bot
   );
@@ -221,6 +221,24 @@ export async function confirmPendingAccessModerationReview(
     }
     await lockSubscriptionAccessScope(tx, grant.subscription.customerId, grant.connectedChatId);
     const now = new Date();
+    const scope = await tx.subscriptionAccessScope.findUnique({
+      where: {
+        customerId_connectedChatId: {
+          customerId: grant.subscription.customerId,
+          connectedChatId: grant.connectedChatId
+        }
+      },
+      select: { leaseToken: true, leaseExpiresAt: true }
+    });
+    // A worker with an in-flight Telegram operation must not be bypassed by
+    // a manual acknowledgement. Let it finish or expire, then re-inspect.
+    if (scope?.leaseToken && scope.leaseExpiresAt && scope.leaseExpiresAt > now) {
+      return "RECONCILIATION_IN_PROGRESS" as const;
+    }
+    if (grant.connectedChat.telegramChatId.toString() !== preflight.telegramChatId ||
+      grant.subscription.customer.telegramUserId.toString() !== preflight.telegramUserId) {
+      return "NO_LONGER_PENDING" as const;
+    }
     const subscription = await tx.subscription.findUnique({
       where: { id: grant.subscriptionId },
       select: { status: true, endsAt: true }
