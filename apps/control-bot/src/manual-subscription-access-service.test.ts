@@ -259,6 +259,87 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
       }
     });
 
+    // A remote cancellation may succeed while its HTTP response is lost.
+    // If Telegram's authenticated star_subscription update is persisted before
+    // the operator retries, the retry must finish the local revoke without
+    // issuing a second remote cancellation.
+    const recoveryChargeId = "recovery-charge-" + suffix;
+    const recoverySubscription = await prisma.subscription.create({
+      data: {
+        projectId: project.id,
+        customerId: recurringCustomer.id,
+        planId: plan.id,
+        status: "ACTIVE",
+        startsAt: new Date(Date.now() - 60_000),
+        endsAt: new Date(Date.now() + 30 * 24 * 60 * 60_000),
+        telegramStarInitialChargeId: recoveryChargeId,
+        telegramStarSubscriptionState: "ACTIVE"
+      }
+    });
+    await prisma.payment.create({
+      data: {
+        projectId: project.id,
+        customerId: recurringCustomer.id,
+        subscriptionId: recoverySubscription.id,
+        provider: "TELEGRAM_STARS",
+        providerPaymentId: recoveryChargeId,
+        idempotencyKey: "recovery:" + suffix,
+        amount: "100",
+        currency: "XTR",
+        status: "SUCCEEDED",
+        paidAt: new Date(Date.now() - 60_000),
+        metadata: {
+          source: "project_bot",
+          isRecurring: true,
+          projectBotId: projectBot.id
+        }
+      }
+    });
+    let ambiguousRemoteCalls = 0;
+    await assert.rejects(
+      revokeSubscriptionAccessManually({
+        subscriptionId: recoverySubscription.id,
+        workspaceId: workspace.id,
+        actorUserId: owner.id
+      }, {
+        cancelTelegramRenewal: async () => {
+          ambiguousRemoteCalls += 1;
+          // Simulate Telegram accepting cancellation but the response being lost.
+          throw new Error("response lost after remote success");
+        }
+      }),
+      (error: unknown) => error instanceof ManualSubscriptionAccessError &&
+        error.code === "TELEGRAM_RENEWAL_CANCEL_FAILED"
+    );
+    const awaitingWebhook = await prisma.subscription.findUniqueOrThrow({
+      where: { id: recoverySubscription.id }
+    });
+    assert.equal(awaitingWebhook.status, "ACTIVE");
+    assert.equal(awaitingWebhook.telegramStarSubscriptionState, "ACTIVE");
+
+    // Model the durable state projection performed by the authenticated
+    // star_subscription webhook before the operator retries the revoke.
+    await prisma.subscription.update({
+      where: { id: recoverySubscription.id },
+      data: { telegramStarSubscriptionState: "CANCELED" }
+    });
+    const recoveredRevoke = await revokeSubscriptionAccessManually({
+      subscriptionId: recoverySubscription.id,
+      workspaceId: workspace.id,
+      actorUserId: owner.id
+    }, {
+      cancelTelegramRenewal: async () => {
+        throw new Error("remote cancellation must not be repeated after webhook confirmation");
+      }
+    });
+    assert.equal(recoveredRevoke.recurringRenewalCancelled, true);
+    assert.equal(ambiguousRemoteCalls, 1);
+    const recoveredSubscription = await prisma.subscription.findUniqueOrThrow({
+      where: { id: recoverySubscription.id }
+    });
+    assert.equal(recoveredSubscription.status, "CANCELLED");
+    assert.equal(recoveredSubscription.telegramStarSubscriptionState, "CANCELED");
+
     await assert.rejects(
       revokeSubscriptionAccessManually({
         subscriptionId: recurringSubscription.id,
