@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { prisma } from "@subpilot/database";
 import { isStarsAccessSuppressedByAdminRevocation } from "./telegram-star-payment-kind.js";
-import { processSuccessfulStarsPayment } from "./project-bot-updates.js";
+import { handleProjectBotUpdate, processSuccessfulStarsPayment } from "./project-bot-updates.js";
 
 function deferred() {
   let resolve!: () => void;
@@ -121,7 +121,7 @@ test("PostgreSQL receipt recheck observes a committed admin revoke under the sub
         currency: "XTR",
         status: "SUCCEEDED",
         paidAt: new Date("2026-11-01T00:00:00.000Z"),
-        metadata: { isRecurring: true, durationDays: 30, projectBotId }
+        metadata: { source: "project_bot", isRecurring: true, durationDays: 30, projectBotId }
       }
     });
     await prisma.subscription.update({
@@ -256,6 +256,56 @@ test("PostgreSQL receipt recheck observes a committed admin revoke under the sub
     });
     assert.equal(postReplay.adminStarsCancelPending, true);
     assert.equal(postReplay.endsAt?.toISOString(), originalEndsAt.toISOString());
+
+    // Authenticated project-bot subscription updates may arrive in either order
+    // while an administrator has already requested a cancellation. Neither a
+    // buyer resume nor a later buyer cancellation may clear that admin intent.
+    const subscriptionUpdate = (state: "active" | "canceled", updateId: number) => ({
+      update_id: updateId,
+      subscription: {
+        user: { id: Number(customer.telegramUserId) },
+        invoice_payload: anchorPayment.id,
+        state
+      }
+    });
+    const updateBot = {} as Parameters<typeof handleProjectBotUpdate>[6];
+    await handleProjectBotUpdate(
+      "test-token", project.id, projectBotId,
+      subscriptionUpdate("active", 101) as Parameters<typeof handleProjectBotUpdate>[3],
+      101, 1, updateBot
+    );
+    const resumed = await prisma.subscription.findUniqueOrThrow({
+      where: { id: subscription.id }
+    });
+    assert.equal(resumed.telegramStarSubscriptionState, "ACTIVE");
+    assert.equal(resumed.adminStarsCancelPending, true);
+    assert.equal(resumed.endsAt?.toISOString(), originalEndsAt.toISOString());
+
+    await handleProjectBotUpdate(
+      "test-token", project.id, projectBotId,
+      subscriptionUpdate("canceled", 102) as Parameters<typeof handleProjectBotUpdate>[3],
+      102, 1, updateBot
+    );
+    const canceled = await prisma.subscription.findUniqueOrThrow({
+      where: { id: subscription.id }
+    });
+    assert.equal(canceled.telegramStarSubscriptionState, "CANCELED");
+    assert.equal(canceled.adminStarsCancelPending, true);
+    assert.equal(canceled.endsAt?.toISOString(), originalEndsAt.toISOString());
+    assert.ok(canceled.adminStarsCancelDueAt !== null);
+
+    await handleProjectBotUpdate(
+      "test-token", project.id, projectBotId,
+      subscriptionUpdate("active", 101) as Parameters<typeof handleProjectBotUpdate>[3],
+      101, 1, updateBot
+    );
+    const stale = await prisma.subscription.findUniqueOrThrow({
+      where: { id: subscription.id }
+    });
+    assert.equal(stale.telegramStarSubscriptionState, "CANCELED");
+    assert.equal(stale.adminStarsCancelPending, true);
+    assert.equal(stale.endsAt?.toISOString(), originalEndsAt.toISOString());
+
     assert.equal(await prisma.ownerNotification.count({
       where: {
         projectId: project.id,
