@@ -186,6 +186,79 @@ test("removal releases the database transaction before Telegram and fences a con
   });
 });
 
+test("a renewal during an in-flight Telegram ban fences stale removal finalization", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, customer, chat, grant }) => {
+    const banStarted = deferred();
+    const releaseBan = deferred();
+    let bans = 0;
+    let unbans = 0;
+    const bot = {
+      api: {
+        revokeChatInviteLink: async () => true,
+        getChatMember: async () => ({ status: "member" }),
+        banChatMember: async () => {
+          bans += 1;
+          banStarted.resolve();
+          await releaseBan.promise;
+          return true;
+        },
+        unbanChatMember: async () => { unbans += 1; return true; }
+      }
+    } as unknown as Bot;
+
+    const removal = reconcileSubscriptionAccessRemoval({
+      bot, subscriptionId: subscription.id,
+      customerId: customer.id, connectedChatId: chat.id,
+      telegramUserId: customer.telegramUserId
+    });
+    try {
+      await Promise.race([
+        banStarted.promise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Telegram ban was not reached")), 5_000))
+      ]);
+      const renewal = prisma.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe(
+          'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+          subscription.id
+        );
+        await lockSubscriptionAccessScope(tx, customer.id, chat.id);
+        await tx.subscription.update({
+          where: { id: subscription.id },
+          data: { status: "ACTIVE", endsAt: new Date(Date.now() + 30 * 86_400_000) }
+        });
+        await requestSubscriptionAccessReconciliation(tx, customer.id, [chat.id]);
+      });
+      assert.equal(await Promise.race([
+        renewal.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 4_000))
+      ]), true, "renewal must commit while the Telegram ban is in flight");
+      releaseBan.resolve();
+      assert.equal(await removal, "LEASE_LOST");
+      assert.equal(bans, 1, "the already-started Telegram ban cannot be rolled back");
+      assert.equal(unbans, 0, "never undo an ambiguous moderator ban automatically");
+      const [saved, scope] = await Promise.all([
+        prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } }),
+        prisma.subscriptionAccessScope.findUniqueOrThrow({
+          where: {
+            customerId_connectedChatId: {
+              customerId: customer.id, connectedChatId: chat.id
+            }
+          }
+        })
+      ]);
+      assert.equal(saved.revokedAt, null, "stale worker must not revoke renewed entitlement");
+      assert.ok(scope.desiredRevision > scope.appliedRevision,
+        "renewal leaves reconciliation due for the newer desired state");
+    } finally {
+      releaseBan.resolve();
+      await removal.catch(() => undefined);
+    }
+  });
+});
+
 test("an overlapping active subscription preserves chat membership during another expiry", {
   skip: !process.env.DATABASE_URL
 }, async () => {
