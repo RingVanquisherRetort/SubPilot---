@@ -1,8 +1,8 @@
 import { prisma } from "@subpilot/database";
-import { lockSubscriptionAccessScopes, requestSubscriptionAccessReconciliation } from "@subpilot/payments";
+import { lockSubscriptionAccessScopes, requestSubscriptionAccessReconciliation, reconcileAdminStarsCancellation } from "@subpilot/payments";
 import { Bot } from "grammy";
 import { decryptSecret } from "@subpilot/security";
-import { reconcileAdminStarsCancellation } from "./admin-stars-cancellation.js";
+
 
 type Transaction = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$use" | "$extends">;
 
