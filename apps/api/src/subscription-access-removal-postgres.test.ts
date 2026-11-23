@@ -629,3 +629,75 @@ test("moderator exclusion is not overwritten by an expiry retry", { skip: !proce
     assert.equal(saved.revocationReason, "ADMIN_EXCLUDED");
   });
 });
+
+
+test("a stale Stars worker cannot clear a successor claim while its Telegram request is in flight", { skip: !process.env.DATABASE_URL }, async () => {
+  await withFixture(async ({ subscription, project, customer }) => {
+    const where = { id: subscription.id };
+    const charge = "stars-successor-" + randomUUID();
+    await prisma.subscription.update({ where, data: {
+      status: "ACTIVE",
+      endsAt: new Date(Date.now() + 86_400_000),
+      telegramStarInitialChargeId: charge,
+      telegramStarSubscriptionState: "ACTIVE"
+    } });
+    await prisma.payment.create({ data: {
+      subscriptionId: subscription.id,
+      projectId: project.id,
+      customerId: customer.id,
+      amount: "100",
+      currency: "XTR",
+      provider: "TELEGRAM_STARS",
+      providerPaymentId: charge,
+      status: "SUCCEEDED",
+      metadata: { source: "project_bot", projectBotId: "original", isRecurring: true }
+    } });
+    assert.equal(await queueBuyerRenewal(subscription.id, project.id, customer.id, "original", true), true);
+
+    const firstStarted = deferred();
+    const finishFirst = deferred();
+    const first = applyBuyerRenewal(subscription.id, "original", async args => {
+      assert.equal(args.is_canceled, true);
+      firstStarted.resolve();
+      await finishFirst.promise;
+      return true;
+    });
+    await firstStarted.promise;
+
+    // Telegram confirms the cancellation update while the original API response
+    // is still delayed. A buyer resume becomes the newer desired operation.
+    await prisma.subscription.update({ where, data: {
+      telegramStarSubscriptionState: "CANCELED",
+      buyerStarsCanceled: false,
+      buyerStarsClaim: null,
+      buyerStarsDueAt: new Date(0)
+    } });
+
+    const secondStarted = deferred();
+    const finishSecond = deferred();
+    const second = applyBuyerRenewal(subscription.id, "original", async args => {
+      assert.equal(args.is_canceled, false);
+      secondStarted.resolve();
+      await finishSecond.promise;
+      return true;
+    });
+    await secondStarted.promise;
+
+    const successorClaim = (await prisma.subscription.findUniqueOrThrow({ where })).buyerStarsClaim;
+    assert.ok(successorClaim);
+
+    finishFirst.resolve();
+    assert.equal(await first, false);
+    const whileSuccessorRuns = await prisma.subscription.findUniqueOrThrow({ where });
+    assert.equal(whileSuccessorRuns.buyerStarsClaim, successorClaim);
+    assert.ok(whileSuccessorRuns.buyerStarsDueAt && whileSuccessorRuns.buyerStarsDueAt > new Date());
+
+    finishSecond.resolve();
+    assert.equal(await second, true);
+    const settled = await prisma.subscription.findUniqueOrThrow({ where });
+    assert.equal(settled.telegramStarSubscriptionState, "ACTIVE");
+    assert.equal(settled.buyerStarsCanceled, false);
+    assert.equal(settled.buyerStarsClaim, null);
+    assert.equal(settled.buyerStarsDueAt, null);
+  });
+});
