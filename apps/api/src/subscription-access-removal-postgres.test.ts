@@ -656,6 +656,16 @@ test("moderation review queue is durable, project-scoped and denies unauthorized
     assert.equal(row.telegramUserId, customer.telegramUserId.toString());
     assert.equal(row.subscriptionId, subscription.id);
     assert.equal(row.reason, "MEMBER_MODERATION_REVIEW_REQUIRED");
+    await prisma.subscription.update({
+      where: { id: subscription.id },
+      data: { status: "ACTIVE", endsAt: new Date(Date.now() + 86_400_000) }
+    });
+    const afterRenewal = await listPendingAccessModerationReviews(
+      project.id, owner.workspace.createdById
+    );
+    assert.ok(afterRenewal);
+    assert.equal(afterRenewal.some((item) => item.grantId === grant.id), false,
+      "a newly active paid entitlement must not be shown as a pending expiry review");
     assert.equal((await prisma.subscriptionAccessGrant.findUniqueOrThrow({
       where: { id: grant.id }
     })).revokedAt, null, "reading the queue must not acknowledge membership removal");
