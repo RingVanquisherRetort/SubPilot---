@@ -43,7 +43,6 @@ type TelegramUpdate = Parameters<Bot["handleUpdate"]>[0];
 
 const MAX_STARS_AMOUNT = 10_000;
 const INVITE_LIFETIME_SECONDS = 24 * 60 * 60;
-const PENDING_PAYMENT_TTL_MS = 24 * 60 * 60 * 1000;
 
 async function requirePrivateBuyerChat(ctx: Context): Promise<boolean> {
   if (ctx.chat?.type === "private") return true;
@@ -195,8 +194,7 @@ async function createPurchaseInvoice(
         customerId: customer.id,
         subscriptionId: subscription.id,
         provider: "TELEGRAM_STARS",
-        status: "PENDING",
-        createdAt: { gt: new Date(now.getTime() - PENDING_PAYMENT_TTL_MS) }
+        status: "PENDING"
       },
       orderBy: { createdAt: "desc" },
       take: 10
@@ -279,7 +277,7 @@ async function createPurchaseInvoice(
   if (pending.invoiceDispatchState !== "NOT_STARTED") {
     const message = pending.invoiceDispatchState === "SENT"
       ? "У вас уже есть неоплаченный счёт по этому тарифу. Найдите предыдущее сообщение от бота с кнопкой оплаты. " +
-        "Повторный счёт не создан, чтобы не допустить двойного списания. Неоплаченный счёт действует 24 часа."
+        "Повторный счёт не создан, чтобы не допустить двойного списания. Используйте исходное сообщение или обратитесь в /paysupport."
       : "Запрос на выставление счёта уже выполнялся, но SubPilot не получил подтверждение о сохранении сообщения. Счёт мог быть отправлен. " +
         "Повторный счёт не создан во избежание двойного списания. Проверьте сообщения от бота или обратитесь в /paysupport.";
     await ctx.reply(message);
@@ -339,7 +337,7 @@ async function createPurchaseInvoice(
   });
   if (!dispatchClaim.claimed) {
     if (dispatchClaim.reason === "SENT") {
-      await ctx.reply("У вас уже есть неоплаченный счёт по этому тарифу. Найдите предыдущее сообщение от бота. Повторный счёт не создан; срок действия — 24 часа.");
+      await ctx.reply("У вас уже есть неоплаченный счёт по этому тарифу. Найдите предыдущее сообщение от бота. Повторный счёт не создан, чтобы избежать двойной оплаты. Если сообщение не найдено, обратитесь в /paysupport.");
     } else if (dispatchClaim.reason === "AMBIGUOUS") {
       await ctx.reply("Запрос на выставление счёта уже выполнялся, но подтверждение не сохранено. Счёт мог быть отправлен. Проверьте сообщения от бота или обратитесь в /paysupport; второй счёт не создан.");
     } else {
