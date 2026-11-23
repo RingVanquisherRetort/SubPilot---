@@ -61,6 +61,7 @@ export async function reconcileSubscriptionAccessRemoval(
     telegramUserId: bigint;
     now?: Date;
     isLifecycleLeaseOwned?: LeaseOwnershipCheck;
+    allowAutomaticMemberBan?: boolean;
   }
 ): Promise<SubscriptionAccessRemovalResult> {
   const isLifecycleLeaseOwned = input.isLifecycleLeaseOwned ?? (() => true);
@@ -365,6 +366,10 @@ export async function reconcileSubscriptionAccessRemoval(
         // a concurrent moderation action remains a documented race.
         if (currentSnapshot.chatType === "GROUP") {
           await fail("LEGACY_GROUP_REMOVAL_REVIEW");
+          return "FAILED";
+        }
+        if (!input.allowAutomaticMemberBan) {
+          await fail("MEMBER_MODERATION_REVIEW_REQUIRED");
           return "FAILED";
         }
         if (!await isCurrentRevision()) return "LEASE_LOST";

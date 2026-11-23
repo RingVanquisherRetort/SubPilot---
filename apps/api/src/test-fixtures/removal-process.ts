@@ -10,7 +10,7 @@ if (!port || !/^\d+$/.test(port) || !subscriptionId || !customerId || !connected
 try {
   const bot = new Bot("42:test", { client: { apiRoot: "http://127.0.0.1:" + port } });
   const result = await reconcileSubscriptionAccessRemoval({
-    bot, subscriptionId, customerId, connectedChatId, telegramUserId: BigInt(userId)
+    bot, subscriptionId, customerId, connectedChatId, telegramUserId: BigInt(userId), allowAutomaticMemberBan: true
   });
   process.send?.(result);
 } finally {

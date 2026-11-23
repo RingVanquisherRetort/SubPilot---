@@ -698,7 +698,9 @@ async function expireSubscriptions(
           connectedChatId: grant.connectedChatId,
           telegramUserId: subscription.customer.telegramUserId,
           now,
-          isLifecycleLeaseOwned: isLeaseOwned
+          isLifecycleLeaseOwned: isLeaseOwned,
+          allowAutomaticMemberBan: process.env.NODE_ENV === "development" &&
+            process.env.TEST_TELEGRAM_AUTOMATIC_MEMBER_BAN === "true"
         });
 
         if (result === "PRESERVED_BY_OTHER_SUBSCRIPTION") {

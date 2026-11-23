@@ -9,16 +9,20 @@ import { setTimeout as delay } from "node:timers/promises";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
-import type { Bot } from "grammy";
+import { Bot } from "grammy";
 import { prisma } from "@subpilot/database";
 import {
   claimSubscriptionAccessScope,
   lockSubscriptionAccessScope,
   requestSubscriptionAccessReconciliation
 } from "@subpilot/payments";
-import { reconcileSubscriptionAccessRemoval } from "./subscription-access-removal.js";
+import { reconcileSubscriptionAccessRemoval as reconcileRemoval } from "./subscription-access-removal.js";
 import { confirmPendingAccessModerationReview, inspectPendingAccessModerationReview, listPendingAccessModerationReviews } from "./access-moderation-review.js";
 import { cancelStalePendingPayments } from "./subscription-lifecycle.js";
+
+function reconcileSubscriptionAccessRemoval(input: Parameters<typeof reconcileRemoval>[0]) {
+  return reconcileRemoval({ allowAutomaticMemberBan: true, ...input });
+}
 
 type Fixture = {
   subscription: { id: string };
@@ -2026,3 +2030,98 @@ test("a fresh process reconciles a confirmed Telegram ban after SIGKILL and natu
     }
   });
 });
+
+test("default removal revokes the invite and escalates joined membership without a Telegram ban", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, customer, chat, grant, project }) => {
+    const calls: string[] = [];
+    const bot = { api: {
+      revokeChatInviteLink: async () => { calls.push("revoke invite"); return true; },
+      getChatMember: async () => { calls.push("check membership"); return { status: "member" }; },
+      banChatMember: async () => { calls.push("ban"); return true; },
+      unbanChatMember: async () => { calls.push("unban"); return true; }
+    } } as unknown as Bot;
+    const input = { bot, subscriptionId: subscription.id, customerId: customer.id,
+      connectedChatId: chat.id, telegramUserId: customer.telegramUserId };
+    assert.equal(await reconcileRemoval(input), "FAILED");
+    assert.equal(await reconcileRemoval(input), "SKIPPED");
+    assert.deepEqual(calls, ["revoke invite", "check membership"]);
+    const saved = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } });
+    assert.equal(saved.revokedAt, null);
+    assert.equal(saved.revocationLastError, "MEMBER_MODERATION_REVIEW_REQUIRED");
+    assert.ok(saved.revocationNextAttemptAt > new Date());
+    assert.equal(await prisma.ownerNotification.count({
+      where: { projectId: project.id, eventType: "ACCESS_MODERATION_REVIEW" }
+    }), 1);
+  });
+});
+
+for (const event of ["moderator exclusion", "foreign entrant", "stale invite entrant"] as const) {
+  test("chat_member preserves a concurrent regrant after a delayed invite failure: " + event, {
+    skip: !process.env.DATABASE_URL
+  }, async () => {
+    await withFixture(async ({ subscription, customer, chat, grant, project }) => {
+      const telegramChatId = -(1_000_000_000_000 + Number(customer.telegramUserId));
+      await prisma.connectedChat.update({ where: { id: chat.id }, data: { telegramChatId } });
+      const bot = await prisma.projectBot.create({ data: {
+        projectId: project.id, telegramBotId: chat.telegramChatId, tokenEncrypted: "unused-test-token"
+      } });
+      const isExclusion = event === "moderator exclusion";
+      const userId = Number(customer.telegramUserId) + (event === "foreign entrant" ? 1 : 0);
+      const user = { id: userId, is_bot: false, first_name: "Test user" };
+      const moderator = { id: userId + 2, is_bot: false, first_name: "Moderator" };
+      const oldUrl = (await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } })).inviteLink;
+      const replacementUrl = "https://t.me/+handler-regrant-" + randomUUID();
+      if (!isExclusion) {
+        await prisma.subscriptionAccessGrant.update({ where: { id: grant.id }, data: {
+          revokedAt: new Date(), revocationReason: "ADMIN_EXCLUDED", joinedAt: null
+        } });
+      }
+      const methods: string[] = [];
+      const botApi = new Bot("42:test", { botInfo: { id: 42, is_bot: true, first_name: "Bot",
+        username: "test_bot", can_join_groups: true, can_read_all_group_messages: false,
+        supports_inline_queries: false, can_connect_to_business: false, has_main_web_app: false,
+        has_topics_enabled: false, allows_users_to_create_topics: false,
+        can_manage_bots: false, supports_join_request_queries: false
+      } });
+      botApi.api.config.use(async (_previous, method, payload) => {
+        methods.push(method);
+        if (method === "getChatMember") return { ok: true, result: { status: "member", user } } as never;
+        assert.equal(method, "revokeChatInviteLink");
+        assert.equal((payload as { invite_link: string }).invite_link, oldUrl);
+        // Commit the regrant while the handler is awaiting the old URL's revoke.
+        await prisma.$transaction(async (tx) => {
+          await tx.subscription.update({ where: { id: subscription.id }, data: {
+            status: "ACTIVE", endsAt: new Date(Date.now() + 86_400_000)
+          } });
+          await tx.subscriptionAccessGrant.update({ where: { id: grant.id }, data: {
+            inviteLink: replacementUrl, expiresAt: new Date(Date.now() + 60_000), joinedAt: null,
+            revokedAt: null, revocationReason: null, revocationAttempts: 0, revocationLastError: null
+          } });
+          await lockSubscriptionAccessScope(tx, customer.id, chat.id);
+          await requestSubscriptionAccessReconciliation(tx, customer.id, [chat.id]);
+        });
+        return { ok: false, error_code: 500, description: "Simulated delayed revoke failure" };
+      });
+      await handleProjectBotUpdate("42:test", project.id, bot.id, {
+        update_id: 321, chat_member: {
+          date: Math.floor(Date.now() / 1000),
+          chat: { id: telegramChatId, type: "channel", title: "Test channel" },
+          from: isExclusion ? moderator : user,
+          old_chat_member: { user, status: isExclusion ? "member" : "left" },
+          new_chat_member: isExclusion ? { user, status: "kicked", until_date: 0 } : { user, status: "member" },
+          invite_link: { invite_link: oldUrl, creator: moderator, creates_join_request: false,
+            is_primary: false, is_revoked: false }
+        }
+      }, 321, 0, botApi);
+      const saved = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } });
+      assert.equal(saved.inviteLink, replacementUrl);
+      assert.equal(saved.revokedAt, null);
+      assert.equal(saved.joinedAt, null);
+      assert.equal(saved.revocationAttempts, 0);
+      assert.equal(saved.revocationLastError, null);
+      assert.deepEqual(methods, event === "foreign entrant" ? ["revokeChatInviteLink", "getChatMember"] : ["revokeChatInviteLink"]);
+    });
+  });
+}
