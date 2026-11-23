@@ -106,3 +106,23 @@ This is an **interim safety policy**, not proof that Telegram's remote race is s
 The expiry-worker PostgreSQL tests `ad70044e` and `a9ffb6cd` prove URL-specific remote revocation and replacement-URL preservation for **`reconcileSubscriptionAccessRemoval`**. They do **not** exercise the `chat_member` webhook's admin-exclusion and wrong-user/stale-entry branches in `project-bot-updates.ts`. Those branches capture an invite URL and compare it before clearing a grant, but still need deterministic handler-level tests where the old Telegram call is delayed and a new manual grant is committed concurrently. Keep this as an explicit P1 acceptance gap rather than marking all invite paths complete.
 
 The `a9ffb6cd` CI run [45258664267](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45258664267) and matrix update `7dd92611` run [45258954810](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45258954810) both passed. These are simulated PostgreSQL tests and migration validation, not live Telegram confirmation.
+
+
+## Acceptance checkpoint — 2026-11-24 (moderation review rollout)
+
+This checkpoint supersedes the older claim above that the production lifecycle still issues timed member bans. The current integration branch **does not automatically ban joined members in production**: it revokes known invite links and parks unresolved membership in `MEMBER_MODERATION_REVIEW_REQUIRED`. The former timed-ban path requires both `NODE_ENV=development` and `TEST_TELEGRAM_AUTOMATIC_MEMBER_BAN=true` for isolated testing. This is a deliberate safety tradeoff: a still-joined expired subscriber requires an operator to resolve membership in Telegram. Do not advertise automatic removal of joined members as a production-ready guarantee.
+
+The control bot now exposes **Подписки и доступ → Ручная проверка** to authorized administrators. A confirmation checks Telegram membership, locks the subscription/grant/scope, rejects changed revisions and active entitlements, requires revoked or expired invite links, and writes an audit record only when absence was observed. A Telegram `kicked` observation is not proof of a moderator-issued ban; commit `2e0008a1` removed that provenance inference and `b15ad323` added a PostgreSQL regression. Both passed CI.
+
+Commit `0764fe72` adds a PostgreSQL regression for renewal during an outstanding Telegram membership lookup; CI passed. Commit `09074e35` adds two-operator concurrent confirmation coverage; its CI was still running when this checkpoint was authored. Recheck its final conclusion before treating it as accepted.
+
+### Remaining sign-off gates (do not silently waive)
+
+1. **Automated CI:** confirm `09074e35` passes the full validate and upgrade-validation workflows; investigate and fix any failure.
+2. **Real Telegram membership:** on an isolated test channel, verify an expired *joined* subscriber is parked without a bot ban; verify an authorized operator sees the case, can confirm only after Telegram reports `left`/`kicked`, and cannot close a still-present member. Verify that an explicit human ban is never automatically lifted. Record test channel, timestamps, actions, and expected/observed states without publishing bot tokens.
+3. **Real Telegram Stars:** exercise payment vs admin cancellation, buyer resume/cancel, delayed/missing authenticated update, duplicate notification, and restart recovery. Compare actual Telegram state, subscription DB state, and owner notifications; do not rely on simulated API alone.
+4. **Restart recovery and alerting:** prove parked review cases survive a fresh process and remain visible, owner notifications are delivered, and retry/confirmation is idempotent across restart. Include a failed Telegram membership lookup and recovery.
+5. **Product decision:** approve the operator-dependent joined-member removal policy and document its service-level implications; otherwise redesign before production. Explicitly accept the bounded 24-hour/one-member unknown-result invite orphan window.
+6. **Release control:** obtain explicit authorization for closing AUD-018 and for any subsequent merge to `main` or deployment. These are separate decisions.
+
+**Status: AUD-018 OPEN.** No live Telegram/Stars acceptance or production rollout is claimed by this checkpoint.
