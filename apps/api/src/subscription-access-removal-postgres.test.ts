@@ -2267,6 +2267,69 @@ test("manual review cannot finalize a grant renewed during the Telegram membersh
   });
 });
 
+test("two operators confirming the same absence produce one revocation and audit record", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ grant, project }) => {
+    const owner = await prisma.project.findUniqueOrThrow({
+      where: { id: project.id },
+      select: { workspace: { select: { createdById: true } } }
+    });
+    await prisma.subscriptionAccessGrant.update({
+      where: { id: grant.id },
+      data: {
+        inviteLink: "",
+        revocationLastError: "MEMBER_MODERATION_REVIEW_REQUIRED"
+      }
+    });
+    const firstLookup = deferred();
+    const releaseLookups = deferred();
+    let lookups = 0;
+    const bot = { api: { getChatMember: async () => {
+      lookups++;
+      if (lookups === 1) firstLookup.resolve();
+      await releaseLookups.promise;
+      return { status: "left" };
+    } } } as unknown as Bot;
+    const verify = () => confirmPendingAccessModerationReview(
+      project.id, owner.workspace.createdById, grant.id, bot
+    );
+    const first = verify();
+    let second: Promise<Awaited<ReturnType<typeof verify>>> | undefined;
+    try {
+      await Promise.race([
+        firstLookup.promise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("first membership check not reached")), 5_000))
+      ]);
+      second = verify();
+      await Promise.race([
+        (async () => {
+          while (lookups < 2) await delay(10);
+        })(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("second membership check not reached")), 5_000))
+      ]);
+    } finally {
+      releaseLookups.resolve();
+    }
+    const outcomes = await Promise.all([first, second!]);
+    assert.equal(outcomes.filter((value) => value === "CONFIRMED").length, 1);
+    assert.ok(outcomes.every((value) =>
+      value === "CONFIRMED" || value === "NO_LONGER_PENDING" || value === "CASE_CHANGED"
+    ), "losing operator must observe the changed case");
+    assert.equal(lookups, 2);
+    const saved = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id }
+    });
+    assert.ok(saved.revokedAt);
+    assert.equal(await prisma.auditLog.count({
+      where: { projectId: project.id, resourceId: grant.id,
+        action: "ACCESS_MODERATION_REVIEW_CONFIRMED" }
+    }), 1);
+  });
+});
+
 test("control bot exposes parked cases through the project menu and handles a disconnected project bot", {
   skip: !process.env.DATABASE_URL
 }, async () => {
