@@ -563,7 +563,8 @@ export async function recordSubscriptionAccessRevocationFailure(
   grantId: string,
   errorCode: string,
   now = new Date(),
-  fence?: { lease: SubscriptionAccessScopeLease; retryAt: Date }
+  fence?: { lease: SubscriptionAccessScopeLease; retryAt: Date },
+  expectedInviteLink?: string
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
     await tx.$queryRawUnsafe(
@@ -603,6 +604,9 @@ export async function recordSubscriptionAccessRevocationFailure(
       })
     ]);
     if (!subscription || !current || current.subscriptionId !== subscriptionId) return;
+    // A delayed failed Telegram revoke belongs to the captured invite URL only.
+    // Do not charge its retry budget to a newer manual re-grant.
+    if (expectedInviteLink !== undefined && current.inviteLink !== expectedInviteLink) return;
 
     // Normal expiry/admin-revoke work is retryable only while the entitlement is
     // still due. A paid renewal may have won after the failed Telegram call.
@@ -2667,7 +2671,10 @@ export async function handleProjectBotUpdate(
                 await recordSubscriptionAccessRevocationFailure(
                   grant.subscriptionId,
                   grant.id,
-                  "INVITE_REVOKE_FAILED"
+                  "INVITE_REVOKE_FAILED",
+                  new Date(),
+                  undefined,
+                  transition.inviteLink
                 );
                 console.error(
                   "Could not revoke an invite after Telegram admin exclusion:",
@@ -2794,7 +2801,10 @@ export async function handleProjectBotUpdate(
         await recordSubscriptionAccessRevocationFailure(
           grant.subscriptionId,
           grant.id,
-          "INVITE_REVOKE_FAILED"
+          "INVITE_REVOKE_FAILED",
+          new Date(),
+          undefined,
+          inviteLink
         ).catch((error: unknown) => {
           console.error(
             "Could not schedule an invite-revocation retry after an admin exclusion:",
@@ -2999,7 +3009,10 @@ export async function handleProjectBotUpdate(
           await recordSubscriptionAccessRevocationFailure(
             grant.subscriptionId,
             grant.id,
-            "INVITE_REVOKE_FAILED"
+            "INVITE_REVOKE_FAILED",
+            new Date(),
+            undefined,
+            inviteLink
           );
           console.error(
             "Could not revoke an invite used without a current access permission:",
