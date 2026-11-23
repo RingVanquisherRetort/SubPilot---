@@ -279,6 +279,57 @@ test("PostgreSQL Telegram Stars refunds recalculate paid access and expose fully
     });
     assert.equal(persistedCancelledSubscription.status, "CANCELLED");
     assert.equal(persistedCancelledSubscription.endsAt?.toISOString(), cancelledEndsAt.toISOString());
+
+    // A refund racing a pending administrative Stars cancellation must not
+    // recalculate or reopen the entitlement while the durable revoke is pending.
+    const pendingAdminEndsAt = new Date("2026-12-20T00:00:00.000Z");
+    const pendingAdminSubscription = await prisma.subscription.create({
+      data: {
+        projectId: project.id,
+        customerId: customer.id,
+        planId: plan.id,
+        status: "ACTIVE",
+        startsAt: firstPaidAt,
+        endsAt: pendingAdminEndsAt,
+        adminStarsCancelPending: true,
+        adminStarsCancelDueAt: new Date("2026-11-18T00:00:00.000Z"),
+        adminStarsCancelBotId: "admin-source-bot"
+      }
+    });
+    const pendingAdminPayment = await prisma.payment.create({
+      data: {
+        projectId: project.id,
+        customerId: customer.id,
+        subscriptionId: pendingAdminSubscription.id,
+        provider: "TELEGRAM_STARS",
+        providerPaymentId: "stars-refund-admin-pending-" + suffix,
+        amount: "250",
+        currency: "XTR",
+        status: "SUCCEEDED",
+        paidAt: firstPaidAt,
+        metadata: { durationDays: 30, isRecurring: true }
+      }
+    });
+    const pendingAdminRefund = await prisma.$transaction((tx) =>
+      reconcileTelegramStarsRefundUsing(tx, {
+        paymentId: pendingAdminPayment.id,
+        providerPaymentId: pendingAdminPayment.providerPaymentId!,
+        subscriptionId: pendingAdminSubscription.id,
+        refundedAt: new Date("2026-11-18T12:00:00.000Z"),
+        telegramUserId: customer.telegramUserId,
+        amount: pendingAdminPayment.amount.toString(),
+        currency: pendingAdminPayment.currency
+      })
+    );
+    assert.equal(pendingAdminRefund.paymentUpdated, true);
+    assert.equal(pendingAdminRefund.subscriptionStatus, "ACTIVE");
+    assert.equal(pendingAdminRefund.subscriptionEndsAt?.toISOString(), pendingAdminEndsAt.toISOString());
+    const pendingAdminSaved = await prisma.subscription.findUniqueOrThrow({
+      where: { id: pendingAdminSubscription.id }
+    });
+    assert.equal(pendingAdminSaved.status, "ACTIVE");
+    assert.equal(pendingAdminSaved.adminStarsCancelPending, true);
+    assert.equal(pendingAdminSaved.endsAt?.toISOString(), pendingAdminEndsAt.toISOString());
   } finally {
     if (workspaceId) await prisma.workspace.deleteMany({ where: { id: workspaceId } });
     if (actorId) await prisma.user.deleteMany({ where: { id: actorId } });
