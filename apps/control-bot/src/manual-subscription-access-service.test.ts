@@ -420,6 +420,79 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
     assert.equal(workerRecovered.adminStarsCancelPending, false);
     assert.equal(workerRecovered.telegramStarSubscriptionState, "CANCELED");
 
+
+    // Crash window: Telegram confirmed the cancellation and the authenticated
+    // webhook was committed, but the original worker died before it could
+    // finalize the local administrative revoke. A restarted worker must finish
+    // from the durable intent without issuing another Telegram API request.
+    const crashChargeId = "admin-crash-recovery-" + suffix;
+    const crashSubscription = await prisma.subscription.create({
+      data: {
+        projectId: project.id,
+        customerId: recurringCustomer.id,
+        planId: plan.id,
+        status: "ACTIVE",
+        startsAt: new Date(Date.now() - 60_000),
+        endsAt: new Date(Date.now() + 30 * 24 * 60 * 60_000),
+        telegramStarInitialChargeId: crashChargeId,
+        telegramStarSubscriptionState: "CANCELED",
+        adminStarsCancelPending: true,
+        adminStarsCancelDueAt: new Date(0),
+        adminStarsCancelBotId: projectBot.id,
+        adminStarsCancelActorUserId: owner.id,
+        adminStarsCancelWorkspaceId: workspace.id,
+        adminStarsCancelClaim: null
+      }
+    });
+    await prisma.payment.create({
+      data: {
+        projectId: project.id,
+        customerId: recurringCustomer.id,
+        subscriptionId: crashSubscription.id,
+        provider: "TELEGRAM_STARS",
+        providerPaymentId: crashChargeId,
+        amount: "100",
+        currency: "XTR",
+        status: "SUCCEEDED",
+        paidAt: new Date(Date.now() - 60_000),
+        metadata: { source: "project_bot", isRecurring: true, projectBotId: projectBot.id }
+      }
+    });
+    let crashRecoveryRemoteCalls = 0;
+    const neverCallTelegramAgain = async () => {
+      crashRecoveryRemoteCalls += 1;
+      throw new Error("Telegram cancellation was already confirmed");
+    };
+    assert.equal(await reconcileAdminStarsCancellation(
+      crashSubscription.id, projectBot.id, neverCallTelegramAgain
+    ), true);
+    assert.equal(crashRecoveryRemoteCalls, 0);
+    const crashRecovered = await prisma.subscription.findUniqueOrThrow({
+      where: { id: crashSubscription.id }
+    });
+    assert.equal(crashRecovered.status, "CANCELLED");
+    assert.equal(crashRecovered.adminStarsCancelPending, false);
+    assert.ok(crashRecovered.adminAccessRevokedAt);
+    assert.equal(crashRecovered.telegramStarSubscriptionState, "CANCELED");
+    assert.equal(await prisma.auditLog.count({
+      where: {
+        resourceType: "Subscription",
+        resourceId: crashSubscription.id,
+        action: "SUBSCRIPTION_ACCESS_REVOKE_CONFIRMED"
+      }
+    }), 1);
+    assert.equal(await reconcileAdminStarsCancellation(
+      crashSubscription.id, projectBot.id, neverCallTelegramAgain
+    ), false, "completed durable intent must not be claimed twice");
+    assert.equal(crashRecoveryRemoteCalls, 0);
+    assert.equal(await prisma.auditLog.count({
+      where: {
+        resourceType: "Subscription",
+        resourceId: crashSubscription.id,
+        action: "SUBSCRIPTION_ACCESS_REVOKE_CONFIRMED"
+      }
+    }), 1);
+
     const exhaustedChargeId = "admin-exhausted-charge-" + suffix;
     const exhaustedSubscription = await prisma.subscription.create({
       data: {
