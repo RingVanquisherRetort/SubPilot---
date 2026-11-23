@@ -2219,6 +2219,54 @@ test("a delayed manual membership check cannot close a new scope revision", {
   });
 });
 
+test("manual review cannot finalize a grant renewed during the Telegram membership lookup", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, customer, chat, grant, project }) => {
+    const owner = await prisma.project.findUniqueOrThrow({
+      where: { id: project.id },
+      select: { workspace: { select: { createdById: true } } }
+    });
+    await prisma.subscriptionAccessGrant.update({
+      where: { id: grant.id },
+      data: { inviteLink: "", revocationLastError: "MEMBER_MODERATION_REVIEW_REQUIRED" }
+    });
+    let lookups = 0;
+    const bot = { api: { getChatMember: async () => {
+      lookups++;
+      await prisma.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe(
+          'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+          subscription.id
+        );
+        await lockSubscriptionAccessScope(tx, customer.id, chat.id);
+        await tx.subscription.update({
+          where: { id: subscription.id },
+          data: { status: "ACTIVE", endsAt: new Date(Date.now() + 30 * 86_400_000) }
+        });
+        await requestSubscriptionAccessReconciliation(tx, customer.id, [chat.id]);
+      });
+      return { status: "left" };
+    } } } as unknown as Bot;
+    const result = await confirmPendingAccessModerationReview(
+      project.id, owner.workspace.createdById, grant.id, bot
+    );
+    assert.equal(result, "CASE_CHANGED");
+    assert.equal(lookups, 1);
+    const saved = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id }
+    });
+    assert.equal(saved.revokedAt, null);
+    assert.equal((await prisma.subscription.findUniqueOrThrow({
+      where: { id: subscription.id }
+    })).status, "ACTIVE");
+    assert.equal(await prisma.auditLog.count({
+      where: { projectId: project.id, resourceId: grant.id,
+        action: "ACCESS_MODERATION_REVIEW_CONFIRMED" }
+    }), 0);
+  });
+});
+
 test("control bot exposes parked cases through the project menu and handles a disconnected project bot", {
   skip: !process.env.DATABASE_URL
 }, async () => {
