@@ -182,3 +182,12 @@ The removal worker now commits an in-progress marker before asking Telegram to b
 Two PostgreSQL regression tests exercise these orderings with a simulated Telegram API. One commits a moderator exclusion during the outgoing request and returns a late error. The other simulates worker loss after a successful ban and resumes after lease expiry. Telegram cannot condition an in-flight ban on a PostgreSQL revision. Reconciliation can protect subsequent writes and moderation decisions, but cannot prevent an already dispatched request from taking effect. AUD-018 remains open.
 
 The PostgreSQL process-death regression runs removal in a child process against a loopback Bot API. It kills the child with SIGKILL during the membership verification after the ban reply, waits for the persisted lease deadline, and starts a fresh Node process. It checks the retained ban, absence of a second ban or an unban, the pending grant, and one owner review notification. This test covers abrupt process death with a simulated Telegram service.
+
+
+### CI-verified access recovery regressions (2026-11-23)
+
+GitHub Actions run [45239553187](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45239553187) completed successfully for commit `5e803c1e` on `audit-018/integration`, including the validation and migration jobs. Earlier runs [45239040282](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45239040282) and [45238861489](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45238861489) also passed.
+
+The added PostgreSQL tests assert three delivery behaviors against a simulated Telegram API: an existing moderator ban prevents invitations and is never automatically lifted; a pending timed removal postpones membership lookup and invitation until its deadline; and an expired timed-removal intent permits a fresh one-member invitation when Telegram reports the subscriber as absent, without issuing an unban. The process-death test also now retries fresh worker startup only when a persisted lease is still busy; unrelated dirty PostgreSQL scopes no longer make the lease test select another fixture's revision.
+
+These results are **CI evidence, not live Telegram acceptance**. They do not prove the ordering of a human moderator's permanent ban against an already-dispatched Telegram timed ban, nor do they close the Stars/payment/manual-revoke race and missing-webhook recovery criteria. AUD-018 remains OPEN. No merge to `main` or production deployment is authorized by these checks.
