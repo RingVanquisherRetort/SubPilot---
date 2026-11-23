@@ -6,9 +6,10 @@ export type ProjectAccessRole = WorkspaceRole;
 export async function getAccessibleProject(
   projectId: string,
   userId: string,
-  allowedRoles: readonly ProjectAccessRole[]
+  allowedRoles: readonly ProjectAccessRole[],
+  db: Pick<typeof prisma, "project"> = prisma
 ) {
-  const project = await prisma.project.findFirst({
+  const project = await db.project.findFirst({
     where: {
       id: projectId,
       status: { not: "ARCHIVED" },

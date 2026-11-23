@@ -295,10 +295,13 @@ export async function reconcileSubscriptionAccessRemoval(
     60 * 60 * 1000,
     60_000 * (2 ** Math.min(Math.max(lease.attempts - 1, 0), 6))
   ));
+  let confirmedRevokedInvite: string | undefined;
   const fail = async (errorCode: string): Promise<void> => {
     if (!ownsLease()) return;
     await recordSubscriptionAccessRevocationFailure(input.subscriptionId, currentSnapshot.grantId, errorCode, new Date(), {
-      lease, retryAt: errorCode === "MEMBER_MODERATION_REVIEW_REQUIRED" ||
+      lease,
+      ...(confirmedRevokedInvite ? { revokedInviteLink: confirmedRevokedInvite } : {}),
+      retryAt: errorCode === "MEMBER_MODERATION_REVIEW_REQUIRED" ||
         errorCode === "MEMBER_BAN_OWNERSHIP_UNCERTAIN" || errorCode === "LEGACY_GROUP_REMOVAL_REVIEW"
         ? new Date("2100-01-01T00:00:00.000Z") : retryAt
     });
@@ -321,6 +324,7 @@ export async function reconcileSubscriptionAccessRemoval(
           return "FAILED";
         }
       }
+      confirmedRevokedInvite = currentSnapshot.inviteLink;
       if (!ownsLease()) return "LEASE_LOST";
     }
 

@@ -9,6 +9,7 @@ import {
   canInviteWorkspaceRole,
   type InvitableWorkspaceRole
 } from "./workspace-permissions.js";
+import { confirmPendingAccessModerationReview, listPendingAccessModerationReviews } from "./access-moderation-review.js";
 import { isPrivateControlChat } from "./private-control-context.js";
 import { getAccessibleProject } from "./project-access-service.js";
 import {
@@ -670,6 +671,7 @@ export function createControlBot(token: string): Bot {
         .text("➕ Выдать доступ", "ui:subaccess-grant:manual:" + projectId)
         .text("🎁 Пробный доступ", "ui:subaccess-grant:trial:" + projectId).row()
         .text("⚠️ Проблемные выдачи", "ui:subaccess-failed:" + projectId).row()
+        .text("🔎 Ручная проверка", "review:0:" + projectId).row()
         .text("⬅️ К проекту", "ui:project:" + projectId);
       await ctx.editMessageText(
         "🔐 Подписки и доступ — «" + project.name + "»\n\n" +
@@ -680,6 +682,71 @@ export function createControlBot(token: string): Bot {
     } catch (error) {
       console.error("Subscription access panel failed:", error instanceof Error ? error.name : "UnknownError");
       await ctx.reply("Не удалось открыть управление подписками.");
+    }
+  });
+
+  bot.callbackQuery(/^review:(\d{1,7}):([^:]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const page = Number(ctx.match[1]);
+    const projectId = ctx.match[2]!;
+    const user = await upsertTelegramUser(ctx);
+    const cases = await listPendingAccessModerationReviews(projectId, user.id, 11, page * 10);
+    if (!cases) {
+      await ctx.reply("Ручная проверка доступна владельцу или администратору проекта.");
+      return;
+    }
+    const keyboard = new InlineKeyboard();
+    for (const item of cases.slice(0, 10)) {
+      keyboard.text((item.chatTitle || item.telegramChatId).slice(0, 24) + " · " + item.telegramUserId,
+        "verify:" + item.grantId).row();
+    }
+    if (page > 0) keyboard.text("← Назад", "review:" + (page - 1) + ":" + projectId);
+    if (cases.length > 10) keyboard.text("Дальше →", "review:" + (page + 1) + ":" + projectId);
+    keyboard.row().text("К подпискам и доступу", "ui:subaccess:" + projectId);
+    await ctx.editMessageText(cases.length
+      ? "Ручная проверка. Выберите чат и Telegram ID, чтобы сверить статус. Если участник уже вышел или исключён, бот проверит его подписки и закроет случай."
+      : "На этой странице нет ожидающих проверок.", { reply_markup: keyboard });
+  });
+
+  bot.callbackQuery(/^verify:([^:]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const grantId = ctx.match[1]!;
+    const grant = await prisma.subscriptionAccessGrant.findUnique({
+      where: { id: grantId }, select: { subscription: { select: { projectId: true } } }
+    });
+    const projectId = grant?.subscription.projectId;
+    if (!projectId || !await canAccessProject(projectId, user.id, ADMIN_ROLES)) {
+      await ctx.reply("Проверка недоступна для этого аккаунта.");
+      return;
+    }
+    const keyboard = new InlineKeyboard().text("К списку проверок", "review:0:" + projectId);
+    try {
+      const connected = await prisma.projectBot.findFirst({
+        where: { projectId, status: "ACTIVE" }, orderBy: [{ isPrimary: "desc" }, { createdAt: "desc" }],
+        select: { tokenEncrypted: true }
+      });
+      if (!connected) {
+        await ctx.editMessageText("Подключите бота проекта для проверки участия в Telegram.", { reply_markup: keyboard });
+        return;
+      }
+      const result = await confirmPendingAccessModerationReview(projectId, user.id, grantId,
+        new Bot(decryptSecret(connected.tokenEncrypted)));
+      const messages = {
+        CONFIRMED: "Telegram подтвердил отсутствие участника. Проверка закрыта и записана в журнал.",
+        UNAUTHORIZED: "Права управления проектом изменились.",
+        NO_LONGER_PENDING: "Этот случай больше не ожидает проверки.",
+        ENTITLEMENT_ACTIVE: "У подписчика есть действующее право на доступ. Оно сохранено.",
+        MEMBER_STILL_PRESENT: "Telegram не подтвердил выход или исключение. Проверка остаётся открытой.",
+        INVITE_CLEANUP_REQUIRED: "У подписчика ещё действует приглашение. Проверьте отзыв ссылки перед повторной сверкой.",
+        TELEGRAM_CHECK_FAILED: "Не удалось получить статус в Telegram. Проверьте права бота и повторите сверку.",
+        RECONCILIATION_IN_PROGRESS: "Бот обрабатывает изменение доступа. Повторите сверку позже.",
+        CASE_CHANGED: "Доступ изменился во время проверки. Откройте список и повторите сверку."
+      };
+      await ctx.editMessageText(messages[result], { reply_markup: keyboard });
+    } catch (error) {
+      console.error("Moderation review failed:", error instanceof Error ? error.name : "UnknownError");
+      await ctx.reply("Не удалось получить результат проверки. Откройте список повторно.", { reply_markup: keyboard });
     }
   });
 

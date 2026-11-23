@@ -563,7 +563,7 @@ export async function recordSubscriptionAccessRevocationFailure(
   grantId: string,
   errorCode: string,
   now = new Date(),
-  fence?: { lease: SubscriptionAccessScopeLease; retryAt: Date },
+  fence?: { lease: SubscriptionAccessScopeLease; retryAt: Date; revokedInviteLink?: string },
   expectedInviteLink?: string
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
@@ -630,6 +630,8 @@ export async function recordSubscriptionAccessRevocationFailure(
     await tx.subscriptionAccessGrant.update({
       where: { id: grantId },
       data: {
+        ...(requiresManualReview && fence?.revokedInviteLink && current.inviteLink === fence.revokedInviteLink
+          ? { inviteLink: "", expiresAt: new Date(0) } : {}),
         revocationAttempts: retry.attempts,
         // Manual moderation is not a transient Telegram failure. Repeated
         // automated retries cannot resolve it and must not flood the owner.
@@ -661,7 +663,7 @@ export async function recordSubscriptionAccessRevocationFailure(
             "Telegram chat ID: " + details.connectedChat.telegramChatId.toString() + "\n" +
             "Telegram user ID: " + details.subscription.customer.telegramUserId.toString() + "\n" +
             "Причина: " + errorCode + "\n" +
-            "Проверьте статус участника и ограничения в Telegram."
+            "Откройте проект → «Подписки и доступ» → «Ручная проверка». Проверьте статус участника и ограничения в Telegram."
         });
       }
     }

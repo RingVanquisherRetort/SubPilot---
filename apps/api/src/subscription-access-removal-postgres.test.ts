@@ -17,7 +17,7 @@ import {
   requestSubscriptionAccessReconciliation
 } from "@subpilot/payments";
 import { reconcileSubscriptionAccessRemoval as reconcileRemoval } from "./subscription-access-removal.js";
-import { confirmPendingAccessModerationReview, inspectPendingAccessModerationReview, listPendingAccessModerationReviews } from "./access-moderation-review.js";
+import { confirmPendingAccessModerationReview, inspectPendingAccessModerationReview, listPendingAccessModerationReviews } from "../../control-bot/src/access-moderation-review.js";
 import { cancelStalePendingPayments } from "./subscription-lifecycle.js";
 
 function reconcileSubscriptionAccessRemoval(input: Parameters<typeof reconcileRemoval>[0]) {
@@ -2123,3 +2123,108 @@ for (const event of ["moderator exclusion", "foreign entrant", "stale invite ent
     });
   });
 }
+
+test("default review preserves membership until an authorized operator observes absence", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, customer, chat, grant, project }) => {
+    const { workspaceId, workspace } = await prisma.project.findUniqueOrThrow({
+      where: { id: project.id }, select: { workspaceId: true, workspace: { select: { createdById: true } } }
+    });
+    const actor = workspace.createdById;
+    let status = "member";
+    let lookups = 0;
+    const bot = { api: {
+      revokeChatInviteLink: async () => true,
+      getChatMember: async () => { lookups++; return { status }; }
+    } } as unknown as Bot;
+    const verify = () => confirmPendingAccessModerationReview(project.id, actor, grant.id, bot);
+    assert.equal(await reconcileRemoval({ bot, subscriptionId: subscription.id, customerId: customer.id,
+      connectedChatId: chat.id, telegramUserId: customer.telegramUserId }), "FAILED");
+    const parked = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } });
+    assert.equal(parked.inviteLink, "");
+    assert.equal(parked.revokedAt, null);
+    assert.equal(lookups, 1);
+    const memberKey = { workspaceId_userId: { workspaceId, userId: actor } };
+    for (const role of ["MANAGER", "VIEWER"] as const) {
+      await prisma.workspaceMember.update({ where: memberKey, data: { role } });
+      assert.equal(await listPendingAccessModerationReviews(project.id, actor), null);
+      assert.equal(await verify(), "UNAUTHORIZED");
+    }
+    assert.equal(lookups, 1);
+    await prisma.workspaceMember.update({ where: memberKey, data: { role: "ADMIN" } });
+    assert.equal(await verify(), "MEMBER_STILL_PRESENT");
+    status = "left";
+    assert.equal(await verify(), "CONFIRMED");
+    assert.equal(await verify(), "NO_LONGER_PENDING");
+    assert.deepEqual(await listPendingAccessModerationReviews(project.id, actor), []);
+    assert.equal(await prisma.auditLog.count({ where: { projectId: project.id, resourceId: grant.id,
+      action: "ACCESS_MODERATION_REVIEW_CONFIRMED", actorUserId: actor } }), 1);
+  });
+});
+
+test("a delayed manual membership check cannot close a new scope revision", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ customer, chat, grant, project }) => {
+    const owner = await prisma.project.findUniqueOrThrow({
+      where: { id: project.id }, select: { workspace: { select: { createdById: true } } }
+    });
+    await prisma.subscriptionAccessGrant.update({ where: { id: grant.id },
+      data: { inviteLink: "", revocationLastError: "MEMBER_MODERATION_REVIEW_REQUIRED" } });
+    const bot = { api: { getChatMember: async () => {
+      await prisma.$transaction(async (tx) => {
+        await lockSubscriptionAccessScope(tx, customer.id, chat.id);
+        await requestSubscriptionAccessReconciliation(tx, customer.id, [chat.id]);
+      });
+      return { status: "left" };
+    } } } as unknown as Bot;
+    assert.equal(await confirmPendingAccessModerationReview(project.id, owner.workspace.createdById, grant.id, bot), "CASE_CHANGED");
+    assert.equal((await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } })).revokedAt, null);
+    assert.equal(await prisma.auditLog.count({ where: { projectId: project.id, action: "ACCESS_MODERATION_REVIEW_CONFIRMED" } }), 0);
+  });
+});
+
+test("control bot exposes parked cases through the project menu and handles a disconnected project bot", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  const { createControlBot } = await import("../../control-bot/src/bot.js");
+  await withFixture(async ({ customer, grant, project }) => {
+    const { workspaceId } = await prisma.project.findUniqueOrThrow({ where: { id: project.id } });
+    const actor = await prisma.user.create({ data: { telegramId: customer.telegramUserId } });
+    try {
+      await prisma.workspaceMember.create({ data: { workspaceId, userId: actor.id, role: "ADMIN" } });
+      await prisma.subscriptionAccessGrant.update({ where: { id: grant.id },
+        data: { revocationLastError: "MEMBER_MODERATION_REVIEW_REQUIRED" } });
+      const bot = createControlBot("42:offline");
+      bot.botInfo = { id: 42, is_bot: true, first_name: "Control", username: "test_bot" } as typeof bot.botInfo;
+      const replies: string[] = [];
+      bot.api.config.use(async (_prev, method, payload) => {
+        if (method !== "answerCallbackQuery") replies.push(JSON.stringify(payload));
+        return { ok: true, result: true } as never;
+      });
+      const from = { id: Number(actor.telegramId), is_bot: false, first_name: "Operator" };
+      let updateId = 0;
+      const press = async (data: string) => {
+        replies.length = 0;
+        await bot.handleUpdate({ update_id: ++updateId, callback_query: {
+          id: String(updateId), from, chat_instance: "test", data, message: {
+            message_id: 1, date: 1, chat: { id: from.id, type: "private", first_name: from.first_name },
+            from: bot.botInfo, text: "Menu"
+          }
+        } });
+        assert.equal(replies.length, 1);
+        return replies[0]!;
+      };
+      assert.ok((await press("ui:subaccess:" + project.id)).includes("review:0:" + project.id));
+      assert.ok((await press("review:0:" + project.id)).includes("verify:" + grant.id));
+      assert.match(await press("verify:" + grant.id), /Подключите бота проекта/);
+      await prisma.workspaceMember.update({ where: { workspaceId_userId: { workspaceId, userId: actor.id } },
+        data: { role: "VIEWER" } });
+      assert.match(await press("verify:" + grant.id), /недоступна/);
+      assert.equal((await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } })).revokedAt, null);
+    } finally {
+      await prisma.user.delete({ where: { id: actor.id } });
+    }
+  });
+});

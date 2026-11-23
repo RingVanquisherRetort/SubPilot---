@@ -1,30 +1,20 @@
 import type { Bot } from "grammy";
 import { prisma } from "@subpilot/database";
 import { lockSubscriptionAccessScope, requestSubscriptionAccessReconciliation } from "@subpilot/payments";
+import { getAccessibleProject } from "./project-access-service.js";
+import { ADMIN_ROLES } from "./workspace-permissions.js";
 
 /**
  * Read-only, tenant-scoped moderation work queue. Reading a case never
  * mutates Telegram membership or acknowledges a removal.
- *
- * Acknowledgement must be implemented separately with a fresh Telegram
- * membership check and a conditional, audited database transition.
  */
 export async function listPendingAccessModerationReviews(
   projectId: string,
   actorUserId: string,
-  limit = 50
+  limit = 50,
+  offset = 0
 ) {
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    select: { workspaceId: true, workspace: { select: { createdById: true } } }
-  });
-  if (!project) return null;
-  const authorized = project.workspace.createdById === actorUserId ||
-    Boolean(await prisma.workspaceMember.findUnique({
-      where: { workspaceId_userId: { workspaceId: project.workspaceId, userId: actorUserId } },
-      select: { id: true }
-    }));
-  if (!authorized) return null;
+  if (!await getAccessibleProject(projectId, actorUserId, ADMIN_ROLES)) return null;
 
   const safeLimit = Number.isFinite(limit) ? Math.min(100, Math.max(1, Math.floor(limit))) : 50;
   const grants = await prisma.subscriptionAccessGrant.findMany({
@@ -62,6 +52,7 @@ export async function listPendingAccessModerationReviews(
       }
     },
     orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+    skip: Number.isSafeInteger(offset) && offset >= 0 ? offset : 0,
     take: safeLimit
   });
 
@@ -93,65 +84,41 @@ export async function inspectPendingAccessModerationReview(
 ): Promise<
   | { state: "UNAUTHORIZED" | "NO_LONGER_PENDING" | "ENTITLEMENT_ACTIVE" }
   | { state: "TELEGRAM_CHECK_FAILED" }
-  | { state: "REVIEW_REQUIRED"; membership: string; telegramChatId: string; telegramUserId: string }
+  | { state: "REVIEW_REQUIRED"; membership: string; telegramChatId: string; telegramUserId: string; grantUpdatedAt: Date; revision: bigint | null }
 > {
-  const authorizedQueue = await listPendingAccessModerationReviews(projectId, actorUserId, 100);
-  if (authorizedQueue === null) return { state: "UNAUTHORIZED" };
-  // A case may fall beyond the first 100 entries; do not confuse pagination
-  // with authorization or with the absence of a pending review.
-  let row = authorizedQueue.find((item) => item.grantId === grantId);
-  if (!row) {
-    const direct = await prisma.subscriptionAccessGrant.findFirst({
-      where: {
-        id: grantId, revokedAt: null,
-        revocationLastError: {
-          in: ["MEMBER_MODERATION_REVIEW_REQUIRED", "MEMBER_BAN_OWNERSHIP_UNCERTAIN", "LEGACY_GROUP_REMOVAL_REVIEW"]
-        },
-        subscription: {
-          projectId,
-          OR: [
-            { status: "EXPIRED" },
-            { status: "CANCELLED" },
-            { status: "ACTIVE", endsAt: { lte: new Date() } }
-          ]
-        }
-      },
-      select: {
-        connectedChat: { select: { telegramChatId: true } },
-        subscription: { select: { customer: { select: { telegramUserId: true } } } }
-      }
-    });
-    if (direct) row = {
-      telegramChatId: direct.connectedChat.telegramChatId.toString(),
-      telegramUserId: direct.subscription.customer.telegramUserId.toString()
-    } as (typeof authorizedQueue)[number];
-  }
-  if (!row) {
-    const renewed = await prisma.subscriptionAccessGrant.findFirst({
-      where: { id: grantId, subscription: { projectId } },
-      select: {
-        revokedAt: true,
-        revocationLastError: true,
-        subscription: { select: { status: true, endsAt: true } }
-      }
-    });
-    if (renewed?.revokedAt === null && renewed.revocationLastError &&
-      ["MEMBER_MODERATION_REVIEW_REQUIRED", "MEMBER_BAN_OWNERSHIP_UNCERTAIN", "LEGACY_GROUP_REMOVAL_REVIEW"].includes(renewed.revocationLastError) &&
-      renewed.subscription.status === "ACTIVE" &&
-      (renewed.subscription.endsAt === null || renewed.subscription.endsAt > new Date())) {
-      return { state: "ENTITLEMENT_ACTIVE" };
+  if (!await getAccessibleProject(projectId, actorUserId, ADMIN_ROLES)) return { state: "UNAUTHORIZED" };
+  const row = await prisma.subscriptionAccessGrant.findFirst({
+    where: {
+      id: grantId, revokedAt: null, subscription: { projectId },
+      revocationLastError: { in: ["MEMBER_MODERATION_REVIEW_REQUIRED", "MEMBER_BAN_OWNERSHIP_UNCERTAIN", "LEGACY_GROUP_REMOVAL_REVIEW"] }
+    },
+    select: {
+      updatedAt: true, connectedChatId: true,
+      connectedChat: { select: { telegramChatId: true } },
+      subscription: { select: {
+        status: true, endsAt: true, customerId: true, customer: { select: { telegramUserId: true } }
+      } }
     }
-    return { state: "NO_LONGER_PENDING" };
-  }
-  const userId = Number(row.telegramUserId);
+  });
+  if (!row) return { state: "NO_LONGER_PENDING" };
+  const sub = row.subscription;
+  if (sub.status === "ACTIVE" && (!sub.endsAt || sub.endsAt > new Date())) return { state: "ENTITLEMENT_ACTIVE" };
+  if (!["CANCELLED", "EXPIRED", "ACTIVE"].includes(sub.status)) return { state: "NO_LONGER_PENDING" };
+  const scope = await prisma.subscriptionAccessScope.findUnique({
+    where: { customerId_connectedChatId: { customerId: sub.customerId, connectedChatId: row.connectedChatId } },
+    select: { desiredRevision: true }
+  });
+  const telegramChatId = row.connectedChat.telegramChatId.toString();
+  const telegramUserId = sub.customer.telegramUserId.toString();
+  const userId = Number(telegramUserId);
   if (!Number.isSafeInteger(userId) || userId <= 0) return { state: "TELEGRAM_CHECK_FAILED" };
   try {
-    const member = await bot.api.getChatMember(row.telegramChatId, userId);
+    const member = await bot.api.getChatMember(telegramChatId, userId);
     return {
       state: "REVIEW_REQUIRED",
       membership: member.status,
-      telegramChatId: row.telegramChatId,
-      telegramUserId: row.telegramUserId
+      telegramChatId, telegramUserId,
+      grantUpdatedAt: row.updatedAt, revision: scope?.desiredRevision ?? null
     };
   } catch {
     return { state: "TELEGRAM_CHECK_FAILED" };
@@ -171,26 +138,13 @@ export async function confirmPendingAccessModerationReview(
   bot: Pick<Bot, "api">
 ): Promise<"CONFIRMED" | "UNAUTHORIZED" | "NO_LONGER_PENDING" |
   "ENTITLEMENT_ACTIVE" | "MEMBER_STILL_PRESENT" | "INVITE_CLEANUP_REQUIRED" |
-  "TELEGRAM_CHECK_FAILED" | "RECONCILIATION_IN_PROGRESS"> {
+  "TELEGRAM_CHECK_FAILED" | "RECONCILIATION_IN_PROGRESS" | "CASE_CHANGED"> {
   const preflight = await inspectPendingAccessModerationReview(
     projectId, actorUserId, grantId, bot
   );
   if (preflight.state !== "REVIEW_REQUIRED") return preflight.state;
-  if (!["left", "kicked"].includes(preflight.membership)) return "MEMBER_STILL_PRESENT";
 
   return prisma.$transaction(async (tx) => {
-    const project = await tx.project.findUnique({
-      where: { id: projectId },
-      select: { workspaceId: true, workspace: { select: { createdById: true } } }
-    });
-    if (!project) return "UNAUTHORIZED" as const;
-    const authorized = project.workspace.createdById === actorUserId ||
-      Boolean(await tx.workspaceMember.findUnique({
-        where: { workspaceId_userId: { workspaceId: project.workspaceId, userId: actorUserId } },
-        select: { id: true }
-      }));
-    if (!authorized) return "UNAUTHORIZED" as const;
-
     const anchor = await tx.subscriptionAccessGrant.findUnique({
       where: { id: grantId },
       select: { subscriptionId: true }
@@ -220,6 +174,8 @@ export async function confirmPendingAccessModerationReview(
       return "NO_LONGER_PENDING" as const;
     }
     await lockSubscriptionAccessScope(tx, grant.subscription.customerId, grant.connectedChatId);
+    const project = await getAccessibleProject(projectId, actorUserId, ADMIN_ROLES, tx);
+    if (!project) return "UNAUTHORIZED" as const;
     const now = new Date();
     const scope = await tx.subscriptionAccessScope.findUnique({
       where: {
@@ -228,13 +184,15 @@ export async function confirmPendingAccessModerationReview(
           connectedChatId: grant.connectedChatId
         }
       },
-      select: { leaseToken: true, leaseExpiresAt: true }
+      select: { leaseToken: true, leaseExpiresAt: true, desiredRevision: true }
     });
     // A worker with an in-flight Telegram operation must not be bypassed by
     // a manual acknowledgement. Let it finish or expire, then re-inspect.
     if (scope?.leaseToken && scope.leaseExpiresAt && scope.leaseExpiresAt > now) {
       return "RECONCILIATION_IN_PROGRESS" as const;
     }
+    if ((scope?.desiredRevision ?? null) !== preflight.revision ||
+        grant.updatedAt.getTime() !== preflight.grantUpdatedAt.getTime()) return "CASE_CHANGED" as const;
     if (grant.connectedChat.telegramChatId.toString() !== preflight.telegramChatId ||
       grant.subscription.customer.telegramUserId.toString() !== preflight.telegramUserId) {
       return "NO_LONGER_PENDING" as const;
@@ -247,6 +205,7 @@ export async function confirmPendingAccessModerationReview(
       (subscription.endsAt === null || subscription.endsAt > now))) {
       return "ENTITLEMENT_ACTIVE" as const;
     }
+    if (!["EXPIRED", "CANCELLED", "ACTIVE"].includes(subscription.status)) return "NO_LONGER_PENDING" as const;
     const otherActive = await tx.subscriptionAccessGrant.findFirst({
       where: {
         id: { not: grantId },
@@ -264,6 +223,7 @@ export async function confirmPendingAccessModerationReview(
       select: { id: true }
     });
     if (otherActive) return "ENTITLEMENT_ACTIVE" as const;
+    if (!["left", "kicked"].includes(preflight.membership)) return "MEMBER_STILL_PRESENT" as const;
     if (grant.inviteLink && grant.expiresAt > now) return "INVITE_CLEANUP_REQUIRED" as const;
 
     // A preflight observation cannot be made atomic with Telegram moderation.

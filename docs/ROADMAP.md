@@ -71,6 +71,8 @@
 - [ ] Eliminate remaining project-bot recurring Stars Telegram API calls inside transactions and implement durable crash recovery for cancellation/re-enable.
 - [ ] Fence compromised-invite recovery, stale-join ejection and all remaining access-changing webhook side effects.
 - [ ] Add Telegram Stars webhook-vs-manual-revocation and worker crash/restart integration tests, plus live Telegram acceptance.
+- [x] Expose parked moderation cases and audited membership verification in the project administrator’s control-bot menu.
+- [ ] Validate the new menu on a parked case in a real staging channel.
 - [ ] Close AUD-018 after fresh end-to-end CI and operator recovery review; **P1 and P2 monetization remain gated until then**.
 
 ## Stage 4 — Payments
