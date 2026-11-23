@@ -474,15 +474,15 @@ export async function revokeSubscriptionAccessManually(
       if (!initialPayment || !projectBotId) {
         throw new ManualSubscriptionAccessError("TELEGRAM_RENEWAL_CANCEL_FAILED");
       }
-      const projectBot = await tx.projectBot.findFirst({
-        where: { id: projectBotId, projectId: target.projectId },
-        select: { tokenEncrypted: true }
-      });
-      if (!projectBot) {
-        throw new ManualSubscriptionAccessError("TELEGRAM_RENEWAL_CANCEL_FAILED");
-      }
       cancellationBotId = projectBotId;
       if (target.telegramStarSubscriptionState !== "CANCELED") {
+        const projectBot = await tx.projectBot.findFirst({
+          where: { id: projectBotId, projectId: target.projectId },
+          select: { tokenEncrypted: true }
+        });
+        if (!projectBot) {
+          throw new ManualSubscriptionAccessError("TELEGRAM_RENEWAL_CANCEL_FAILED");
+        }
         cancellation = {
           telegramUserId: target.customer.telegramUserId,
           telegramPaymentChargeId: target.telegramStarInitialChargeId,
