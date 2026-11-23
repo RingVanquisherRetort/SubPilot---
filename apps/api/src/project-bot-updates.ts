@@ -1857,9 +1857,9 @@ export async function handleProjectBotUpdate(
   projectBotId: string,
   update: TelegramUpdate,
   updateId: number,
-  sequenceEpoch: number
+  sequenceEpoch: number,
+  projectBot = new Bot(botToken)
 ): Promise<void> {
-  const projectBot = new Bot(botToken);
 
   const subscriptionUpdate = parseTelegramStarSubscriptionUpdate(update as unknown);
   if (subscriptionUpdate) {
@@ -3086,5 +3086,6 @@ export async function handleProjectBotUpdate(
     await saveCursor();
   });
 
+  await projectBot.init();
   await projectBot.handleUpdate(update);
 }

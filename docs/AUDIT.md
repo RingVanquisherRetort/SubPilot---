@@ -162,3 +162,7 @@ The migration is additive. Drain pending requests before rolling back to a runne
 ### Renewal during a timed removal
 
 Delivery checks the durable removal intent for the Telegram user and chat before observing membership. While the removal deadline is pending it releases the scope lease and schedules another observation after the deadline. This covers a replacement worker running before an old ban request returns. Recovery re-reads Telegram membership and can offer a fresh invite to an absent paid member. A remaining Telegram ban still blocks delivery. The customer must accept the return invite. Delivery of the notification and live Telegram timing remain separate acceptance items.
+
+### Project bot live acceptance — first private command
+
+A live private `/start` reached the staging webhook but failed during dispatch. Initialize the grammY project bot before calling `handleUpdate`. The regression test checks the initial `getMe` and the buyer menu reply using a local Bot API stub. Membership and moderation acceptance is tracked separately.
