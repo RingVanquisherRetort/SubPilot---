@@ -299,7 +299,11 @@ export async function reconcileSubscriptionAccessRemoval(
     if (!ownsLease()) return;
     await recordSubscriptionAccessRevocationFailure(input.subscriptionId, currentSnapshot.grantId, errorCode);
     await failSubscriptionAccessScope(prisma, lease, {
-      retryAt,
+      retryAt: errorCode === "MEMBER_MODERATION_REVIEW_REQUIRED" ||
+        errorCode === "MEMBER_BAN_OWNERSHIP_UNCERTAIN" ||
+        errorCode === "LEGACY_GROUP_REMOVAL_REVIEW"
+        ? new Date("2100-01-01T00:00:00.000Z")
+        : retryAt,
       errorCode: "ACCESS_SCOPE_" + errorCode
     });
   };
