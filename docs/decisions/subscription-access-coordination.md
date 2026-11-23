@@ -2,7 +2,7 @@
 
 **Status:** Open — active delivery and expiry/member removal use the durable customer/chat scope coordinator; Stars cancellation intents are staged outside interactive transactions. Remote moderation ordering, manual-revoke crash recovery and webhook URL-generation regression coverage remain.  
 **Reviewed branch:** `feat/subscription-lifecycle-ui`  
-**Reviewed implementation snapshot:** `7e77c2ebaab91b8b88d2a4a091741b9a6d7cfd88` (source review; CI run `45122005897` passed)
+**Reviewed implementation snapshot:** `05e239d576bc41603c37ebb3f2badb38f5dc24da` (source review; CI run `45123755090` passed)
 **Production status:** Not merged; no live Telegram/provider test has been run as part of this review.
 
 ## Execution update — 23 November 2026 (supersedes historical snapshot below)
@@ -22,14 +22,14 @@ For the verified current side-effect inventory and P0 acceptance gaps at the rev
 
 ## Second-pass execution update — 23 November 2026
 
-The exact reviewed HEAD is now `7e77c2e`; CI run [45122005897](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45122005897) passed both validate and upgrade-validation. Typecheck, unit tests, clean PostgreSQL migrations, Prisma generation and legacy upgrade/data checks passed. This is not live Telegram acceptance.
+The exact reviewed code HEAD is now `05e239d`; CI run [45123755090](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45123755090) passed both validate and upgrade-validation. Typecheck, unit tests, clean PostgreSQL migrations, Prisma generation and legacy upgrade/data checks passed. This is not live Telegram acceptance.
 
 A second source pass refined two earlier findings:
 
 - The admin-exclusion webhook increments the scope desired revision under the customer/chat advisory lock before its external invite revoke. The remote revoke is not held under a claimed scope lease, but it targets the captured old invite URL, and the database cleanup compares that same URL before clearing it. Wrong-user/stale-entry recovery also uses URL-specific comparisons. This is a coverage gap requiring a delayed old-URL/replacement-URL race test; source inspection alone does not establish that it can revoke a newer URL.
 - An invite created by Telegram whose response is lost is unknowable to SubPilot and cannot be compensated. The request is one-member and expires after 24 hours; the URL is not sent to the buyer until persistence and lease validation succeed. Record this as a bounded orphan-resource limitation, not a proven leaked buyer credential.
 
-The remaining high-risk work is timed-ban/moderator ordering, payment webhook versus admin/manual revoke, and manual-revoke crash recovery. The latter can be recovered if Telegram's authenticated star_subscription update persists CANCELED before an operator retry; that dependency still needs a PostgreSQL test for timely, delayed and absent updates. No merge, production deployment or live API call was performed.
+The custom top-level Stars subscription update now returns after its dedicated persistence path instead of being passed to grammY's ordinary dispatcher; a regression test covers cancellation state persistence and stale update rejection. The invite-create unknown-result test confirms that a lost response never yields a buyer-visible link or a fabricated compensation record. A control-bot PostgreSQL test covers manual-revoke retry after the authenticated webhook has persisted CANCELED. The remaining high-risk work is timed-ban/moderator ordering, payment webhook versus admin/manual revoke, and manual-revoke crash recovery. The latter can be recovered if Telegram's authenticated star_subscription update persists CANCELED before an operator retry; that dependency still needs a PostgreSQL test for timely, delayed and absent updates. No merge, production deployment or live API call was performed.
 ## Why this review exists
 
 The current subscription lifecycle deliberately serializes expiry and successful payment changes by locking the `Subscription` row. This prevents the simple race where expiry checks an old end date, a payment extends the same subscription, and the worker then revokes access based on stale data.
