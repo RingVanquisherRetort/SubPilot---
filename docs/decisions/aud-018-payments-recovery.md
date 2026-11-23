@@ -61,6 +61,7 @@ Retry policy: 10 failed/unconfirmed attempts with bounded backoff; on exhaustion
 - `apps/api/src/subscription-access-removal-postgres.test.ts`
 - `apps/api/src/subscription-lifecycle.ts`
 - `apps/api/src/telegram-stars-refund-reconciliation.ts`
+- `apps/api/src/telegram-stars-refund-reconciliation-postgres.test.ts`
 - `apps/control-bot/src/manual-subscription-access-service.ts`
 - `apps/control-bot/src/manual-subscription-access-service.test.ts`
 - `packages/database/prisma/schema.prisma`
@@ -75,6 +76,7 @@ Retry policy: 10 failed/unconfirmed attempts with bounded backoff; on exhaustion
 - A stale Stars worker cannot clear a successor claim while its Telegram request is in flight.
 - An authenticated Stars cancellation webhook wakes a pending admin revoke for worker finalization.
 - A recurring Stars payment arriving during admin cancellation is recorded but cannot restore access.
+- A refund arriving while an admin cancellation intent is pending cannot recalculate or reopen the entitlement.
 - Manual administrative cancellation survives a lost Telegram response and can be completed by the lifecycle worker after restart without relying on the webhook.
 
 ## Residual risks / acceptance limits
