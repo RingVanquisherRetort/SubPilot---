@@ -48,7 +48,7 @@ A dedicated durable intent now records:
 - requesting actor and workspace;
 - bounded retry count and constrained last-error code.
 
-The manual revoke path commits this intent before Telegram I/O. The lifecycle worker retries due intents after restart. A confirmed `star_subscription` cancellation webhook wakes the worker immediately and invalidates an in-flight claim. Finalization rechecks the same subscription/charge/claim, marks the subscription cancelled, commits the desired access revision and records an audit event. Access is not revoked until Telegram cancellation is confirmed.
+The manual revoke path commits this intent before Telegram I/O. The lifecycle worker retries due intents after restart. A confirmed `star_subscription` cancellation webhook wakes the worker immediately and invalidates an in-flight claim. Finalization rechecks the same subscription/charge/claim, marks an active subscription cancelled (or preserves a naturally expired/cancelled status), commits the desired access revision and records an audit event. Access is not revoked until Telegram cancellation is confirmed.
 
 Payment renewals and refunds that arrive while this intent is pending cannot extend or restore the entitlement. Buyer resume is blocked while the administrative intent is pending.
 
@@ -77,6 +77,7 @@ Retry policy: 10 failed/unconfirmed attempts with bounded backoff; on exhaustion
 - An authenticated Stars cancellation webhook wakes a pending admin revoke for worker finalization.
 - A recurring Stars payment arriving during admin cancellation is recorded but cannot restore access.
 - A refund arriving while an admin cancellation intent is pending cannot recalculate or reopen the entitlement.
+- The authenticated Telegram Stars refund handler reconciles the original charge and ignores duplicate delivery.
 - Manual administrative cancellation survives a lost Telegram response and can be completed by the lifecycle worker after restart without relying on the webhook.
 - The admin cancellation retry budget exhausts after 10 unconfirmed attempts, remains auditable, and can be explicitly retried after natural expiry.
 
