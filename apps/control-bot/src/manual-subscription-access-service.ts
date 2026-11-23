@@ -616,6 +616,7 @@ export async function revokeSubscriptionAccessManually(
         status: "CANCELLED",
         endsAt: now,
         cancelledAt: now,
+        adminAccessRevokedAt: now,
         ...(current.buyerStarsChargeId && current.buyerStarsChargeId === current.telegramStarInitialChargeId
           ? { buyerStarsCanceled: true, buyerStarsDueAt: now, buyerStarsClaim: null } : {}),
         ...(snapshot.hasRecurringAnchor ? { telegramStarSubscriptionState: "CANCELED" as const } : {})
