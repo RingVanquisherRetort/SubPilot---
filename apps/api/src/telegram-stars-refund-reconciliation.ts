@@ -47,6 +47,7 @@ export async function reconcileTelegramStarsRefundUsing(
         select: {
           customerId: true,
           status: true,
+          adminStarsCancelPending: true,
           startsAt: true,
           endsAt: true,
           accessGrants: { select: { connectedChatId: true } }
@@ -104,7 +105,7 @@ export async function reconcileTelegramStarsRefundUsing(
 
   // Refund reconciliation may recompute the paid period, but it must never
   // undo an explicit administrative cancellation of the entitlement.
-  if (subscription.status === "CANCELLED") {
+  if (subscription.status === "CANCELLED" || subscription.adminStarsCancelPending) {
     return {
       paymentUpdated: true,
       subscriptionStatus: subscription.status,
