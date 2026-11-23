@@ -357,69 +357,13 @@ export async function reconcileSubscriptionAccessRemoval(
         await fail("MEMBER_MODERATION_REVIEW_REQUIRED");
         return "FAILED";
       } else if (member.status === "member") {
+        // Telegram has no atomic conditional kick and no moderation revision.
+        // A timed ban can overwrite a concurrent moderator ban, even if our
+        // database lease is current. Do not mutate an already joined member.
+        // Keep the grant unresolved and surface it for operator review.
         if (!await isCurrentRevision()) return "LEASE_LOST";
-
-        // Persist an ambiguity marker before the remote ban. If this process
-        // crashes after Telegram accepts the ban but before the unban, recovery
-        // must not mistake our partially completed operation for a moderator ban
-        // or automatically clear a newer moderator decision.
-        if (currentSnapshot.chatType === "GROUP") {
-          await fail("LEGACY_GROUP_REMOVAL_REVIEW");
-          return "FAILED";
-        }
-        const untilDate = Math.floor(Date.now() / 1000) + 300;
-        const botId = BigInt(input.bot.token.split(":")[0]!);
-        const marked = await prisma.$transaction(async (tx) => {
-          await tx.$queryRawUnsafe(
-            'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
-            input.subscriptionId
-          );
-          await tx.$queryRawUnsafe(
-            'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
-            currentSnapshot.grantId
-          );
-          await lockSubscriptionAccessScope(tx, input.customerId, input.connectedChatId);
-          const [subscription, scope, grant] = await Promise.all([
-            tx.subscription.findUnique({
-              where: { id: input.subscriptionId },
-              select: { customerId: true, status: true, endsAt: true }
-            }),
-            tx.subscriptionAccessScope.findUnique({
-              where: { id: lease.id },
-              select: { leaseToken: true, leaseExpiresAt: true, desiredRevision: true }
-            }),
-            tx.subscriptionAccessGrant.findUnique({
-              where: { id: currentSnapshot.grantId },
-              select: { revokedAt: true, joinedAt: true }
-            })
-          ]);
-          const checkedAt = new Date();
-          if (!subscription || subscription.customerId !== input.customerId ||
-            !isSubscriptionDueForRevocation(subscription, checkedAt) ||
-            !scope || scope.leaseToken !== lease.leaseToken ||
-            scope.leaseExpiresAt === null || scope.leaseExpiresAt <= checkedAt ||
-            scope.desiredRevision !== lease.revision ||
-            !grant || grant.revokedAt !== null || !grant.joinedAt) return false;
-          const markedGrant = await tx.subscriptionAccessGrant.updateMany({
-            where: { id: currentSnapshot.grantId, revokedAt: null },
-            data: { revocationLastError: "MEMBER_BAN_IN_PROGRESS" }
-          });
-          if (markedGrant.count !== 1) return false;
-          await tx.telegramRemovalIntent.createMany({
-            data: [{ botId, telegramChatId: BigInt(currentSnapshot.telegramChatId), telegramUserId: input.telegramUserId, untilDate }],
-            skipDuplicates: true
-          });
-          return true;
-        }, { maxWait: 10_000, timeout: 15_000 });
-        if (!marked || !await isCurrentRevision()) return "LEASE_LOST";
-        try {
-          if (untilDate - Math.floor(Date.now() / 1000) < 120) return "LEASE_LOST";
-          await input.bot.api.banChatMember(currentSnapshot.telegramChatId, telegramUserId, { until_date: untilDate });
-        } catch {
-          await fail("MEMBER_BAN_OWNERSHIP_UNCERTAIN");
-          return "FAILED";
-        }
-        if (!ownsLease()) return "LEASE_LOST";
+        await fail("MEMBER_MODERATION_REVIEW_REQUIRED");
+        return "FAILED";
       }
     }
 
