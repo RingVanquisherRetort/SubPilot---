@@ -1598,6 +1598,34 @@ test("administrative cancellation removes a joined channel subscriber and verifi
   });
 });
 
+test("unconfirmed Telegram ban remains under review without a second ban attempt", { skip: !process.env.DATABASE_URL }, async () => {
+  await withFixture(async ({ subscription, customer, chat, grant }) => {
+    await prisma.subscription.update({
+      where: { id: subscription.id },
+      data: { status: "CANCELLED", cancelledAt: new Date() }
+    });
+    let bans = 0;
+    const bot = { api: {
+      revokeChatInviteLink: async () => true,
+      getChatMember: async () => ({ status: "member" }),
+      banChatMember: async () => { bans++; return true; },
+      unbanChatMember: async () => { throw new Error("Must never unban"); }
+    } } as unknown as Bot;
+    const input = {
+      bot, subscriptionId: subscription.id, customerId: customer.id,
+      connectedChatId: chat.id, telegramUserId: customer.telegramUserId
+    };
+    assert.equal(await reconcileSubscriptionAccessRemoval(input), "FAILED");
+    const saved = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } });
+    assert.equal(saved.revokedAt, null);
+    assert.equal(saved.revocationLastError, "MEMBER_MODERATION_REVIEW_REQUIRED");
+    assert.equal(bans, 1);
+    // An ambiguous result must not generate a second mutation on retry.
+    assert.equal(await reconcileSubscriptionAccessRemoval(input), "SKIPPED");
+    assert.equal(bans, 1);
+  });
+});
+
 test("moderation committed during an in-flight ban survives a late Telegram error", { skip: !process.env.DATABASE_URL }, async () => {
   await withFixture(async ({ subscription, customer, chat, grant, project }) => {
     const bot = { api: {
