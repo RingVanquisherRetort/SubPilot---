@@ -222,7 +222,7 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
     const recurringCustomer = await prisma.projectCustomer.create({
       data: {
         projectId: project.id,
-        telegramUserId: telegramBase + 20n,
+        telegramUserId: BigInt(Date.now() % 1_000_000_000) + 100_000_000n,
         firstName: "Recurring buyer"
       }
     });
@@ -339,6 +339,77 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
     });
     assert.equal(recoveredSubscription.status, "CANCELLED");
     assert.equal(recoveredSubscription.telegramStarSubscriptionState, "CANCELED");
+
+    // A second administrative revoke is recovered by the lifecycle worker
+    // after the original process loses the Telegram response and no webhook
+    // arrives. The same durable intent is retried after its lease expires.
+    const workerChargeId = "worker-recovery-charge-" + suffix;
+    const workerRecoverySubscription = await prisma.subscription.create({
+      data: {
+        projectId: project.id,
+        customerId: recurringCustomer.id,
+        planId: plan.id,
+        status: "ACTIVE",
+        startsAt: new Date(Date.now() - 60_000),
+        endsAt: new Date(Date.now() + 30 * 24 * 60 * 60_000),
+        telegramStarInitialChargeId: workerChargeId,
+        telegramStarSubscriptionState: "ACTIVE"
+      }
+    });
+    await prisma.payment.create({
+      data: {
+        projectId: project.id,
+        customerId: recurringCustomer.id,
+        subscriptionId: workerRecoverySubscription.id,
+        provider: "TELEGRAM_STARS",
+        providerPaymentId: workerChargeId,
+        amount: "100",
+        currency: "XTR",
+        status: "SUCCEEDED",
+        paidAt: new Date(Date.now() - 60_000),
+        metadata: { source: "project_bot", isRecurring: true, projectBotId: projectBot.id }
+      }
+    });
+    await assert.rejects(
+      revokeSubscriptionAccessManually({
+        subscriptionId: workerRecoverySubscription.id,
+        workspaceId: workspace.id,
+        actorUserId: owner.id
+      }, {
+        cancelTelegramRenewal: async () => { throw new Error("response lost after remote success"); }
+      }),
+      (error: unknown) => error instanceof ManualSubscriptionAccessError &&
+        error.code === "TELEGRAM_RENEWAL_CANCEL_FAILED"
+    );
+    const pendingAdminIntent = await prisma.subscription.findUniqueOrThrow({
+      where: { id: workerRecoverySubscription.id }
+    });
+    assert.equal(pendingAdminIntent.status, "ACTIVE");
+    assert.equal(pendingAdminIntent.adminStarsCancelPending, true);
+    assert.ok(pendingAdminIntent.adminStarsCancelDueAt);
+    await prisma.subscription.update({
+      where: { id: workerRecoverySubscription.id },
+      data: { adminStarsCancelDueAt: new Date(0), adminStarsCancelClaim: null }
+    });
+    const { reconcileAdminStarsCancellation } = await import("@subpilot/payments");
+    let workerRetryCalls = 0;
+    assert.equal(await reconcileAdminStarsCancellation(
+      workerRecoverySubscription.id,
+      projectBot.id,
+      async args => {
+        workerRetryCalls += 1;
+        assert.equal(args.telegram_payment_charge_id, workerChargeId);
+        assert.equal(args.is_canceled, true);
+        return true;
+      }
+    ), true);
+    assert.equal(workerRetryCalls, 1);
+    const workerRecovered = await prisma.subscription.findUniqueOrThrow({
+      where: { id: workerRecoverySubscription.id }
+    });
+    assert.equal(workerRecovered.status, "CANCELLED");
+    assert.equal(workerRecovered.adminStarsCancelPending, false);
+    assert.equal(workerRecovered.telegramStarSubscriptionState, "CANCELED");
 
     await assert.rejects(
       revokeSubscriptionAccessManually({
