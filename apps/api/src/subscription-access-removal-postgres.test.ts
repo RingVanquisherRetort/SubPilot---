@@ -2079,13 +2079,11 @@ for (const event of ["moderator exclusion", "foreign entrant", "stale invite ent
         } });
       }
       const methods: string[] = [];
-      const botApi = new Bot("42:test", { botInfo: { id: 42, is_bot: true, first_name: "Bot",
-        username: "test_bot", can_join_groups: true, can_read_all_group_messages: false,
-        supports_inline_queries: false, can_connect_to_business: false, has_main_web_app: false,
-        has_topics_enabled: false, allows_users_to_create_topics: false,
-        can_manage_bots: false, supports_join_request_queries: false
-      } });
+      const botApi = new Bot("42:test");
       botApi.api.config.use(async (_previous, method, payload) => {
+        if (method === "getMe") return {
+          ok: true, result: { id: 42, is_bot: true, first_name: "Bot", username: "test_bot" }
+        } as never;
         methods.push(method);
         if (method === "getChatMember") return { ok: true, result: { status: "member", user } } as never;
         assert.equal(method, "revokeChatInviteLink");
