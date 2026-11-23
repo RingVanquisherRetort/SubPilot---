@@ -389,7 +389,12 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
     assert.ok(pendingAdminIntent.adminStarsCancelDueAt);
     await prisma.subscription.update({
       where: { id: workerRecoverySubscription.id },
-      data: { adminStarsCancelDueAt: new Date(0), adminStarsCancelClaim: null }
+      data: {
+        status: "EXPIRED",
+        endsAt: new Date(Date.now() - 1_000),
+        adminStarsCancelDueAt: new Date(0),
+        adminStarsCancelClaim: null
+      }
     });
     const { reconcileAdminStarsCancellation } = await import("@subpilot/payments");
     let workerRetryCalls = 0;
@@ -407,7 +412,7 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
     const workerRecovered = await prisma.subscription.findUniqueOrThrow({
       where: { id: workerRecoverySubscription.id }
     });
-    assert.equal(workerRecovered.status, "CANCELLED");
+    assert.equal(workerRecovered.status, "EXPIRED");
     assert.equal(workerRecovered.adminStarsCancelPending, false);
     assert.equal(workerRecovered.telegramStarSubscriptionState, "CANCELED");
 
