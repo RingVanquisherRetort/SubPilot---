@@ -13,7 +13,7 @@ WHERE subscription."status" = 'CANCELLED'
     subscription."telegramStarInitialChargeId" IS NOT NULL
     OR EXISTS (
       SELECT 1
-      FROM "SubscriptionAccessGrant" AS grant
-      WHERE grant."subscriptionId" = subscription."id"
+      FROM "SubscriptionAccessGrant" AS access_grant
+      WHERE access_grant."subscriptionId" = subscription."id"
     )
   );
