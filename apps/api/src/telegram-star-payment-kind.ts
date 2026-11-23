@@ -40,3 +40,15 @@ export function classifyTelegramStarsPayment(
       ? "RECURRING_RENEWAL"
       : null;
 }
+
+/**
+ * A charge is still recorded for accounting, but must not grant or extend
+ * access after an administrative revoke request has been committed.
+ * Evaluate under the locked subscription row in the receipt transaction.
+ */
+export function isStarsAccessSuppressedByAdminRevocation(input: {
+  adminAccessRevokedAt: Date | null;
+  adminStarsCancelPending: boolean;
+}): boolean {
+  return input.adminAccessRevokedAt !== null || input.adminStarsCancelPending;
+}
