@@ -9,6 +9,8 @@ type Transaction = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$us
 export class ManualSubscriptionAccessError extends Error {
   constructor(public readonly code:
     | "INVALID_TELEGRAM_USER_ID"
+    | "USERNAME_NOT_FOUND"
+    | "USERNAME_AMBIGUOUS"
     | "INVALID_DURATION"
     | "ACTOR_NOT_AUTHORIZED"
     | "PROJECT_NOT_FOUND"
@@ -40,6 +42,23 @@ function parseTelegramUserId(value: string): bigint {
   const parsed = BigInt(value);
   if (parsed <= 0n) throw new ManualSubscriptionAccessError("INVALID_TELEGRAM_USER_ID");
   return parsed;
+}
+
+/** Resolve only previously observed project customers; Telegram has no arbitrary username lookup API. */
+export async function resolveProjectCustomerTelegramId(projectId: string, identifier: string): Promise<string> {
+  if (/^\\d{1,20}$/.test(identifier)) return parseTelegramUserId(identifier).toString();
+  const username = identifier.replace(/^@/, "");
+  if (!/^[A-Za-z0-9_]{5,32}$/.test(username)) {
+    throw new ManualSubscriptionAccessError("INVALID_TELEGRAM_USER_ID");
+  }
+  const matches = await prisma.projectCustomer.findMany({
+    where: { projectId, username: { equals: username, mode: "insensitive" } },
+    select: { telegramUserId: true },
+    take: 2
+  });
+  if (matches.length === 0) throw new ManualSubscriptionAccessError("USERNAME_NOT_FOUND");
+  if (matches.length > 1) throw new ManualSubscriptionAccessError("USERNAME_AMBIGUOUS");
+  return matches[0]!.telegramUserId.toString();
 }
 
 function validateDuration(days: number | null): void {
