@@ -1536,15 +1536,15 @@ test("manual moderation confirmation waits for an active access scope worker", {
       where: { id: grant.id },
       select: { connectedChatId: true }
     });
-    await prisma.subscriptionAccessScope.upsert({
+    const persistedSubscription = await prisma.subscription.findUniqueOrThrow({\n      where: { id: subscription.id },\n      select: { customerId: true }\n    });\n    await prisma.subscriptionAccessScope.upsert({
       where: {
         customerId_connectedChatId: {
-          customerId: subscription.customerId,
+          customerId: persistedSubscription.customerId,
           connectedChatId: scopedGrant.connectedChatId
         }
       },
       create: {
-        customerId: subscription.customerId,
+        customerId: persistedSubscription.customerId,
         connectedChatId: scopedGrant.connectedChatId,
         leaseToken: randomUUID(),
         leaseExpiresAt: new Date(Date.now() + 60_000)
