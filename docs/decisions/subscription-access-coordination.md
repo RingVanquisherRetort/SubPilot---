@@ -1,8 +1,8 @@
 # Subscription access coordination — open architecture review
 
-**Status:** Open — active-scope reconciliation worker and leased invite delivery are implemented; expiry/member removal and recurring cancellation remain  
+**Status:** Open — active delivery and expiry/member removal use the durable customer/chat scope coordinator; Stars cancellation intents are staged outside interactive transactions. Webhook invite-security fencing, remote moderation ordering and crash-boundary recovery remain.  
 **Reviewed branch:** `feat/subscription-lifecycle-ui`  
-**Reviewed implementation snapshot:** `f226305c655df2f1da388a329294db2ab142fe9b` (CI run `45074857282` passed clean and upgrade migrations, Prisma generation, typecheck and all 190 tests)
+**Reviewed implementation snapshot:** `c36c1bdb0fa45ad4b24fd42b4e668e5fe52c907e` (source review; full CI for this exact HEAD still required)
 **Production status:** Not merged; no live Telegram/provider test has been run as part of this review.
 
 ## Execution update — 23 November 2026 (supersedes historical snapshot below)
@@ -14,9 +14,11 @@ At working-branch baseline `ee78a0e`, CI run `45076660501` passed both jobs. Sub
 - `ADMIN_EXCLUDED` cleanup revokes only the exact stale invitation and does not alter Telegram membership or sticky admin exclusions. If another active subscription exists, it queues new delivery reconciliation.
 - Crashes after a temporary Telegram ban are treated as ambiguous: `MEMBER_BAN_IN_PROGRESS`, `MEMBER_UNBAN_FAILED`, and `MEMBER_BAN_OWNERSHIP_UNCERTAIN` must never cause an automatic unban of a possible moderator ban.
 - PostgreSQL regression tests cover blocked Telegram vs concurrent payment renewal, cross-subscription overlap, stale invite cleanup, and ambiguous ban ownership.
-- **Still open:** project-bot recurring Stars state changes inside transactions (buyer toggle and late-initial receipt), durable cancellation recovery and payment/webhook races, compromised-invite and stale-join side effects that lack full scope fencing, remote moderation interleavings, and live Telegram acceptance. No P0 closure claim and no production deployment.
+- Buyer Stars renewal and late initial recurring cancellation now persist due/claim state before Telegram I/O; their Telegram calls are outside interactive transactions. **Still open:** payment/webhook/admin-revocation ordering, delayed remote responses and crash recovery, invite-security webhook side effects not fully fenced by the scope lease, the unknown-result window after invite creation, remote moderation interleavings during a timed ban, and live Telegram acceptance. No P0 closure claim and no production deployment.
 
 The prior analysis below is retained as a historical record of the `f226305c` review; statements describing expiry as still on the legacy path apply to that older snapshot.
+
+For the verified current side-effect inventory and P0 acceptance gaps at the reviewed HEAD, see [`aud-018-current-inventory.md`](aud-018-current-inventory.md).
 
 ## Why this review exists
 
