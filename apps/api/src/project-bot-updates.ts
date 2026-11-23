@@ -1909,6 +1909,12 @@ export async function handleProjectBotUpdate(
     }
   }
 
+  // The Bot API subscription update is handled above as a dedicated top-level
+  // update. grammY does not route this update type; passing it to handleUpdate
+  // would require botInfo initialization and can reject an otherwise processed
+  // cancellation/resume event.
+  if (subscriptionUpdate) return;
+
   projectBot.on("my_chat_member", async (ctx) => {
     const chat = ctx.myChatMember.chat;
 
