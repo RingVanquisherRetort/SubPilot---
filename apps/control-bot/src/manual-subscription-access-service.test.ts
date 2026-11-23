@@ -206,6 +206,7 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
     });
     assert.equal(cancelled.status, "CANCELLED");
     assert.ok(cancelled.cancelledAt);
+    assert.ok(cancelled.adminAccessRevokedAt);
     assert.ok(cancelled.endsAt && cancelled.endsAt.getTime() <= Date.now());
 
     // A recurring Stars entitlement may only be administratively revoked after
