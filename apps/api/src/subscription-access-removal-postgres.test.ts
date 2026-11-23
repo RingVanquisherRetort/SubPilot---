@@ -2,6 +2,10 @@ import { queueBuyerRenewal, applyBuyerRenewal } from "./buyer-stars-renewal.js";
 import { reconcileLateStarsCancellation } from "./late-stars-cancellation.js";
 import { deliverSubscriptionAccess, handleProjectBotUpdate, processRefundedStarsPayment, processSuccessfulStarsPayment, validatePreCheckout } from "./project-bot-updates.js";
 import { hasActiveInviteEntrantGrant } from "./invite-entry-entitlement.js";
+import { fork } from "node:child_process";
+import { once } from "node:events";
+import { createServer } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
@@ -1649,5 +1653,75 @@ test("successor observes an applied ban after worker loss before finalization", 
     assert.equal(parked.revokedAt, null);
     assert.equal(observations, 2);
     assert.equal(bans, 1);
+  });
+});
+
+test("a fresh process reconciles a confirmed Telegram ban after SIGKILL and natural lease expiry", {
+  skip: !process.env.DATABASE_URL, timeout: 120_000
+}, async () => {
+  await withFixture(async ({ subscription, customer, chat, grant, project }) => {
+    let banned = false;
+    let pauseVerification = true;
+    const verification = deferred();
+    const calls: string[] = [];
+    const server = createServer((req, res) => {
+      const method = req.url?.split("/").pop() ?? "";
+      calls.push(method);
+      if (method === "getChatMember" && banned && pauseVerification) {
+        verification.resolve();
+        return; // First process has received the successful ban reply.
+      }
+      if (method === "banChatMember") banned = true;
+      const result = method === "getChatMember" ? { status: banned ? "kicked" : "member" } : true;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, result }));
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const args = [String(address.port), subscription.id, customer.id, chat.id, String(customer.telegramUserId)];
+    const start = () => fork(new URL("./test-fixtures/removal-process.ts", import.meta.url), args, {
+      execArgv: ["--import", "tsx"]
+    });
+    const child = start();
+    const exited = once(child, "exit");
+    try {
+      await Promise.race([verification.promise, exited.then(() => { throw new Error("Worker exited before verification"); }),
+        delay(20_000, undefined, { ref: false }).then(() => { throw new Error("Ban verification timed out"); })]);
+      child.kill("SIGKILL");
+      assert.deepEqual(await exited, [null, "SIGKILL"]);
+      pauseVerification = false;
+      const where = { id: grant.id };
+      const saved = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where });
+      assert.equal(saved.revokedAt, null);
+      assert.equal(saved.revocationLastError, "MEMBER_BAN_IN_PROGRESS");
+      const scope = await prisma.subscriptionAccessScope.findUniqueOrThrow({
+        where: { customerId_connectedChatId: { customerId: customer.id, connectedChatId: chat.id } }
+      });
+      assert.ok(scope.leaseExpiresAt);
+      await delay(Math.max(0, scope.leaseExpiresAt.getTime() - Date.now()) + 100);
+      const successor = start();
+      try {
+        let result: unknown;
+        successor.on("message", value => { result = value; });
+        assert.deepEqual(await once(successor, "exit"), [0, null]);
+        assert.equal(result, "FAILED"); // Deliberate escalation to the owner.
+      } finally {
+        if (successor.exitCode === null && successor.signalCode === null) successor.kill("SIGKILL");
+      }
+      const recovered = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where });
+      assert.equal(recovered.revocationLastError, "MEMBER_BAN_OWNERSHIP_UNCERTAIN");
+      assert.equal(recovered.revokedAt, null);
+      assert.equal(await prisma.ownerNotification.count({
+        where: { projectId: project.id, eventType: "ACCESS_MODERATION_REVIEW" }
+      }), 1);
+      assert.deepEqual(calls.filter(call => call !== "revokeChatInviteLink"),
+        ["getChatMember", "banChatMember", "getChatMember", "getChatMember"]);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      server.closeAllConnections();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
   });
 });
