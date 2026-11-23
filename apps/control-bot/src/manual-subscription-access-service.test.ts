@@ -416,6 +416,75 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
     assert.equal(workerRecovered.adminStarsCancelPending, false);
     assert.equal(workerRecovered.telegramStarSubscriptionState, "CANCELED");
 
+    const exhaustedChargeId = "admin-exhausted-charge-" + suffix;
+    const exhaustedSubscription = await prisma.subscription.create({
+      data: {
+        projectId: project.id,
+        customerId: recurringCustomer.id,
+        planId: plan.id,
+        status: "ACTIVE",
+        startsAt: new Date(Date.now() - 60_000),
+        endsAt: new Date(Date.now() + 30 * 24 * 60 * 60_000),
+        telegramStarInitialChargeId: exhaustedChargeId,
+        telegramStarSubscriptionState: "ACTIVE"
+      }
+    });
+    await prisma.payment.create({
+      data: {
+        projectId: project.id,
+        customerId: recurringCustomer.id,
+        subscriptionId: exhaustedSubscription.id,
+        provider: "TELEGRAM_STARS",
+        providerPaymentId: exhaustedChargeId,
+        amount: "100",
+        currency: "XTR",
+        status: "SUCCEEDED",
+        paidAt: new Date(Date.now() - 60_000),
+        metadata: { source: "project_bot", isRecurring: true, projectBotId: projectBot.id }
+      }
+    });
+    await assert.rejects(
+      revokeSubscriptionAccessManually({
+        subscriptionId: exhaustedSubscription.id,
+        workspaceId: workspace.id,
+        actorUserId: owner.id
+      }, { cancelTelegramRenewal: async () => false }),
+      (error: unknown) => error instanceof ManualSubscriptionAccessError &&
+        error.code === "TELEGRAM_RENEWAL_CANCEL_FAILED"
+    );
+    for (let attempt = 2; attempt <= 10; attempt += 1) {
+      await prisma.subscription.update({
+        where: { id: exhaustedSubscription.id },
+        data: { adminStarsCancelDueAt: new Date(0), adminStarsCancelClaim: null }
+      });
+      assert.equal(await reconcileAdminStarsCancellation(
+        exhaustedSubscription.id,
+        projectBot.id,
+        async () => false
+      ), false);
+    }
+    const exhaustedIntent = await prisma.subscription.findUniqueOrThrow({
+      where: { id: exhaustedSubscription.id }
+    });
+    assert.equal(exhaustedIntent.status, "ACTIVE");
+    assert.equal(exhaustedIntent.adminStarsCancelPending, true);
+    assert.equal(exhaustedIntent.adminStarsCancelAttempts, 10);
+    assert.equal(exhaustedIntent.adminStarsCancelDueAt, null);
+    assert.equal(exhaustedIntent.adminStarsCancelLastError, "TELEGRAM_CANCEL_UNCONFIRMED");
+
+    const explicitRetry = await revokeSubscriptionAccessManually({
+      subscriptionId: exhaustedSubscription.id,
+      workspaceId: workspace.id,
+      actorUserId: owner.id
+    }, { cancelTelegramRenewal: async () => true });
+    assert.equal(explicitRetry.recurringRenewalCancelled, true);
+    const explicitlyRecovered = await prisma.subscription.findUniqueOrThrow({
+      where: { id: exhaustedSubscription.id }
+    });
+    assert.equal(explicitlyRecovered.status, "CANCELLED");
+    assert.equal(explicitlyRecovered.adminStarsCancelPending, false);
+    assert.equal(explicitlyRecovered.adminStarsCancelAttempts, 0);
+
     await assert.rejects(
       revokeSubscriptionAccessManually({
         subscriptionId: recurringSubscription.id,
