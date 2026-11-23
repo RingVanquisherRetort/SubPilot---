@@ -3,7 +3,7 @@ name: SubPilot CI
 on:
   workflow_dispatch:
   push:
-    branches: ["main", "feat/**"]
+    branches: ["main", "feat/**", "audit-018/**"]
   pull_request:
     branches: ["main"]
 
