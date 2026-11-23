@@ -1107,7 +1107,7 @@ test("a late payment cannot reopen a subscription with an explicit admin revocat
           checkoutSurface: "TELEGRAM_BOT",
           projectBotId: "source-bot",
           planId: plan.id,
-          planTitle: plan.title,
+          planTitle: "Revocation coordinator plan",
           durationDays: 30,
           isRecurring: false,
           chatIds: [chat.telegramChatId.toString()],
