@@ -88,3 +88,21 @@ The earlier source inventory and CI section above describe the historical HEAD `
 | Moderator-exclusion cleanup vs manual re-grant | New PostgreSQL test `a9ffb6cd` exercises delayed cleanup and replacement grant | CI `45258664267` pending at time of this update; separate live moderation acceptance |
 
 **Do not infer closure from passing simulations.** Keep AUD-018 OPEN until live controlled moderation/Stars acceptance and an explicit operator policy for unresolved remote ban ownership are reviewed. A remote ban cannot be cancelled transactionally by a newer PostgreSQL revision; automatic unban can erase a human moderator's action. Continue preserving the one-member, 24-hour, not-sent-before-persistence boundary for unknown-result invite creation.
+
+
+## Operator runbook: renewed access after an ambiguous Telegram removal
+
+This is an **interim safety policy**, not proof that Telegram's remote race is solved.
+
+1. If a subscription is paid/ACTIVE but the subscriber remains `kicked` after a delayed removal, **do not automatically unban**. A Telegram moderator may have placed a newer permanent ban while SubPilot's timed removal was in flight.
+2. Preserve the current entitlement and the pending customer/chat reconciliation revision in PostgreSQL. Keep the affected grant visible for moderation review; do not mark the old worker's Telegram mutation as successful merely because the database revision advanced.
+3. Notify the channel administrator that the paid entitlement and Telegram membership disagree. Ask them to inspect the current Telegram moderation state and determine whether the ban is intentional. A missing or ambiguous Telegram response is **not** evidence of permission to unban.
+4. If the administrator confirms a deliberate ban, retain the exclusion and do not send a replacement invite. Resolve billing/refund obligations through the existing subscription policy; do not claim that the paid user has channel access.
+5. Only after the administrator explicitly authorizes re-entry and removes any Telegram ban should SubPilot issue a fresh one-member invite under the current scope revision. The buyer must join through that invite. Re-read membership after the action and do not reuse a stale link.
+6. Record the decision, affected subscription/chat/customer, observed membership status and the authorized operator action in the incident/audit trail. Reconcile any pending scope; if Telegram remains ambiguous, keep the case open rather than silently restoring membership.
+
+### Test evidence vs handler-level gap
+
+The expiry-worker PostgreSQL tests `ad70044e` and `a9ffb6cd` prove URL-specific remote revocation and replacement-URL preservation for **`reconcileSubscriptionAccessRemoval`**. They do **not** exercise the `chat_member` webhook's admin-exclusion and wrong-user/stale-entry branches in `project-bot-updates.ts`. Those branches capture an invite URL and compare it before clearing a grant, but still need deterministic handler-level tests where the old Telegram call is delayed and a new manual grant is committed concurrently. Keep this as an explicit P1 acceptance gap rather than marking all invite paths complete.
+
+The `a9ffb6cd` CI run [45258664267](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45258664267) and matrix update `7dd92611` run [45258954810](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45258954810) both passed. These are simulated PostgreSQL tests and migration validation, not live Telegram confirmation.
