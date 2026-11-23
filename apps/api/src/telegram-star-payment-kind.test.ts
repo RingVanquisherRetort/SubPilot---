@@ -93,3 +93,22 @@ test("Stars receipt never reauthorizes access after an admin revoke or pending c
     assert.equal(isStarsAccessSuppressedByAdminRevocation(state), suppressed);
   }
 });
+
+test("duplicate renewal receipt classification remains valid for accounting but cannot override a committed admin revoke", () => {
+  for (const paymentStatus of ["SUCCEEDED", "REFUNDING", "REFUNDED"]) {
+    const kind = classifyTelegramStarsPayment({
+      planIsRecurring: true,
+      paymentStatus,
+      initialChargeId: "original-charge",
+      isRecurring: true,
+      isFirstRecurring: undefined
+    });
+    assert.equal(kind, "RECURRING_RENEWAL");
+    for (const state of [
+      { adminAccessRevokedAt: new Date("2026-11-23T00:00:00Z"), adminStarsCancelPending: false },
+      { adminAccessRevokedAt: null, adminStarsCancelPending: true }
+    ]) {
+      assert.equal(isStarsAccessSuppressedByAdminRevocation(state), true);
+    }
+  }
+});
