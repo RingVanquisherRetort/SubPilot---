@@ -955,3 +955,48 @@ test("the authenticated Stars refund handler reconciles the charge once and igno
     assert.equal(duplicateScope.desiredRevision, 1n);
   });
 });
+
+
+test("a pending admin Stars cancellation blocks buyer resume and keeps the remote desired state canceled", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, project, customer }) => {
+    const charge = "admin-blocks-resume-" + randomUUID();
+    await prisma.subscription.update({ where: { id: subscription.id }, data: {
+      status: "ACTIVE",
+      endsAt: new Date(Date.now() + 86_400_000),
+      telegramStarInitialChargeId: charge,
+      telegramStarSubscriptionState: "CANCELED",
+      buyerStarsBotId: "source-bot",
+      buyerStarsChargeId: charge,
+      buyerStarsCanceled: false,
+      buyerStarsDueAt: new Date(0),
+      adminStarsCancelPending: true,
+      adminStarsCancelBotId: "source-bot",
+      adminStarsCancelDueAt: new Date(Date.now() + 300_000)
+    } });
+    await prisma.payment.create({ data: {
+      subscriptionId: subscription.id,
+      projectId: project.id,
+      customerId: customer.id,
+      amount: "100",
+      currency: "XTR",
+      provider: "TELEGRAM_STARS",
+      providerPaymentId: charge,
+      status: "SUCCEEDED",
+      metadata: { source: "project_bot", projectBotId: "source-bot", isRecurring: true }
+    } });
+
+    assert.equal(await queueBuyerRenewal(subscription.id, project.id, customer.id, "source-bot", false), false);
+    let requestedCanceledState: boolean | undefined;
+    assert.equal(await applyBuyerRenewal(subscription.id, "source-bot", async args => {
+      requestedCanceledState = args.is_canceled;
+      return true;
+    }), true);
+    assert.equal(requestedCanceledState, true);
+    const saved = await prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id } });
+    assert.equal(saved.telegramStarSubscriptionState, "CANCELED");
+    assert.equal(saved.adminStarsCancelPending, true);
+    assert.equal(saved.buyerStarsDueAt, null);
+  });
+});
