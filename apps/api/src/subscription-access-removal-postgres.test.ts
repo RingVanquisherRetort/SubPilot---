@@ -828,5 +828,15 @@ test("a recurring Stars payment arriving during admin cancellation is recorded b
     assert.equal((event.payload as Record<string, unknown>).accessSuppressedByAdminRevocation, true);
     assert.equal(replies.length, 1);
     assert.match(replies[0] ?? "", /срок доступа не продлён/);
+
+    // Telegram may retry the same successful-payment update. The charge ledger
+    // row and entitlement must remain single-write while the buyer gets a safe reply.
+    await processSuccessfulStarsPayment(fakeBot, project.id, "source-bot", fakeContext);
+    assert.equal(await prisma.payment.count({
+      where: { provider: "TELEGRAM_STARS", providerPaymentId: renewalCharge }
+    }), 1);
+    assert.equal(await prisma.paymentWebhookEvent.count({
+      where: { dedupeKey: "telegram-stars:" + renewalCharge }
+    }), 1);
   });
 });
