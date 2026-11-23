@@ -1,3 +1,4 @@
+import { applyBuyerRenewal } from "./buyer-stars-renewal.js";
 import { retryInviteCompensation } from "./invite-compensation.js";
 import { reconcileLateStarsCancellation } from "./late-stars-cancellation.js";
 import { randomUUID } from "node:crypto";
@@ -89,6 +90,20 @@ async function recoverInviteCompensations(now: Date, ownsLease: LeaseOwnershipCh
     const original = await prisma.projectBot.findFirst({ where: { projectId: row.projectId, telegramBotId: row.telegramBotId }, select: { id: true } });
     const bot = original ? await getProjectBot(row.projectId, original.id) : null;
     await retryInviteCompensation(row.inviteLink, row.telegramChatId, bot);
+  }
+}
+
+async function recoverBuyerRenewals(now: Date, ownsLease: LeaseOwnershipCheck): Promise<void> {
+  const rows = await prisma.subscription.findMany({
+    where: { buyerStarsDueAt: { lte: now } }, orderBy: { buyerStarsDueAt: "asc" }, take: BATCH_SIZE,
+    select: { id: true, projectId: true, buyerStarsBotId: true }
+  });
+  for (const row of rows) {
+    if (!ownsLease()) return;
+    if (!row.buyerStarsBotId) continue;
+    const bot = await getProjectBot(row.projectId, row.buyerStarsBotId);
+    await applyBuyerRenewal(row.id, row.buyerStarsBotId, (args) =>
+      bot ? bot.api.raw.editUserStarSubscription(args) : Promise.resolve(false));
   }
 }
 
@@ -751,6 +766,7 @@ export async function runSubscriptionLifecycle(now = new Date()): Promise<void> 
     release: releaseSubscriptionLifecycleLease,
     stages: [
       (isLeaseOwned) => cancelStalePendingPayments(now, isLeaseOwned),
+      (isLeaseOwned) => recoverBuyerRenewals(now, isLeaseOwned),
       (isLeaseOwned) => recoverLateStarsCancellations(now, isLeaseOwned),
       (isLeaseOwned) => recoverInviteCompensations(now, isLeaseOwned),
       (isLeaseOwned) => reconcilePendingSubscriptionAccessScopes(now, isLeaseOwned),

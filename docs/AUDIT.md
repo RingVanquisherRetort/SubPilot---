@@ -152,3 +152,9 @@ Channel and supergroup expiry now records the bot, chat, member and deadline bef
 Persist the original bot and a due timestamp in the receipt transaction. Lifecycle and immediate delivery share a conditional claim, external cancellation and conditional finalization. An ambiguous result leaves the request due after five minutes. The subscription remains cancelled throughout. Historical cancelled active chains with an identifiable original payment bot are backfilled. The buyer cancel/resume path is still separate. Ambiguous repeated Telegram replies need acceptance and operator review.
 
 Failed compensation for a known invite URL is durable and retried with the original bot until expiry. A queued URL currently attached to an unrevoked grant is preserved. A crash before Telegram returns the URL or before its first durable write remains an unknown-result window; AUD-018 stays open.
+
+### Buyer Stars renewal requests
+
+The buyer callback records the requested auto-renewal state against the paid subscription, original charge and issuing bot. The callback and lifecycle runner share the same conditional claim. Telegram I/O takes place after that claim commits. An ambiguous result is eligible for replay after five minutes. Manual revocation supersedes the buyer intent in its own transaction. A late worker response schedules another application of the latest intent. The buyer worker only updates renewal metadata and preserves the paid access period.
+
+The migration is additive. Drain pending requests before rolling back to a runner that cannot consume them. Outstanding acceptance includes ambiguous repeated responses in Telegram, process death with an externally delayed request, and operator handling of persistent failures. AUD-018 remains open.

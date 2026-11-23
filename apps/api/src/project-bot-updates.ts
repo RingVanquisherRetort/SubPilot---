@@ -1,3 +1,4 @@
+import { applyBuyerRenewal, queueBuyerRenewal } from "./buyer-stars-renewal.js";
 import { compensateInvite } from "./invite-compensation.js";
 import { reconcileLateStarsCancellation } from "./late-stars-cancellation.js";
 import { paidInvoiceChatIds } from "./paid-chat-checkout.js";
@@ -2343,76 +2344,16 @@ export async function handleProjectBotUpdate(
     }
 
     try {
-      const nextState = action === "cancel" ? "CANCELED" : "ACTIVE";
-      const expectedState = action === "cancel" ? "ACTIVE" : "CANCELED";
-      const outcome = await prisma.$transaction(async (tx) => {
-        // Keep the row lock across Telegram and database writes. Administrative
-        // revocation, expiry and successful-payment processing use this same lock.
-        await tx.$queryRawUnsafe(
-          'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
-          subscriptionId
-        );
-        const subscription = await tx.subscription.findFirst({
-          where: { id: subscriptionId, projectId, customerId: customer.id },
-          select: {
-            id: true,
-            status: true,
-            endsAt: true,
-            telegramStarInitialChargeId: true,
-            telegramStarSubscriptionState: true
-          }
-        });
-        const now = new Date();
-        if (!subscription || subscription.status !== "ACTIVE" ||
-            (subscription.endsAt !== null && subscription.endsAt <= now) ||
-            !subscription.telegramStarInitialChargeId ||
-            subscription.telegramStarSubscriptionState !== expectedState) {
-          return "STALE" as const;
-        }
-
-        const rawApi = projectBot.api.raw as unknown as {
-          editUserStarSubscription: (args: {
-            user_id: number;
-            telegram_payment_charge_id: string;
-            is_canceled: boolean;
-          }) => Promise<boolean>;
-        };
-        const changed = await rawApi.editUserStarSubscription({
-          user_id: ctx.from!.id,
-          telegram_payment_charge_id: subscription.telegramStarInitialChargeId,
-          is_canceled: action === "cancel"
-        });
-        if (!changed) return "TELEGRAM_REJECTED" as const;
-
-        const updated = await tx.subscription.updateMany({
-          where: {
-            id: subscription.id,
-            projectId,
-            customerId: customer.id,
-            status: "ACTIVE",
-            telegramStarInitialChargeId: subscription.telegramStarInitialChargeId,
-            telegramStarSubscriptionState: expectedState
-          },
-          data: { telegramStarSubscriptionState: nextState }
-        });
-        if (updated.count !== 1) {
-          throw new Error("Telegram renewal state changed while the subscription row was locked.");
-        }
-        return "UPDATED" as const;
-      }, { isolationLevel: "ReadCommitted", maxWait: 10_000, timeout: 30_000 });
-
-      if (outcome === "STALE") {
-        await ctx.reply("Состояние подписки уже изменилось или срок закончился. Проверьте /subscription.");
+      const queued = await queueBuyerRenewal(subscriptionId, projectId, customer.id, projectBotId, action === "cancel");
+      if (!queued) {
+        await ctx.reply("Состояние подписки изменилось или запрос уже обрабатывается. Проверьте /subscription.");
         return;
       }
-      if (outcome === "TELEGRAM_REJECTED") {
-        await ctx.reply("Telegram не подтвердил изменение автопродления. Попробуйте ещё раз позже.");
+      if (!await applyBuyerRenewal(subscriptionId, projectBotId, (args) => projectBot.api.raw.editUserStarSubscription(args))) {
+        await ctx.reply("Запрос принят. Проверьте состояние автопродления позже через /subscription.");
         return;
       }
-
-      await ctx.reply(action === "cancel"
-        ? "Автопродление отключено. Доступ останется активным до конца уже оплаченного периода."
-        : "Автопродление снова включено. Следующее списание будет выполняться Telegram по расписанию.");
+      await ctx.reply("Запрос обработан. Текущее состояние подписки указано ниже.");
       await showBuyerSubscriptionSettings(ctx);
     } catch (error) {
       console.error(

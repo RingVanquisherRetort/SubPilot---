@@ -532,6 +532,7 @@ export async function revokeSubscriptionAccessManually(
         projectId: true,
         status: true,
         telegramStarInitialChargeId: true,
+        buyerStarsChargeId: true,
         customer: { select: { id: true } },
         project: { select: { workspaceId: true, name: true } },
         plan: { select: { title: true } }
@@ -565,6 +566,8 @@ export async function revokeSubscriptionAccessManually(
         status: "CANCELLED",
         endsAt: now,
         cancelledAt: now,
+        ...(current.buyerStarsChargeId && current.buyerStarsChargeId === current.telegramStarInitialChargeId
+          ? { buyerStarsCanceled: true, buyerStarsDueAt: now, buyerStarsClaim: null } : {}),
         ...(snapshot.hasRecurringAnchor ? { telegramStarSubscriptionState: "CANCELED" as const } : {})
       }
     });

@@ -392,6 +392,12 @@ model Subscription {
   cancelledAt  DateTime?
   reminder3dAt DateTime?
   reminder1dAt DateTime?
+  buyerStarsBotId String?
+  buyerStarsChargeId String?
+  buyerStarsCanceled Boolean?
+  buyerStarsDueAt DateTime?
+  buyerStarsClaim String?
+  @@index([buyerStarsDueAt])
   @@index([lateStarsCancelDueAt])
   lateStarsCancelDueAt DateTime?
   lateStarsCancelBotId String?

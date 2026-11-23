@@ -1,3 +1,4 @@
+import { queueBuyerRenewal, applyBuyerRenewal } from "./buyer-stars-renewal.js";
 import { reconcileLateStarsCancellation } from "./late-stars-cancellation.js";
 import { validatePreCheckout } from "./project-bot-updates.js";
 import { hasActiveInviteEntrantGrant } from "./invite-entry-entitlement.js";
@@ -434,5 +435,68 @@ test("renewal during an in-flight Telegram ban keeps the grant active and queues
     } finally {
       await prisma.telegramRemovalIntent.deleteMany({ where: { botId, telegramChatId: chat.telegramChatId } });
     }
+  });
+});
+
+test("late buyer resume after administrative cancellation requeues the winning cancel", { skip: !process.env.DATABASE_URL }, async () => {
+  await withFixture(async ({ subscription, project, customer }) => {
+    const where = { id: subscription.id };
+    const charge = randomUUID();
+    await prisma.subscription.update({ where, data: { status: "ACTIVE", endsAt: new Date(Date.now() + 86_400_000),
+      telegramStarInitialChargeId: charge, telegramStarSubscriptionState: "CANCELED" } });
+    await prisma.payment.create({ data: { subscriptionId: subscription.id, projectId: project.id, customerId: customer.id,
+      amount: "100", currency: "XTR", provider: "TELEGRAM_STARS", providerPaymentId: charge, status: "SUCCEEDED",
+      metadata: { source: "project_bot", projectBotId: "original", isRecurring: true } } });
+    const enqueue = (bot: string) => queueBuyerRenewal(subscription.id, project.id, customer.id, bot, false);
+    assert.equal(await enqueue("other"), false);
+    assert.equal(await enqueue("original"), true);
+    assert.equal(await enqueue("original"), false);
+    const calls: boolean[] = [];
+    const cancel = () => applyBuyerRenewal(subscription.id, "original", async args => {
+      calls.push(args.is_canceled);
+      return true;
+    });
+    const result = await applyBuyerRenewal(subscription.id, "original", async args => {
+      await prisma.subscription.update({ where, data: { status: "CANCELLED", buyerStarsCanceled: true,
+        buyerStarsClaim: null, buyerStarsDueAt: new Date(0) } });
+      assert.equal(await cancel(), true);
+      calls.push(args.is_canceled);
+      return true;
+    });
+    assert.equal(result, false);
+    assert.equal(await cancel(), true);
+    assert.deepEqual(calls, [true, false, true]);
+    const saved = await prisma.subscription.findUniqueOrThrow({ where });
+    assert.equal(saved.status, "CANCELLED");
+    assert.equal(saved.telegramStarSubscriptionState, "CANCELED");
+    assert.equal(saved.buyerStarsDueAt, null);
+  });
+});
+
+test("ambiguous buyer cancellation retries against the original charge and preserves the paid term", { skip: !process.env.DATABASE_URL }, async () => {
+  await withFixture(async ({ subscription }) => {
+    const where = { id: subscription.id };
+    const endsAt = new Date(Date.now() + 86_400_000);
+    const charge = randomUUID();
+    await prisma.subscription.update({ where, data: { status: "ACTIVE", endsAt, telegramStarInitialChargeId: charge,
+      telegramStarSubscriptionState: "ACTIVE", buyerStarsChargeId: charge, buyerStarsBotId: "source",
+      buyerStarsDueAt: new Date(0), buyerStarsCanceled: true } });
+    let calls = 0;
+    const apply = () => applyBuyerRenewal(subscription.id, "source", async args => {
+      calls++;
+      assert.equal(args.telegram_payment_charge_id, charge);
+      assert.equal(args.is_canceled, true);
+      if (calls === 1) throw new Error("response lost");
+      return true;
+    });
+    assert.equal(await apply(), false);
+    assert.equal(await apply(), false);
+    await prisma.subscription.update({ where, data: { buyerStarsDueAt: new Date(0) } });
+    assert.equal(await apply(), true);
+    const saved = await prisma.subscription.findUniqueOrThrow({ where });
+    assert.equal(saved.status, "ACTIVE");
+    assert.deepEqual(saved.endsAt, endsAt);
+    assert.equal(saved.telegramStarSubscriptionState, "CANCELED");
+    assert.equal(calls, 2);
   });
 });
