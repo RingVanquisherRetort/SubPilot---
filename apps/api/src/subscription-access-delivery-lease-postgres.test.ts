@@ -306,6 +306,47 @@ test("delivery waits for a pending timed removal before checking membership", {
   });
 });
 
+test("delivery resumes with a one-member invite after a timed removal expires", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withDeliveryFixture(async ({ subscription, customer, chat }) => {
+    const untilDate = Math.floor(Date.now() / 1000) - 5;
+    await prisma.telegramRemovalIntent.create({
+      data: { botId: 42n, telegramChatId: chat.telegramChatId, telegramUserId: customer.telegramUserId, untilDate }
+    });
+    try {
+      let lookups = 0;
+      let invitations = 0;
+      let unbans = 0;
+      const bot = { api: {
+        getChatMember: async () => { lookups++; return { status: "left" }; },
+        createChatInviteLink: async (_chatId: string, options: { member_limit?: number; expire_date?: number }) => {
+          invitations++;
+          assert.equal(options.member_limit, 1);
+          assert.ok(options.expire_date && options.expire_date > Math.floor(Date.now() / 1000));
+          return { invite_link: "https://t.me/+renewed-access" };
+        },
+        unbanChatMember: async () => { unbans++; return true; }
+      } } as unknown as Bot;
+      const result = await deliverSubscriptionAccess(bot, subscription.id, [chat.telegramChatId.toString()]);
+      assert.deepEqual(result.links, ["Access delivery lease chat: https://t.me/+renewed-access"]);
+      assert.deepEqual(result.failed, []);
+      assert.equal(lookups, 1);
+      assert.equal(invitations, 1);
+      assert.equal(unbans, 0);
+      const grant = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+        where: { subscriptionId_connectedChatId: { subscriptionId: subscription.id, connectedChatId: chat.id } }
+      });
+      assert.equal(grant.inviteLink, "https://t.me/+renewed-access");
+      assert.equal(grant.revokedAt, null);
+    } finally {
+      await prisma.telegramRemovalIntent.deleteMany({
+        where: { botId: 42n, telegramChatId: chat.telegramChatId, telegramUserId: customer.telegramUserId, untilDate }
+      });
+    }
+  });
+});
+
 test("renewed access does not override a moderator's existing Telegram ban", {
   skip: !process.env.DATABASE_URL
 }, async () => {
