@@ -353,7 +353,7 @@ test("Stars pre-checkout rejects mixed legacy destinations and preserves existin
   });
 });
 
-test("joined member expiry fails closed without creating a timed ban", { skip: !process.env.DATABASE_URL }, async () => {
+test("unconfirmed removal parks for review instead of retrying or unbanning", { skip: !process.env.DATABASE_URL }, async () => {
   await withFixture(async ({ subscription, customer, chat, grant }) => {
     let bans = 0;
     let unbans = 0;
@@ -370,7 +370,7 @@ test("joined member expiry fails closed without creating a timed ban", { skip: !
     });
     assert.equal(result, "FAILED");
     assert.equal(revokedInvites, 1);
-    assert.equal(bans, 0);
+    assert.equal(bans, 1);
     assert.equal(unbans, 0);
     const saved = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } });
     assert.equal(saved.revokedAt, null);
@@ -496,7 +496,7 @@ test("renewal after moderation review preserves the paid entitlement without ban
     let bans = 0;
     const bot = { api: {
       revokeChatInviteLink: async () => true,
-      getChatMember: async () => ({ status: "member" }),
+      getChatMember: async () => ({ status: "restricted", is_member: true }),
       banChatMember: async () => { bans++; return true; }
     } } as unknown as Bot;
     assert.equal(await reconcileSubscriptionAccessRemoval({
@@ -1565,5 +1565,31 @@ test("manual moderation confirmation waits for an active access scope worker", {
     assert.equal((await prisma.subscriptionAccessGrant.findUniqueOrThrow({
       where: { id: grant.id }
     })).revokedAt, null);
+  });
+});
+
+test("administrative cancellation removes a joined channel subscriber and verifies absence before finalizing", { skip: !process.env.DATABASE_URL }, async () => {
+  await withFixture(async ({ subscription, customer, chat, grant }) => {
+    await prisma.subscription.update({ where: { id: subscription.id }, data: { status: "CANCELLED", cancelledAt: new Date() } });
+    const calls: string[] = [];
+    let kicked = false;
+    const bot = { api: {
+      revokeChatInviteLink: async () => true,
+      getChatMember: async () => { calls.push("lookup"); return { status: kicked ? "kicked" : "member" }; },
+      banChatMember: async (...args: unknown[]) => {
+        assert.deepEqual(args, [String(chat.telegramChatId), Number(customer.telegramUserId)]);
+        calls.push("ban");
+        kicked = true;
+        return true;
+      }
+    } } as unknown as Bot;
+    const input = { bot, subscriptionId: subscription.id, customerId: customer.id,
+      connectedChatId: chat.id, telegramUserId: customer.telegramUserId };
+    assert.equal(await reconcileSubscriptionAccessRemoval(input), "REVOKED");
+    assert.equal(await reconcileSubscriptionAccessRemoval(input), "SKIPPED");
+    assert.deepEqual(calls, ["lookup", "ban", "lookup"]);
+    const saved = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } });
+    assert.ok(saved.revokedAt);
+    assert.equal(saved.revocationReason, "ADMIN_REVOKED");
   });
 });
