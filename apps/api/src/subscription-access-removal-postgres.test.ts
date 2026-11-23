@@ -701,3 +701,51 @@ test("a stale Stars worker cannot clear a successor claim while its Telegram req
     assert.equal(settled.buyerStarsDueAt, null);
   });
 });
+
+
+test("authenticated Stars cancellation webhook wakes a pending admin revoke for worker finalization", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, project, customer }) => {
+    const charge = "admin-webhook-" + randomUUID();
+    const payment = await prisma.payment.create({ data: {
+      subscriptionId: subscription.id,
+      projectId: project.id,
+      customerId: customer.id,
+      amount: "100",
+      currency: "XTR",
+      provider: "TELEGRAM_STARS",
+      providerPaymentId: charge,
+      status: "SUCCEEDED",
+      metadata: { source: "project_bot", projectBotId: "source-bot", isRecurring: true }
+    } });
+    await prisma.subscription.update({ where: { id: subscription.id }, data: {
+      status: "ACTIVE",
+      endsAt: new Date(Date.now() + 86_400_000),
+      telegramStarInitialChargeId: charge,
+      telegramStarSubscriptionState: "ACTIVE",
+      adminStarsCancelPending: true,
+      adminStarsCancelBotId: "source-bot",
+      adminStarsCancelClaim: "stale-worker-claim",
+      adminStarsCancelDueAt: new Date(Date.now() + 300_000),
+      adminStarsCancelActorUserId: "audit-actor",
+      adminStarsCancelWorkspaceId: "audit-workspace"
+    } });
+
+    await handleProjectBotUpdate("unused-test-token", project.id, "source-bot", {
+      update_id: 987654,
+      subscription: {
+        user: { id: Number(customer.telegramUserId) },
+        invoice_payload: payment.id,
+        state: "canceled"
+      }
+    } as never, 987654, 0);
+
+    const updated = await prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id } });
+    assert.equal(updated.telegramStarSubscriptionState, "CANCELED");
+    assert.equal(updated.telegramStarSubscriptionLastUpdateId, 987654);
+    assert.equal(updated.adminStarsCancelPending, true);
+    assert.equal(updated.adminStarsCancelClaim, null);
+    assert.ok(updated.adminStarsCancelDueAt && updated.adminStarsCancelDueAt <= new Date());
+  });
+});
