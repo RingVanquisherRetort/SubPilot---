@@ -259,6 +259,78 @@ test("a renewal during an in-flight Telegram ban fences stale removal finalizati
   });
 });
 
+test("a delayed old invite revoke cannot erase a replacement grant URL", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, customer, chat, grant }) => {
+    const revokeStarted = deferred();
+    const releaseRevoke = deferred();
+    const oldUrl = (await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id }
+    })).inviteLink;
+    const replacementUrl = "https://t.me/+replacement-" + randomUUID();
+    const revokedUrls: string[] = [];
+    const bot = {
+      api: {
+        revokeChatInviteLink: async (_chatId: string, url: string) => {
+          revokedUrls.push(url);
+          revokeStarted.resolve();
+          await releaseRevoke.promise;
+          return true;
+        },
+        getChatMember: async () => { throw new Error("stale worker must not check membership"); },
+        banChatMember: async () => { throw new Error("stale worker must not ban"); },
+        unbanChatMember: async () => { throw new Error("stale worker must not unban"); }
+      }
+    } as unknown as Bot;
+    const removal = reconcileSubscriptionAccessRemoval({
+      bot, subscriptionId: subscription.id, customerId: customer.id,
+      connectedChatId: chat.id, telegramUserId: customer.telegramUserId
+    });
+    try {
+      await Promise.race([
+        revokeStarted.promise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("old invite revoke was not reached")), 5_000))
+      ]);
+      await prisma.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe(
+          'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+          subscription.id
+        );
+        await lockSubscriptionAccessScope(tx, customer.id, chat.id);
+        await tx.subscription.update({
+          where: { id: subscription.id },
+          data: { status: "ACTIVE", endsAt: new Date(Date.now() + 30 * 86_400_000) }
+        });
+        await tx.subscriptionAccessGrant.update({
+          where: { id: grant.id },
+          data: {
+            inviteLink: replacementUrl,
+            expiresAt: new Date(Date.now() + 86_400_000),
+            joinedAt: null
+          }
+        });
+        await requestSubscriptionAccessReconciliation(tx, customer.id, [chat.id]);
+      });
+      releaseRevoke.resolve();
+      assert.equal(await removal, "LEASE_LOST");
+      assert.deepEqual(revokedUrls, [oldUrl], "Telegram only receives the captured old URL");
+      const saved = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+        where: { id: grant.id }
+      });
+      assert.equal(saved.inviteLink, replacementUrl);
+      assert.equal(saved.revokedAt, null);
+      assert.equal((await prisma.subscription.findUniqueOrThrow({
+        where: { id: subscription.id }
+      })).status, "ACTIVE");
+    } finally {
+      releaseRevoke.resolve();
+      await removal.catch(() => undefined);
+    }
+  });
+});
+
 test("an overlapping active subscription preserves chat membership during another expiry", {
   skip: !process.env.DATABASE_URL
 }, async () => {
