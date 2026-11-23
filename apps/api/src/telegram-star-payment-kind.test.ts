@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classifyTelegramStarsPayment } from "./telegram-star-payment-kind.js";
+import { classifyTelegramStarsPayment, isStarsAccessSuppressedByAdminRevocation } from "./telegram-star-payment-kind.js";
 
 test("classifies a first recurring payment only when Telegram marks it as first", () => {
   assert.equal(classifyTelegramStarsPayment({
@@ -80,4 +80,16 @@ test("rejects contradictory, incomplete and non-recurring receipt flags", () => 
     isRecurring: true,
     isFirstRecurring: false
   }), null);
+});
+
+test("Stars receipt never reauthorizes access after an admin revoke or pending cancel", () => {
+  const cases = [
+    { adminAccessRevokedAt: null, adminStarsCancelPending: false, suppressed: false },
+    { adminAccessRevokedAt: new Date("2026-11-23T00:00:00Z"), adminStarsCancelPending: false, suppressed: true },
+    { adminAccessRevokedAt: null, adminStarsCancelPending: true, suppressed: true },
+    { adminAccessRevokedAt: new Date("2026-11-23T00:00:00Z"), adminStarsCancelPending: true, suppressed: true }
+  ];
+  for (const { suppressed, ...state } of cases) {
+    assert.equal(isStarsAccessSuppressedByAdminRevocation(state), suppressed);
+  }
 });
