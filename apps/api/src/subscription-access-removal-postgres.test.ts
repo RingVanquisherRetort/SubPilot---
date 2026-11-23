@@ -1515,3 +1515,51 @@ test("moderation resolution refuses to close a case while the member is present 
     })).revokedAt, null);
   });
 });
+
+
+test("manual moderation confirmation waits for an active access scope worker", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ grant, project, subscription }) => {
+    await prisma.subscriptionAccessGrant.update({
+      where: { id: grant.id },
+      data: {
+        revocationLastError: "MEMBER_MODERATION_REVIEW_REQUIRED",
+        expiresAt: new Date(Date.now() - 60_000)
+      }
+    });
+    const owner = await prisma.project.findUniqueOrThrow({
+      where: { id: project.id },
+      select: { workspace: { select: { createdById: true } } }
+    });
+    const scopedGrant = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id },
+      select: { connectedChatId: true }
+    });
+    await prisma.subscriptionAccessScope.upsert({
+      where: {
+        customerId_connectedChatId: {
+          customerId: subscription.customerId,
+          connectedChatId: scopedGrant.connectedChatId
+        }
+      },
+      create: {
+        customerId: subscription.customerId,
+        connectedChatId: scopedGrant.connectedChatId,
+        leaseToken: randomUUID(),
+        leaseExpiresAt: new Date(Date.now() + 60_000)
+      },
+      update: {
+        leaseToken: randomUUID(),
+        leaseExpiresAt: new Date(Date.now() + 60_000)
+      }
+    });
+    const bot = { api: { getChatMember: async () => ({ status: "left" }) } } as unknown as Bot;
+    assert.equal(await confirmPendingAccessModerationReview(
+      project.id, owner.workspace.createdById, grant.id, bot
+    ), "RECONCILIATION_IN_PROGRESS");
+    assert.equal((await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id }
+    })).revokedAt, null);
+  });
+});
