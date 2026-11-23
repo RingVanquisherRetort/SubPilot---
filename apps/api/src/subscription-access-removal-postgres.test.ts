@@ -1,6 +1,6 @@
 import { queueBuyerRenewal, applyBuyerRenewal } from "./buyer-stars-renewal.js";
 import { reconcileLateStarsCancellation } from "./late-stars-cancellation.js";
-import { deliverSubscriptionAccess, handleProjectBotUpdate, validatePreCheckout } from "./project-bot-updates.js";
+import { deliverSubscriptionAccess, handleProjectBotUpdate, processSuccessfulStarsPayment, validatePreCheckout } from "./project-bot-updates.js";
 import { hasActiveInviteEntrantGrant } from "./invite-entry-entitlement.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -747,5 +747,86 @@ test("authenticated Stars cancellation webhook wakes a pending admin revoke for 
     assert.equal(updated.adminStarsCancelPending, true);
     assert.equal(updated.adminStarsCancelClaim, null);
     assert.ok(updated.adminStarsCancelDueAt && updated.adminStarsCancelDueAt <= new Date());
+  });
+});
+
+
+test("a recurring Stars payment arriving during admin cancellation is recorded but cannot restore access", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, project, customer, chat, plan, grant }) => {
+    const initialCharge = "admin-pending-initial-" + randomUUID();
+    const renewalCharge = "admin-pending-renewal-" + randomUUID();
+    const endsAt = new Date(Date.now() + 7 * 86_400_000);
+    await prisma.subscription.update({ where: { id: subscription.id }, data: {
+      status: "ACTIVE",
+      endsAt,
+      telegramStarInitialChargeId: initialCharge,
+      telegramStarSubscriptionState: "ACTIVE",
+      adminStarsCancelPending: true,
+      adminStarsCancelBotId: "source-bot",
+      adminStarsCancelDueAt: new Date(Date.now() + 300_000),
+      adminStarsCancelClaim: "in-flight-admin-claim"
+    } });
+    const anchor = await prisma.payment.create({ data: {
+      subscriptionId: subscription.id,
+      projectId: project.id,
+      customerId: customer.id,
+      amount: "100",
+      currency: "XTR",
+      provider: "TELEGRAM_STARS",
+      providerPaymentId: initialCharge,
+      status: "SUCCEEDED",
+      paidAt: new Date(Date.now() - 30 * 86_400_000),
+      metadata: {
+        source: "project_bot",
+        productType: "TELEGRAM_CHANNEL_ACCESS",
+        checkoutSurface: "TELEGRAM_BOT",
+        projectBotId: "source-bot",
+        planId: plan.id,
+        planTitle: "Recurring plan",
+        durationDays: 30,
+        isRecurring: true,
+        chatIds: [chat.telegramChatId.toString()]
+      }
+    } });
+
+    const replies: string[] = [];
+    const fakeBot = { api: { raw: {
+      editUserStarSubscription: async () => true
+    } } } as unknown as Bot;
+    const fakeContext = {
+      from: { id: Number(customer.telegramUserId) },
+      message: { successful_payment: {
+        invoice_payload: anchor.id,
+        telegram_payment_charge_id: renewalCharge,
+        provider_payment_charge_id: "provider-" + renewalCharge,
+        currency: "XTR",
+        total_amount: 100,
+        is_recurring: true,
+        is_first_recurring: false
+      } },
+      reply: async (message: string) => { replies.push(message); return {} as never; }
+    } as never;
+
+    await processSuccessfulStarsPayment(fakeBot, project.id, "source-bot", fakeContext);
+
+    const [savedSubscription, savedRenewal, event, savedGrant] = await Promise.all([
+      prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id } }),
+      prisma.payment.findUnique({ where: { provider_providerPaymentId: {
+        provider: "TELEGRAM_STARS", providerPaymentId: renewalCharge
+      } } }),
+      prisma.paymentWebhookEvent.findUniqueOrThrow({ where: { dedupeKey: "telegram-stars:" + renewalCharge } }),
+      prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } })
+    ]);
+    assert.equal(savedRenewal?.status, "SUCCEEDED");
+    assert.equal(savedSubscription.status, "ACTIVE");
+    assert.equal(savedSubscription.endsAt?.toISOString(), endsAt.toISOString());
+    assert.equal(savedSubscription.adminStarsCancelPending, true);
+    assert.equal(savedSubscription.telegramStarSubscriptionState, "ACTIVE");
+    assert.equal(savedGrant.revokedAt, null);
+    assert.equal((event.payload as Record<string, unknown>).accessSuppressedByAdminRevocation, true);
+    assert.equal(replies.length, 1);
+    assert.match(replies[0] ?? "", /Доступ не восстановлен/);
   });
 });
