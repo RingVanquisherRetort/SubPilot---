@@ -1,7 +1,7 @@
 import { applyBuyerRenewal } from "./buyer-stars-renewal.js";
 import { retryInviteCompensation } from "./invite-compensation.js";
 import { reconcileLateStarsCancellation } from "./late-stars-cancellation.js";
-import { reconcileAdminStarsCancellation } from "../../control-bot/src/admin-stars-cancellation.js";
+
 import { randomUUID } from "node:crypto";
 import {
   acquireSubscriptionLifecycleLease,
@@ -12,6 +12,7 @@ import { Bot, InlineKeyboard } from "grammy";
 import { prisma } from "@subpilot/database";
 import { decryptSecret } from "@subpilot/security";
 import {
+  reconcileAdminStarsCancellation,
   claimNextSubscriptionAccessScope,
   completeSubscriptionAccessScope,
   failSubscriptionAccessScope,
