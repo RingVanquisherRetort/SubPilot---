@@ -1,0 +1,25 @@
+name: AUD-018 Telegram read-only preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  telegram-readonly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check Telegram test bot and channel without mutating state
+        env:
+          AUD018_TEST_BOT_TOKEN: ${{ secrets.AUD018_TEST_BOT_TOKEN }}
+          AUD018_TEST_CHAT_ID: ${{ secrets.AUD018_TEST_CHAT_ID }}
+          AUD018_TEST_USER_ID: ${{ secrets.AUD018_TEST_USER_ID }}
+        run: node scripts/ci/aud018-telegram-readonly.mjs
