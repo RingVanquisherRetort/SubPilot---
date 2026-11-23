@@ -50,7 +50,7 @@ export async function reconcileAdminStarsCancellation(
     });
     if (
       !current ||
-      current.status !== "ACTIVE" ||
+      !["ACTIVE", "EXPIRED", "CANCELLED"].includes(current.status) ||
       !current.adminStarsCancelPending ||
       current.adminStarsCancelBotId !== botId ||
       !current.telegramStarInitialChargeId ||
@@ -61,7 +61,7 @@ export async function reconcileAdminStarsCancellation(
     const claimed = await tx.subscription.updateMany({
       where: {
         id: subscriptionId,
-        status: "ACTIVE",
+        status: { in: ["ACTIVE", "EXPIRED", "CANCELLED"] },
         adminStarsCancelPending: true,
         adminStarsCancelBotId: botId,
         telegramStarInitialChargeId: current.telegramStarInitialChargeId,
@@ -168,7 +168,7 @@ export async function reconcileAdminStarsCancellation(
     if (!current) return false;
     if (current.status === "CANCELLED" && !current.adminStarsCancelPending) return true;
     if (
-      current.status !== "ACTIVE" ||
+      !["ACTIVE", "EXPIRED", "CANCELLED"].includes(current.status) ||
       !current.adminStarsCancelPending ||
       current.adminStarsCancelClaim !== claim ||
       current.telegramStarInitialChargeId !== snapshot.chargeId
@@ -182,15 +182,15 @@ export async function reconcileAdminStarsCancellation(
     const updated = await tx.subscription.updateMany({
       where: {
         id: subscriptionId,
-        status: "ACTIVE",
+        status: current.status,
         adminStarsCancelPending: true,
         adminStarsCancelClaim: claim,
         telegramStarInitialChargeId: snapshot.chargeId
       },
       data: {
-        status: "CANCELLED",
-        endsAt: finalizedAt,
-        cancelledAt: finalizedAt,
+        ...(current.status === "ACTIVE"
+          ? { status: "CANCELLED", endsAt: finalizedAt, cancelledAt: finalizedAt }
+          : {}),
         telegramStarSubscriptionState: "CANCELED",
         adminStarsCancelPending: false,
         adminStarsCancelDueAt: null,
