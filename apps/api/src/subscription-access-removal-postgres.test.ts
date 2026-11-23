@@ -803,8 +803,7 @@ test("a recurring Stars payment arriving during admin cancellation is recorded b
         provider_payment_charge_id: "provider-" + renewalCharge,
         currency: "XTR",
         total_amount: 100,
-        is_recurring: true,
-        is_first_recurring: false
+        is_recurring: true
       } },
       reply: async (message: string) => { replies.push(message); return {} as never; }
     } as never;
