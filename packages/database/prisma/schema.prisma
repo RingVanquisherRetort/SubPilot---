@@ -721,3 +721,13 @@ model TelegramRemovalIntent {
   untilDate      Int
   @@id([botId, telegramChatId, telegramUserId, untilDate])
 }
+
+model InviteCompensation {
+  inviteLink String @id
+  projectId String
+  telegramBotId BigInt
+  telegramChatId BigInt
+  expiresAt DateTime
+  nextAttemptAt DateTime @default(now())
+  @@index([nextAttemptAt])
+}

@@ -1,3 +1,4 @@
+import { compensateInvite, retryInviteCompensation } from "./invite-compensation.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
@@ -109,7 +110,7 @@ test("subscription invite delivery releases its database transaction before Tele
     let delivery: Promise<{ links: string[]; alreadyJoined: string[]; failed: string[]; blocked: string[] }> | undefined;
 
     try {
-      const fakeBot = {
+      const fakeBot = { token: "12345:test",
         api: {
           getChatMember: async () => { throw new Error("USER_NOT_PARTICIPANT"); },
           createChatInviteLink: async () => {
@@ -329,4 +330,21 @@ test("a superseded membership lookup failure leaves the newer entitlement retry 
     assert.ok(scope.desiredRevision > scope.appliedRevision);
     assert.equal(scope.leaseToken, null);
   });
+});
+
+test("a failed compensation can be resumed using only the persisted stale link", { skip: !process.env.DATABASE_URL }, async () => {
+  const url = "https://t.me/+" + randomUUID();
+  let calls = 0;
+  const bot = { token: "12345:test", api: { revokeChatInviteLink: async (_id: string, link: string) => {
+    assert.equal(link, url);
+    if (++calls === 1) throw new Error("temporary timeout");
+    return true;
+  } } } as unknown as Bot;
+  try {
+    await compensateInvite(bot, "fixture", -100n, url, new Date(Date.now() + 3600000));
+    const job = await prisma.inviteCompensation.update({ where: { inviteLink: url }, data: { nextAttemptAt: new Date(0) } });
+    await retryInviteCompensation(job.inviteLink, job.telegramChatId, bot);
+    assert.equal(calls, 2);
+    assert.equal(await prisma.inviteCompensation.count({ where: { inviteLink: url } }), 0);
+  } finally { await prisma.inviteCompensation.deleteMany({ where: { inviteLink: url } }); }
 });

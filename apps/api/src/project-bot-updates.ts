@@ -1,3 +1,4 @@
+import { compensateInvite } from "./invite-compensation.js";
 import { reconcileLateStarsCancellation } from "./late-stars-cancellation.js";
 import { paidInvoiceChatIds } from "./paid-chat-checkout.js";
 import { hasActiveInviteEntrantGrant } from "./invite-entry-entitlement.js";
@@ -1046,9 +1047,8 @@ export async function deliverSubscriptionAccess(
         );
         unpersistedInviteLink = invite.invite_link;
         if (!ownsLease()) {
-          await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), invite.invite_link).then(() => {
-            unpersistedInviteLink = null;
-          }).catch(() => undefined);
+          await compensateInvite(bot, subscription.projectId, chat.telegramChatId, invite.invite_link, expiresAt);
+          unpersistedInviteLink = null;
           results.failed.push(label);
           continue;
         }
@@ -1064,9 +1064,8 @@ export async function deliverSubscriptionAccess(
         if (!saved) {
           // Telegram does not know about the database lease. Compensate when a
           // stale worker created a credential that it can no longer persist.
-          await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), invite.invite_link).then(() => {
-            unpersistedInviteLink = null;
-          }).catch(() => undefined);
+          await compensateInvite(bot, subscription.projectId, chat.telegramChatId, invite.invite_link, expiresAt);
+          unpersistedInviteLink = null;
           await settleScope();
           results.blocked.push(label);
           continue;
@@ -1083,14 +1082,9 @@ export async function deliverSubscriptionAccess(
       else results.alreadyJoined.push(label);
     } catch (error) {
       if (unpersistedInviteLink) {
-        await bot.api.revokeChatInviteLink(chat.telegramChatId.toString(), unpersistedInviteLink)
-          .then(() => { unpersistedInviteLink = null; })
-          .catch((cleanupError: unknown) => {
-            console.error(
-              "Could not compensate an unpersisted Telegram invite:",
-              cleanupError instanceof Error ? cleanupError.name : "UnknownError"
-            );
-          });
+        await compensateInvite(bot, subscription.projectId, chat.telegramChatId, unpersistedInviteLink,
+          new Date(Date.now() + INVITE_LIFETIME_SECONDS * 1000));
+
       }
       await fail("INVITE_CREATION_FAILED").catch(() => undefined);
       console.error(

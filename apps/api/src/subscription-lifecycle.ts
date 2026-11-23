@@ -1,3 +1,4 @@
+import { retryInviteCompensation } from "./invite-compensation.js";
 import { reconcileLateStarsCancellation } from "./late-stars-cancellation.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -76,6 +77,18 @@ async function cancelStalePendingPayments(
         });
       }
     });
+  }
+}
+
+async function recoverInviteCompensations(now: Date, ownsLease: LeaseOwnershipCheck): Promise<void> {
+  await prisma.inviteCompensation.deleteMany({ where: { expiresAt: { lte: now } } });
+  const rows = await prisma.inviteCompensation.findMany({ where: { nextAttemptAt: { lte: now } },
+    orderBy: { nextAttemptAt: "asc" }, take: BATCH_SIZE });
+  for (const row of rows) {
+    if (!ownsLease()) return;
+    const original = await prisma.projectBot.findFirst({ where: { projectId: row.projectId, telegramBotId: row.telegramBotId }, select: { id: true } });
+    const bot = original ? await getProjectBot(row.projectId, original.id) : null;
+    await retryInviteCompensation(row.inviteLink, row.telegramChatId, bot);
   }
 }
 
@@ -739,6 +752,7 @@ export async function runSubscriptionLifecycle(now = new Date()): Promise<void> 
     stages: [
       (isLeaseOwned) => cancelStalePendingPayments(now, isLeaseOwned),
       (isLeaseOwned) => recoverLateStarsCancellations(now, isLeaseOwned),
+      (isLeaseOwned) => recoverInviteCompensations(now, isLeaseOwned),
       (isLeaseOwned) => reconcilePendingSubscriptionAccessScopes(now, isLeaseOwned),
       (isLeaseOwned) => retryPendingAccessDeliveries(now, isLeaseOwned),
       (isLeaseOwned) => sendRenewalReminders(now, isLeaseOwned),
