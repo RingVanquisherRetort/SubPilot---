@@ -1,6 +1,7 @@
 import { applyBuyerRenewal } from "./buyer-stars-renewal.js";
 import { retryInviteCompensation } from "./invite-compensation.js";
 import { reconcileLateStarsCancellation } from "./late-stars-cancellation.js";
+import { reconcileAdminStarsCancellation } from "../../control-bot/src/admin-stars-cancellation.js";
 import { randomUUID } from "node:crypto";
 import {
   acquireSubscriptionLifecycleLease,
@@ -119,6 +120,22 @@ async function recoverLateStarsCancellations(now: Date, ownsLease: LeaseOwnershi
     const bot = await getProjectBot(row.projectId, row.lateStarsCancelBotId);
     await reconcileLateStarsCancellation(row.id, row.lateStarsCancelBotId, row.telegramStarInitialChargeId,
       (args) => bot ? bot.api.raw.editUserStarSubscription(args) : Promise.resolve(false));
+  }
+}
+
+async function recoverAdminStarsCancellations(now: Date, ownsLease: LeaseOwnershipCheck): Promise<void> {
+  const due = await prisma.subscription.findMany({
+    where: { adminStarsCancelPending: true, adminStarsCancelDueAt: { lte: now } },
+    select: { id: true, projectId: true, adminStarsCancelBotId: true },
+    orderBy: { adminStarsCancelDueAt: "asc" },
+    take: BATCH_SIZE
+  });
+  for (const row of due) {
+    if (!ownsLease()) return;
+    if (!row.adminStarsCancelBotId) continue;
+    const bot = await getProjectBot(row.projectId, row.adminStarsCancelBotId);
+    await reconcileAdminStarsCancellation(row.id, row.adminStarsCancelBotId, (args) =>
+      bot ? bot.api.raw.editUserStarSubscription(args) : Promise.resolve(false));
   }
 }
 
@@ -768,6 +785,7 @@ export async function runSubscriptionLifecycle(now = new Date()): Promise<void> 
       (isLeaseOwned) => cancelStalePendingPayments(now, isLeaseOwned),
       (isLeaseOwned) => recoverBuyerRenewals(now, isLeaseOwned),
       (isLeaseOwned) => recoverLateStarsCancellations(now, isLeaseOwned),
+      (isLeaseOwned) => recoverAdminStarsCancellations(now, isLeaseOwned),
       (isLeaseOwned) => recoverInviteCompensations(now, isLeaseOwned),
       (isLeaseOwned) => reconcilePendingSubscriptionAccessScopes(now, isLeaseOwned),
       (isLeaseOwned) => retryPendingAccessDeliveries(now, isLeaseOwned),
