@@ -55,6 +55,7 @@ import {
 import { platformProviderCredentialVerifiers } from "./platform-provider-verifiers.js";
 import {
   grantManualSubscriptionAccess,
+  resolveProjectCustomerTelegramId,
   grantTrialSubscriptionAccess,
   listActiveProjectSubscriptions,
   ManualSubscriptionAccessError,
@@ -789,7 +790,7 @@ export function createControlBot(token: string): Bot {
       setPendingTextAction(ctx.from.id, { kind: "grant_manual_subscription", projectId, planId });
       await ctx.reply(
         "Ручная выдача по тарифу «" + plan.title + "».\n\n" +
-        "Отправьте: TELEGRAM_ID | DAYS\n" +
+        "Отправьте: @username | DAYS или TELEGRAM_ID | DAYS\n" +
         "DAYS необязателен (тогда используется срок тарифа); 0 означает бессрочный доступ. Максимум — 3650 дней.",
         { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
       );
@@ -797,7 +798,7 @@ export function createControlBot(token: string): Bot {
       setPendingTextAction(ctx.from.id, { kind: "grant_trial_subscription", projectId, planId });
       await ctx.reply(
         "Пробный доступ по тарифу «" + plan.title + "».\n\n" +
-        "Отправьте: TELEGRAM_ID | DAYS\n" +
+        "Отправьте: @username | DAYS или TELEGRAM_ID | DAYS\n" +
         (plan.trialDays > 0
           ? "DAYS необязателен: будет использован настроенный пробный срок — " + plan.trialDays + " дн."
           : "У тарифа не задан пробный срок, поэтому DAYS нужно указать явно.") +
@@ -2717,7 +2718,9 @@ export function createControlBot(token: string): Bot {
     } catch (error) {
       if (error instanceof ManualSubscriptionAccessError) {
         const messages: Record<string, string> = {
-          INVALID_TELEGRAM_USER_ID: "Telegram ID должен быть положительным числом.",
+          INVALID_TELEGRAM_USER_ID: "Укажите корректный Telegram ID или @username.",
+              USERNAME_NOT_FOUND: "Пользователь с таким @username ещё не найден в этом проекте. Попросите его сначала открыть бота проекта.",
+              USERNAME_AMBIGUOUS: "Найдено несколько аккаунтов с таким @username. Используйте Telegram ID.",
           INVALID_DURATION: "Срок должен быть от 1 до 3650 дней; 0 означает бессрочный доступ.",
           ACTOR_NOT_AUTHORIZED: "Только владелец или администратор пространства может выдавать доступ.",
           PROJECT_NOT_FOUND: "Проект не найден в активном пространстве или он архивирован.",
@@ -4045,12 +4048,12 @@ export function createControlBot(token: string): Bot {
             (isTrial
               ? (parsedDays as number) >= 1 && (parsedDays as number) <= 3650
               : (parsedDays as number) >= 0 && (parsedDays as number) <= 3650));
-        if (fields.length > 2 || !telegramUserId || !/^\d{1,20}$/.test(telegramUserId) || !validDuration) {
+        if (fields.length > 2 || !telegramUserId || !(/^\d{1,20}$/.test(telegramUserId) || /^@?[A-Za-z0-9_]{5,32}$/.test(telegramUserId)) || !validDuration) {
           setPendingTextAction(ctx.from.id, pendingAction.kind === "grant_trial_subscription"
             ? { kind: "grant_trial_subscription", projectId: pendingAction.projectId, planId: pendingAction.planId }
             : { kind: "grant_manual_subscription", projectId: pendingAction.projectId, planId: pendingAction.planId });
           await ctx.reply(
-            "Проверьте формат: TELEGRAM_ID | DAYS. " +
+            "Проверьте формат: @username | DAYS или TELEGRAM_ID | DAYS. " +
             (isTrial ? "DAYS — от 1 до 3650; можно не указывать, если срок задан в тарифе." :
               "DAYS — от 0 до 3650; 0 означает бессрочный доступ, пропуск использует срок тарифа."),
             { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
@@ -4066,6 +4069,7 @@ export function createControlBot(token: string): Bot {
             });
             return;
           }
+          const resolvedTelegramUserId = await resolveProjectCustomerTelegramId(project.id, telegramUserId);
           const durationDays = parsedDays === undefined
             ? undefined
             : (isTrial ? parsedDays : parsedDays === 0 ? null : parsedDays);
@@ -4074,7 +4078,7 @@ export function createControlBot(token: string): Bot {
               workspaceId: project.workspaceId,
               projectId: project.id,
               planId: pendingAction.planId,
-              telegramUserId,
+              telegramUserId: resolvedTelegramUserId,
               actorUserId: user.id,
               ...(durationDays !== undefined && durationDays !== null ? { durationDays } : {})
             });
@@ -4090,7 +4094,7 @@ export function createControlBot(token: string): Bot {
               workspaceId: project.workspaceId,
               projectId: project.id,
               planId: pendingAction.planId,
-              telegramUserId,
+              telegramUserId: resolvedTelegramUserId,
               actorUserId: user.id,
               ...(durationDays !== undefined ? { durationDays } : {})
             });
