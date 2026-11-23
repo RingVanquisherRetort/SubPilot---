@@ -827,6 +827,6 @@ test("a recurring Stars payment arriving during admin cancellation is recorded b
     assert.equal(savedGrant.revokedAt, null);
     assert.equal((event.payload as Record<string, unknown>).accessSuppressedByAdminRevocation, true);
     assert.equal(replies.length, 1);
-    assert.match(replies[0] ?? "", /Доступ не восстановлен/);
+    assert.match(replies[0] ?? "", /срок доступа не продлён/);
   });
 });
