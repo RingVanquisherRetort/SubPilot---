@@ -22,7 +22,7 @@ import { shouldQueueNewSubscriberNotification } from "./payment-event-notificati
 import { shouldProcessTelegramUpdate } from "./telegram-update-order.js";
 import { shouldActivateConnectedChat } from "./connected-chat-quota.js";
 import { parseTelegramStarSubscriptionUpdate } from "./telegram-star-subscription-update.js";
-import { classifyTelegramStarsPayment } from "./telegram-star-payment-kind.js";
+import { classifyTelegramStarsPayment, isStarsAccessSuppressedByAdminRevocation } from "./telegram-star-payment-kind.js";
 import { isSubscriptionAccessPermissionActive, PAID_RENEWAL_RESTORABLE_REVOCATION_REASON } from "./subscription-access-permission.js";
 import { classifyTelegramMembershipDeparture } from "./telegram-membership-departure.js";
 import { getAccessRevocationRetryState } from "./access-revocation-retry.js";
@@ -1344,8 +1344,7 @@ export async function processSuccessfulStarsPayment(
     // A successful receipt must never reopen an explicitly cancelled entitlement.
     // This also covers a one-time or first-recurring charge that was already in flight
     // when the administrator revoked an ACTIVE subscription without a charge anchor.
-    const accessSuppressedByAdminRevocation =
-      currentSubscription.adminAccessRevokedAt !== null || currentSubscription.adminStarsCancelPending;
+    const accessSuppressedByAdminRevocation = isStarsAccessSuppressedByAdminRevocation(currentSubscription);
     const isInitialRecurring = paymentKind === "INITIAL_RECURRING";
 
     const currentEnd = currentSubscription.endsAt && currentSubscription.endsAt > now
