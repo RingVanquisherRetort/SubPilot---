@@ -1,6 +1,6 @@
 import { queueBuyerRenewal, applyBuyerRenewal } from "./buyer-stars-renewal.js";
 import { reconcileLateStarsCancellation } from "./late-stars-cancellation.js";
-import { deliverSubscriptionAccess, handleProjectBotUpdate, processSuccessfulStarsPayment, validatePreCheckout } from "./project-bot-updates.js";
+import { deliverSubscriptionAccess, handleProjectBotUpdate, processRefundedStarsPayment, processSuccessfulStarsPayment, validatePreCheckout } from "./project-bot-updates.js";
 import { hasActiveInviteEntrantGrant } from "./invite-entry-entitlement.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -837,5 +837,65 @@ test("a recurring Stars payment arriving during admin cancellation is recorded b
     assert.equal(await prisma.paymentWebhookEvent.count({
       where: { dedupeKey: "telegram-stars:" + renewalCharge }
     }), 1);
+  });
+});
+
+
+test("the authenticated Stars refund handler reconciles the charge once and ignores duplicate delivery", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, project, customer, chat, grant }) => {
+    const charge = "refund-handler-" + randomUUID();
+    const startsAt = new Date(Date.now() - 30 * 86_400_000);
+    const endsAt = new Date(Date.now() + 30 * 86_400_000);
+    await prisma.subscription.update({ where: { id: subscription.id }, data: {
+      status: "ACTIVE", startsAt, endsAt
+    } });
+    const payment = await prisma.payment.create({ data: {
+      subscriptionId: subscription.id,
+      projectId: project.id,
+      customerId: customer.id,
+      amount: "100",
+      currency: "XTR",
+      provider: "TELEGRAM_STARS",
+      providerPaymentId: charge,
+      status: "SUCCEEDED",
+      paidAt: startsAt,
+      metadata: {
+        source: "project_bot",
+        projectBotId: "source-bot",
+        durationDays: 30,
+        isRecurring: false
+      }
+    } });
+    const context = {
+      chat: { type: "private", id: Number(customer.telegramUserId) },
+      message: { refunded_payment: {
+        invoice_payload: payment.id,
+        telegram_payment_charge_id: charge,
+        currency: "XTR",
+        total_amount: 100
+      } }
+    } as never;
+
+    await processRefundedStarsPayment("source-bot", context);
+    const refunded = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
+    const expired = await prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id } });
+    const scope = await prisma.subscriptionAccessScope.findUniqueOrThrow({
+      where: { customerId_connectedChatId: { customerId: customer.id, connectedChatId: chat.id } }
+    });
+    assert.equal(refunded.status, "REFUNDED");
+    assert.equal(expired.status, "EXPIRED");
+    assert.equal(expired.endsAt?.toISOString(), new Date().toISOString().slice(0, 0) + expired.endsAt?.toISOString());
+    assert.equal(scope.desiredRevision, 1n);
+
+    await processRefundedStarsPayment("source-bot", context);
+    const duplicate = await prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id } });
+    const duplicateScope = await prisma.subscriptionAccessScope.findUniqueOrThrow({
+      where: { customerId_connectedChatId: { customerId: customer.id, connectedChatId: chat.id } }
+    });
+    assert.equal(duplicate.status, "EXPIRED");
+    assert.equal(duplicateScope.desiredRevision, 1n);
+    assert.ok(grant.id);
   });
 });
