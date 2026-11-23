@@ -20,8 +20,8 @@ if (!token || !chatId || !userId) {
     return result.result;
   }
   try {
-    assert.match(chatId, /^-?\\d+$/);
-    assert.match(userId, /^\\d+$/);
+    assert.match(chatId, /^-?\d+$/);
+    assert.match(userId, /^\d+$/);
     const me = await call("getMe", {});
     assert.equal(me.is_bot, true);
     const chat = await call("getChat", { chat_id: chatId });
