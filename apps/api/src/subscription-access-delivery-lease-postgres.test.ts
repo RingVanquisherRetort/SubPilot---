@@ -305,6 +305,55 @@ test("invite delivery treats a transport failure as unknown membership, not as p
   });
 });
 
+
+test("a lost invite-create response never exposes an unpersisted URL and leaves no false compensation", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withDeliveryFixture(async ({ subscription, chat }) => {
+    let telegramAcceptedCreate = false;
+    let revokeCalls = 0;
+    const bot = {
+      token: "12345:test",
+      api: {
+        getChatMember: async () => ({ status: "left" }),
+        createChatInviteLink: async () => {
+          // Telegram accepted the operation, but the response carrying the URL
+          // was lost. The application cannot compensate an identifier it never saw.
+          telegramAcceptedCreate = true;
+          throw new Error("ETIMEDOUT after remote acceptance");
+        },
+        revokeChatInviteLink: async () => {
+          revokeCalls += 1;
+          return true;
+        }
+      }
+    } as unknown as Bot;
+
+    const result = await deliverSubscriptionAccess(
+      bot, subscription.id, [String(chat.telegramChatId)]
+    );
+    assert.equal(telegramAcceptedCreate, true);
+    assert.deepEqual(result.links, []);
+    assert.deepEqual(result.alreadyJoined, []);
+    assert.deepEqual(result.failed, ["Access delivery lease chat"]);
+    assert.equal(revokeCalls, 0, "there is no invite URL available to the compensation path");
+
+    const grant = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: {
+        subscriptionId_connectedChatId: {
+          subscriptionId: subscription.id,
+          connectedChatId: chat.id
+        }
+      }
+    });
+    assert.equal(grant.inviteLink, "");
+    assert.equal(grant.deliveryLastError, "INVITE_CREATION_FAILED");
+    assert.equal(await prisma.inviteCompensation.count({
+      where: { projectId: "unreachable-project-id" }
+    }), 0);
+  });
+});
+
 test("a superseded membership lookup failure leaves the newer entitlement retry budget intact", {
   skip: !process.env.DATABASE_URL
 }, async () => {
