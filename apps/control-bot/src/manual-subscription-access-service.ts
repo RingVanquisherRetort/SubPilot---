@@ -431,7 +431,8 @@ export async function revokeSubscriptionAccessManually(
         customer: { select: { id: true, telegramUserId: true } },
         status: true,
         telegramStarInitialChargeId: true,
-        telegramStarSubscriptionState: true
+        telegramStarSubscriptionState: true,
+        adminStarsCancelPending: true
       }
     });
     if (!target || target.project.workspaceId !== input.workspaceId) {
@@ -502,6 +503,23 @@ export async function revokeSubscriptionAccessManually(
           adminStarsCancelWorkspaceId: input.workspaceId
         }
       });
+      if (!target.adminStarsCancelPending) {
+        await tx.auditLog.create({
+          data: {
+            workspaceId: input.workspaceId,
+            projectId: target.projectId,
+            actorUserId: input.actorUserId,
+            action: "SUBSCRIPTION_ACCESS_REVOKE_REQUESTED",
+            resourceType: "Subscription",
+            resourceId: target.id,
+            metadata: {
+              previousStatus: target.status,
+              recurringRenewalCancellation: "PENDING",
+              telegramPaymentChargeId: target.telegramStarInitialChargeId
+            }
+          }
+        });
+      }
     }
 
     return {
