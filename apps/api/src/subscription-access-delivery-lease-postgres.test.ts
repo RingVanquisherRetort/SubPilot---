@@ -272,6 +272,35 @@ test("delivery withholds an invite for a restricted non-member", {
   });
 });
 
+test("renewed access does not override a moderator's existing Telegram ban", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withDeliveryFixture(async ({ subscription, chat }) => {
+    let invitations = 0;
+    let unbans = 0;
+    const bot = {
+      api: {
+        getChatMember: async () => ({ status: "kicked" }),
+        createChatInviteLink: async () => {
+          invitations++;
+          return { invite_link: "https://t.me/+must-not-be-created" };
+        },
+        unbanChatMember: async () => { unbans++; return true; }
+      }
+    } as unknown as Bot;
+
+    const result = await deliverSubscriptionAccess(bot, subscription.id, [chat.telegramChatId.toString()]);
+    assert.deepEqual(result.links, []);
+    assert.deepEqual(result.failed, ["Access delivery lease chat"]);
+    assert.equal(invitations, 0);
+    assert.equal(unbans, 0);
+    const grant = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { subscriptionId_connectedChatId: { subscriptionId: subscription.id, connectedChatId: chat.id } }
+    });
+    assert.equal(grant.deliveryLastError, "SUBSCRIBER_ADMIN_BANNED");
+  });
+});
+
 test("invite delivery treats a transport failure as unknown membership, not as permission to invite", {
   skip: !process.env.DATABASE_URL
 }, async () => {
