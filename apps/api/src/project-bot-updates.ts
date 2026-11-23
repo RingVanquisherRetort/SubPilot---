@@ -607,14 +607,47 @@ export async function recordSubscriptionAccessRevocationFailure(
     if (!pendingAdminExcludedInvite && !pendingNaturalRevocation) return;
 
     const retry = getAccessRevocationRetryState(current.revocationAttempts, now, errorCode);
+    const requiresManualReview = errorCode === "MEMBER_MODERATION_REVIEW_REQUIRED" ||
+      errorCode === "MEMBER_BAN_OWNERSHIP_UNCERTAIN" ||
+      errorCode === "LEGACY_GROUP_REMOVAL_REVIEW";
     await tx.subscriptionAccessGrant.update({
       where: { id: grantId },
       data: {
         revocationAttempts: retry.attempts,
-        revocationNextAttemptAt: retry.nextAttemptAt,
+        // Manual moderation is not a transient Telegram failure. Repeated
+        // automated retries cannot resolve it and must not flood the owner.
+        revocationNextAttemptAt: requiresManualReview ? new Date("2100-01-01T00:00:00.000Z") : retry.nextAttemptAt,
         revocationLastError: retry.lastError
       }
     });
+    if (requiresManualReview && pendingNaturalRevocation) {
+      const details = await tx.subscriptionAccessGrant.findUnique({
+        where: { id: grantId },
+        select: {
+          connectedChat: { select: { telegramChatId: true, title: true } },
+          subscription: {
+            select: {
+              projectId: true,
+              customer: { select: { telegramUserId: true } }
+            }
+          }
+        }
+      });
+      if (details) {
+        await enqueueProjectOwnerNotificationUsing(tx, {
+          projectId: details.subscription.projectId,
+          dedupeKey: "access-moderation-review:" + grantId,
+          eventType: "ACCESS_MODERATION_REVIEW",
+          messageText:
+            "Требуется ручная проверка доступа после завершения подписки.\\n" +
+            "Чат: " + (details.connectedChat.title || details.connectedChat.telegramChatId.toString()) + "\\n" +
+            "Telegram chat ID: " + details.connectedChat.telegramChatId.toString() + "\\n" +
+            "Telegram user ID: " + details.subscription.customer.telegramUserId.toString() + "\\n" +
+            "Причина: " + errorCode + "\\n" +
+            "SubPilot не блокировал участника и не отменял решения модератора. Проверьте участника в Telegram."
+        });
+      }
+    }
   }, { maxWait: 10_000, timeout: 30_000 });
 }
 
