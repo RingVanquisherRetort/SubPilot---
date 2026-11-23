@@ -552,8 +552,11 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
       );
       await tx.subscription.update({
         where: { id: recurringSubscription.id },
+        // Model an authenticated Telegram cancellation webhook and a buyer
+        // renewal-intent update landing while the admin's remote call is held.
         data: { reminder1dAt: new Date(), buyerStarsBotId: projectBot.id, buyerStarsChargeId: initialChargeId,
-          buyerStarsCanceled: false, buyerStarsClaim: randomUUID(), buyerStarsDueAt: new Date(Date.now() + 300_000) }
+          buyerStarsCanceled: false, buyerStarsClaim: randomUUID(), buyerStarsDueAt: new Date(Date.now() + 300_000),
+          telegramStarSubscriptionState: "CANCELED" }
       });
     }).then(() => { concurrentMutationCommitted = true; });
     const committedBeforeTelegramReturned = await Promise.race([
