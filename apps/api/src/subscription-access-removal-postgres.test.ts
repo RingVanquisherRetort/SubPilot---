@@ -13,6 +13,7 @@ import {
   requestSubscriptionAccessReconciliation
 } from "@subpilot/payments";
 import { reconcileSubscriptionAccessRemoval } from "./subscription-access-removal.js";
+import { confirmPendingAccessModerationReview, inspectPendingAccessModerationReview, listPendingAccessModerationReviews } from "./access-moderation-review.js";
 import { cancelStalePendingPayments } from "./subscription-lifecycle.js";
 
 type Fixture = {
@@ -1371,5 +1372,146 @@ test("a recurring Stars renewal creates one charge ledger row and extends from t
     assert.equal(metadata.isRenewal, true);
     assert.equal(savedSubscription.endsAt?.getTime(), renewedEndSeconds * 1000);
     assert.equal(eventCount, 1);
+  });
+});
+
+test("moderation review queue is durable, project-scoped and denies unauthorized readers", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, customer, chat, grant, project }) => {
+    await prisma.subscriptionAccessGrant.update({
+      where: { id: grant.id },
+      data: {
+        revocationLastError: "MEMBER_MODERATION_REVIEW_REQUIRED",
+        revocationNextAttemptAt: new Date("2100-01-01T00:00:00.000Z")
+      }
+    });
+    const owner = await prisma.project.findUniqueOrThrow({
+      where: { id: project.id },
+      select: { workspace: { select: { createdById: true } } }
+    });
+    assert.equal(await listPendingAccessModerationReviews(project.id, "unauthorized"), null);
+    const rows = await listPendingAccessModerationReviews(project.id, owner.workspace.createdById);
+    assert.ok(rows);
+    const row = rows.find((item) => item.grantId === grant.id);
+    assert.ok(row);
+    assert.equal(row.telegramChatId, chat.telegramChatId.toString());
+    assert.equal(row.telegramUserId, customer.telegramUserId.toString());
+    assert.equal(row.subscriptionId, subscription.id);
+    assert.equal(row.reason, "MEMBER_MODERATION_REVIEW_REQUIRED");
+    await prisma.subscription.update({
+      where: { id: subscription.id },
+      data: { status: "ACTIVE", endsAt: new Date(Date.now() + 86_400_000) }
+    });
+    const afterRenewal = await listPendingAccessModerationReviews(
+      project.id, owner.workspace.createdById
+    );
+    assert.ok(afterRenewal);
+    assert.equal(afterRenewal.some((item) => item.grantId === grant.id), false,
+      "a newly active paid entitlement must not be shown as a pending expiry review");
+    assert.equal((await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id }
+    })).revokedAt, null, "reading the queue must not acknowledge membership removal");
+  });
+});
+
+
+test("moderation preflight is read-only and never unbans a Telegram member", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ grant, project }) => {
+    await prisma.subscriptionAccessGrant.update({
+      where: { id: grant.id },
+      data: { revocationLastError: "MEMBER_MODERATION_REVIEW_REQUIRED" }
+    });
+    const owner = await prisma.project.findUniqueOrThrow({
+      where: { id: project.id },
+      select: { workspace: { select: { createdById: true } } }
+    });
+    let lookups = 0;
+    let unbans = 0;
+    const bot = {
+      api: {
+        getChatMember: async () => { lookups += 1; return { status: "kicked" }; },
+        unbanChatMember: async () => { unbans += 1; return true; }
+      }
+    } as unknown as Bot;
+    assert.deepEqual(await inspectPendingAccessModerationReview(
+      project.id, "unauthorized", grant.id, bot
+    ), { state: "UNAUTHORIZED" });
+    assert.equal(lookups, 0);
+    const result = await inspectPendingAccessModerationReview(
+      project.id, owner.workspace.createdById, grant.id, bot
+    );
+    assert.equal(result.state, "REVIEW_REQUIRED");
+    if (result.state === "REVIEW_REQUIRED") assert.equal(result.membership, "kicked");
+    assert.equal(lookups, 1);
+    assert.equal(unbans, 0);
+    assert.equal((await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id }
+    })).revokedAt, null);
+  });
+});
+
+
+test("moderation resolution confirms absence once and writes an audit log", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ grant, project, subscription }) => {
+    await prisma.subscriptionAccessGrant.update({
+      where: { id: grant.id },
+      data: {
+        revocationLastError: "MEMBER_MODERATION_REVIEW_REQUIRED",
+        expiresAt: new Date(Date.now() - 60_000)
+      }
+    });
+    const owner = await prisma.project.findUniqueOrThrow({
+      where: { id: project.id },
+      select: { workspace: { select: { createdById: true } } }
+    });
+    let bans = 0;
+    const bot = {
+      api: {
+        getChatMember: async () => ({ status: "left" }),
+        banChatMember: async () => { bans += 1; return true; }
+      }
+    } as unknown as Bot;
+    const actor = owner.workspace.createdById;
+    assert.equal(await confirmPendingAccessModerationReview(project.id, "stranger", grant.id, bot), "UNAUTHORIZED");
+    assert.equal(await confirmPendingAccessModerationReview(project.id, actor, grant.id, bot), "CONFIRMED");
+    assert.equal(await confirmPendingAccessModerationReview(project.id, actor, grant.id, bot), "NO_LONGER_PENDING");
+    const saved = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } });
+    assert.ok(saved.revokedAt);
+    assert.equal(saved.revocationReason, "SUBSCRIPTION_EXPIRED");
+    assert.equal(bans, 0);
+    const audits = await prisma.auditLog.findMany({
+      where: { projectId: project.id, resourceId: grant.id, action: "ACCESS_MODERATION_REVIEW_CONFIRMED" }
+    });
+    assert.equal(audits.length, 1);
+    assert.equal(audits[0]?.actorUserId, actor);
+    assert.equal((await prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id } })).status, "EXPIRED");
+  });
+});
+
+test("moderation resolution refuses to close a case while the member is present or invite is valid", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ grant, project }) => {
+    await prisma.subscriptionAccessGrant.update({
+      where: { id: grant.id },
+      data: { revocationLastError: "MEMBER_MODERATION_REVIEW_REQUIRED" }
+    });
+    const owner = await prisma.project.findUniqueOrThrow({
+      where: { id: project.id },
+      select: { workspace: { select: { createdById: true } } }
+    });
+    const actor = owner.workspace.createdById;
+    const presentBot = { api: { getChatMember: async () => ({ status: "member" }) } } as unknown as Bot;
+    const absentBot = { api: { getChatMember: async () => ({ status: "left" }) } } as unknown as Bot;
+    assert.equal(await confirmPendingAccessModerationReview(project.id, actor, grant.id, presentBot), "MEMBER_STILL_PRESENT");
+    assert.equal(await confirmPendingAccessModerationReview(project.id, actor, grant.id, absentBot), "INVITE_CLEANUP_REQUIRED");
+    assert.equal((await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id }
+    })).revokedAt, null);
   });
 });
