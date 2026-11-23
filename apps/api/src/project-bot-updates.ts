@@ -1,3 +1,4 @@
+import { reconcileLateStarsCancellation } from "./late-stars-cancellation.js";
 import { paidInvoiceChatIds } from "./paid-chat-checkout.js";
 import { hasActiveInviteEntrantGrant } from "./invite-entry-entitlement.js";
 import { randomUUID } from "node:crypto";
@@ -1447,6 +1448,8 @@ async function processSuccessfulStarsPayment(
         where: { id: subscription.id },
         data: {
           telegramStarInitialChargeId: receipt.telegram_payment_charge_id,
+          lateStarsCancelBotId: projectBotId,
+          lateStarsCancelDueAt: now,
           telegramStarSubscriptionState: "ACTIVE"
         }
       });
@@ -1580,66 +1583,10 @@ async function processSuccessfulStarsPayment(
     });
   };
 
-  const cancelLateInitialRecurringRenewal = async (): Promise<boolean> => {
-    const telegramUserId = Number(payment.customer.telegramUserId);
-    if (!Number.isSafeInteger(telegramUserId) || telegramUserId <= 0) return false;
-
-    try {
-      return await prisma.$transaction(async (tx) => {
-        await tx.$queryRawUnsafe(
-          'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
-          subscription.id
-        );
-        const current = await tx.subscription.findUnique({
-          where: { id: subscription.id },
-          select: {
-            status: true,
-            telegramStarInitialChargeId: true,
-            telegramStarSubscriptionState: true
-          }
-        });
-        if (
-          !current ||
-          current.status !== "CANCELLED" ||
-          current.telegramStarInitialChargeId !== receipt.telegram_payment_charge_id
-        ) {
-          return false;
-        }
-        if (current.telegramStarSubscriptionState === "CANCELED") return true;
-
-        const rawApi = bot.api.raw as unknown as {
-          editUserStarSubscription: (args: {
-            user_id: number;
-            telegram_payment_charge_id: string;
-            is_canceled: boolean;
-          }) => Promise<boolean>;
-        };
-        const cancelled = await rawApi.editUserStarSubscription({
-          user_id: telegramUserId,
-          telegram_payment_charge_id: receipt.telegram_payment_charge_id,
-          is_canceled: true
-        });
-        if (!cancelled) return false;
-
-        await tx.subscription.updateMany({
-          where: {
-            id: subscription.id,
-            status: "CANCELLED",
-            telegramStarInitialChargeId: receipt.telegram_payment_charge_id,
-            telegramStarSubscriptionState: "ACTIVE"
-          },
-          data: { telegramStarSubscriptionState: "CANCELED" }
-        });
-        return true;
-      }, { isolationLevel: "ReadCommitted", maxWait: 10_000, timeout: 30_000 });
-    } catch (error) {
-      console.error(
-        "Could not cancel a late initial Telegram Stars renewal:",
-        error instanceof Error ? error.name : "UnknownError"
-      );
-      return false;
-    }
-  };
+  const cancelLateInitialRecurringRenewal = () => reconcileLateStarsCancellation(
+    subscription.id, projectBotId, receipt.telegram_payment_charge_id,
+    (args) => bot.api.raw.editUserStarSubscription(args)
+  );
 
   if (!paymentWasProcessed) {
     // The payment/entitlement transaction commits before the notification queue is written.

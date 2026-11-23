@@ -1,3 +1,4 @@
+import { reconcileLateStarsCancellation } from "./late-stars-cancellation.js";
 import { validatePreCheckout } from "./project-bot-updates.js";
 import { hasActiveInviteEntrantGrant } from "./invite-entry-entitlement.js";
 import assert from "node:assert/strict";
@@ -372,5 +373,31 @@ test("channel expiry persists its timed ban intent before contacting Telegram", 
     } finally {
       await prisma.telegramRemovalIntent.deleteMany({ where: { botId, telegramChatId: chat.telegramChatId } });
     }
+  });
+});
+
+test("late Stars cancellation survives an ambiguous Telegram reply without reopening a revoked subscription", { skip: !process.env.DATABASE_URL }, async () => {
+  await withFixture(async ({ subscription }) => {
+    const charge = randomUUID();
+    await prisma.subscription.update({ where: { id: subscription.id }, data: {
+      status: "CANCELLED", telegramStarInitialChargeId: charge, telegramStarSubscriptionState: "ACTIVE",
+      lateStarsCancelBotId: "original", lateStarsCancelDueAt: new Date(0)
+    } });
+    let calls = 0;
+    const run = () => reconcileLateStarsCancellation(subscription.id, "original", charge, async args => {
+      calls++;
+      assert.equal(args.is_canceled, true);
+      if (calls === 1) throw new Error("response lost after remote success");
+      return true;
+    });
+    assert.equal(await run(), false);
+    assert.equal(await run(), false);
+    await prisma.subscription.update({ where: { id: subscription.id }, data: { lateStarsCancelDueAt: new Date(0) } });
+    assert.equal(await run(), true);
+    assert.equal(await run(), true);
+    assert.equal(calls, 2);
+    const row = await prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id } });
+    assert.equal(row.status, "CANCELLED");
+    assert.equal(row.lateStarsCancelDueAt, null);
   });
 });

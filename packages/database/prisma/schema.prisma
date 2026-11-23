@@ -392,6 +392,9 @@ model Subscription {
   cancelledAt  DateTime?
   reminder3dAt DateTime?
   reminder1dAt DateTime?
+  @@index([lateStarsCancelDueAt])
+  lateStarsCancelDueAt DateTime?
+  lateStarsCancelBotId String?
   telegramStarInitialChargeId String? @unique
   telegramStarSubscriptionState TelegramStarSubscriptionState?
   telegramStarSubscriptionLastUpdateId Int?

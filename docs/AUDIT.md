@@ -146,3 +146,7 @@ New paid plans link channels and supergroups. A legacy plan containing a basic g
 ### Timed Telegram expiry removals
 
 Channel and supergroup expiry now records the bot, chat, member and deadline before requesting a five-minute Telegram ban. Telegram releases the temporary ban. There is no automatic unban request. Matching authenticated bot membership updates do not create sticky moderator exclusions. Ordinary groups and ambiguous stale-invite entries need operator review. This does not serialize a human moderator with the initial ban request. The intent table is additive; preserve its rows on code rollback. Production use needs retention and acceptance review. AUD-018 remains open.
+
+### Late initial Stars receipt after administrative cancellation
+
+Persist the original bot and a due timestamp in the receipt transaction. Lifecycle and immediate delivery share a conditional claim, external cancellation and conditional finalization. An ambiguous result leaves the request due after five minutes. The subscription remains cancelled throughout. Historical cancelled active chains with an identifiable original payment bot are backfilled. The buyer cancel/resume path is still separate. Ambiguous repeated Telegram replies need acceptance and operator review.
