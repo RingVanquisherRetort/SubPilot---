@@ -37,7 +37,7 @@
 - Payment status, refund event dedupe and entitlement recalculation commit transactionally.
 - Partial refunds preserve remaining paid periods; a full refund makes the subscription due for access reconciliation.
 - An administratively cancelled subscription is not reopened by a refund. A pending admin cancellation is also preserved.
-- Existing PostgreSQL coverage exercises partial/full refund, duplicate refund replay and administrative cancellation preservation.
+- PostgreSQL coverage exercises partial/full refund, duplicate refund replay and administrative cancellation preservation. An end-to-end Stars refund-handler test now validates the actual webhook route and duplicate delivery.
 
 ## B5 — Administrative revoke versus payment/webhook and crash recovery
 
@@ -52,7 +52,7 @@ The manual revoke path commits this intent before Telegram I/O. The lifecycle wo
 
 Payment renewals and refunds that arrive while this intent is pending cannot extend or restore the entitlement. Buyer resume is blocked while the administrative intent is pending.
 
-Retry policy: 10 failed/unconfirmed attempts with bounded backoff; on exhaustion the intent remains pending but is no longer auto-polled, and an audit event records the exhausted retry budget. A later authorized manual retry resets the budget. No automatic access revocation occurs on an unconfirmed Telegram cancellation.
+Retry policy: 10 failed/unconfirmed attempts with bounded backoff; on exhaustion the intent remains pending but is no longer auto-polled, and an audit event records the exhausted retry budget. A later authorized manual retry resets the budget, including when the subscription has naturally expired while the intent was pending. No automatic access revocation occurs on an unconfirmed Telegram cancellation.
 
 ## Files changed in Direction B
 
@@ -78,11 +78,12 @@ Retry policy: 10 failed/unconfirmed attempts with bounded backoff; on exhaustion
 - A recurring Stars payment arriving during admin cancellation is recorded but cannot restore access.
 - A refund arriving while an admin cancellation intent is pending cannot recalculate or reopen the entitlement.
 - Manual administrative cancellation survives a lost Telegram response and can be completed by the lifecycle worker after restart without relying on the webhook.
+- The admin cancellation retry budget exhausts after 10 unconfirmed attempts, remains auditable, and can be explicitly retried after natural expiry.
 
 ## Residual risks / acceptance limits
 
 1. Telegram does not provide a database fencing token or compare-and-swap for `editUserStarSubscription`. Local claim tokens fence database finalization only. A remote request already in flight cannot be cancelled; retries converge toward the durable desired state.
-2. If Telegram accepted cancellation but both its response and the authenticated subscription update are permanently lost, the worker retries the same cancellation intent. After 10 unconfirmed attempts it stops automatic retries and leaves an auditable pending intent for operator retry; the subscription remains active until confirmation.
+2. If Telegram accepted cancellation but both its response and the authenticated subscription update are permanently lost, the worker retries the same cancellation intent. After 10 unconfirmed attempts it stops automatic retries and leaves an auditable pending intent for operator retry; the entitlement remains in its current state (ACTIVE or naturally EXPIRED) until confirmation.
 3. Telegram Stars invoice creation, actual charge capture, real renewal timing, real refund delivery, webhook retry ordering and the remote effects of `editUserStarSubscription` cannot be proven by PostgreSQL mocks/CI.
 4. No real Telegram or payment-provider operation was performed. Live acceptance remains a separate gated activity.
 5. This document does not close AUD-018. Direction A and the combined P0 review remain required.
