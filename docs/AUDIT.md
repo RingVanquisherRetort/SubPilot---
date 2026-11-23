@@ -142,3 +142,7 @@ After a different buyer consumes an invite, the project bot checks the entrantâ€
 ### Paid chat eligibility
 
 New paid plans link channels and supergroups. A legacy plan containing a basic group is hidden from the buyer catalog and direct purchase. Pre-checkout revalidates every recorded invoice destination; missing, inactive, unknown or basic-group destinations require a fresh invoice. Successful receipts and existing grants are processed independently of this sales gate. Existing recurring authorizations require separate lifecycle handling; this gate does not cancel them.
+
+### Timed Telegram expiry removals
+
+Channel and supergroup expiry now records the bot, chat, member and deadline before requesting a five-minute Telegram ban. Telegram releases the temporary ban. There is no automatic unban request. Matching authenticated bot membership updates do not create sticky moderator exclusions. Ordinary groups and ambiguous stale-invite entries need operator review. This does not serialize a human moderator with the initial ban request. The intent table is additive; preserve its rows on code rollback. Production use needs retention and acceptance review. AUD-018 remains open.

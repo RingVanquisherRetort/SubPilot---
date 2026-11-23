@@ -347,3 +347,30 @@ test("Stars pre-checkout rejects mixed legacy destinations and preserves existin
     assert.equal((await prisma.subscriptionAccessGrant.findUniqueOrThrow({where: {id: grant.id}})).revokedAt, null);
   });
 });
+
+test("channel expiry persists its timed ban intent before contacting Telegram", { skip: !process.env.DATABASE_URL }, async () => {
+  await withFixture(async ({ subscription, customer, chat }) => {
+    let calls = 0;
+    const botId = 54321n;
+    const bot = { token: "54321:test", api: {
+      revokeChatInviteLink: async () => true,
+      getChatMember: async () => ({ status: "member" }),
+      banChatMember: async (_chat: string, _user: number, options: { until_date: number }) => {
+        calls++;
+        assert.ok(options.until_date > Date.now() / 1000 + 30);
+        assert.ok(await prisma.telegramRemovalIntent.findUnique({ where: { botId_telegramChatId_telegramUserId_untilDate: {
+          botId, telegramChatId: chat.telegramChatId, telegramUserId: customer.telegramUserId, untilDate: options.until_date
+        } } }));
+        return true;
+      }
+    } } as unknown as Bot;
+    const input = { bot, subscriptionId: subscription.id, customerId: customer.id, connectedChatId: chat.id, telegramUserId: customer.telegramUserId };
+    try {
+      assert.equal(await reconcileSubscriptionAccessRemoval(input), "REVOKED");
+      assert.equal(await reconcileSubscriptionAccessRemoval(input), "SKIPPED");
+      assert.equal(calls, 1);
+    } finally {
+      await prisma.telegramRemovalIntent.deleteMany({ where: { botId, telegramChatId: chat.telegramChatId } });
+    }
+  });
+});

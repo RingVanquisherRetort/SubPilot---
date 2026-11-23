@@ -89,7 +89,7 @@ export async function reconcileSubscriptionAccessRemoval(
             connectedChatId: input.connectedChatId
           }
         },
-        include: { connectedChat: { select: { telegramChatId: true } } }
+        include: { connectedChat: { select: { telegramChatId: true, type: true } } }
       })
     ]);
     if (!subscription || !grant || subscription.customerId !== input.customerId) return null;
@@ -161,6 +161,7 @@ export async function reconcileSubscriptionAccessRemoval(
       expiresAt: grant.expiresAt,
       joinedAt: grant.joinedAt,
       revocationLastError: grant.revocationLastError,
+      chatType: grant.connectedChat.type,
       telegramChatId: grant.connectedChat.telegramChatId.toString(),
       hasOtherActiveGrant: Boolean(otherActiveGrant)
     };
@@ -362,6 +363,12 @@ export async function reconcileSubscriptionAccessRemoval(
         // crashes after Telegram accepts the ban but before the unban, recovery
         // must not mistake our partially completed operation for a moderator ban
         // or automatically clear a newer moderator decision.
+        if (currentSnapshot.chatType === "GROUP") {
+          await fail("LEGACY_GROUP_REMOVAL_REVIEW");
+          return "FAILED";
+        }
+        const untilDate = Math.floor(Date.now() / 1000) + 300;
+        const botId = BigInt(input.bot.token.split(":")[0]!);
         const marked = await prisma.$transaction(async (tx) => {
           await tx.$queryRawUnsafe(
             'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
@@ -397,25 +404,19 @@ export async function reconcileSubscriptionAccessRemoval(
             where: { id: currentSnapshot.grantId, revokedAt: null },
             data: { revocationLastError: "MEMBER_BAN_IN_PROGRESS" }
           });
-          return markedGrant.count === 1;
+          if (markedGrant.count !== 1) return false;
+          await tx.telegramRemovalIntent.createMany({
+            data: [{ botId, telegramChatId: BigInt(currentSnapshot.telegramChatId), telegramUserId: input.telegramUserId, untilDate }],
+            skipDuplicates: true
+          });
+          return true;
         }, { maxWait: 10_000, timeout: 15_000 });
         if (!marked || !await isCurrentRevision()) return "LEASE_LOST";
         try {
-          await input.bot.api.banChatMember(currentSnapshot.telegramChatId, telegramUserId);
+          if (untilDate - Math.floor(Date.now() / 1000) < 120) return "LEASE_LOST";
+          await input.bot.api.banChatMember(currentSnapshot.telegramChatId, telegramUserId, { until_date: untilDate });
         } catch {
           await fail("MEMBER_BAN_OWNERSHIP_UNCERTAIN");
-          return "FAILED";
-        }
-        // Always attempt to undo our temporary ban even if the worker lease is
-        // lost immediately after banChatMember succeeds.
-        try {
-          await input.bot.api.unbanChatMember(
-            currentSnapshot.telegramChatId,
-            telegramUserId,
-            { only_if_banned: true }
-          );
-        } catch {
-          await fail("MEMBER_UNBAN_FAILED");
           return "FAILED";
         }
         if (!ownsLease()) return "LEASE_LOST";

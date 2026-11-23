@@ -710,3 +710,11 @@ model AuditLog {
   @@index([workspaceId, createdAt])
   @@index([projectId, createdAt])
 }
+
+model TelegramRemovalIntent {
+  botId          BigInt
+  telegramChatId BigInt
+  telegramUserId BigInt
+  untilDate      Int
+  @@id([botId, telegramChatId, telegramUserId, untilDate])
+}

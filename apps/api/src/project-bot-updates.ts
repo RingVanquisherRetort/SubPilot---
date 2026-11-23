@@ -2583,6 +2583,17 @@ export async function handleProjectBotUpdate(
     };
 
     if (!isMember) {
+      if (newMember.status === "kicked" && newMember.until_date > 0 && ctx.chatMember.from.id === ctx.me.id) {
+        const intent = await prisma.telegramRemovalIntent.findUnique({
+          where: { botId_telegramChatId_telegramUserId_untilDate: {
+            botId: BigInt(ctx.me.id), telegramChatId, telegramUserId, untilDate: newMember.until_date
+          } }
+        });
+        if (intent) {
+          await saveCursor();
+          return;
+        }
+      }
       const departureKind = classifyTelegramMembershipDeparture(
         newMember.status,
         newMember.status === "restricted" ? newMember.is_member : false
@@ -3115,21 +3126,7 @@ export async function handleProjectBotUpdate(
         return !otherActiveGrant;
       });
 
-      let unintendedMemberRemoved = false;
       if (stillUnauthorized) {
-        try {
-          await projectBot.api.banChatMember(ctx.chat.id, newMember.user.id);
-          await projectBot.api.unbanChatMember(ctx.chat.id, newMember.user.id, { only_if_banned: true });
-          unintendedMemberRemoved = true;
-        } catch (error) {
-          console.error(
-            "Could not remove a Telegram member who joined without an active access permission:",
-            error instanceof Error ? error.name : "UnknownError"
-          );
-        }
-      }
-
-      if (stillUnauthorized && !unintendedMemberRemoved) {
         await enqueueProjectOwnerNotification({
           projectId,
           dedupeKey: "security:stale-invite-entry:" + grant.id + ":" + newMember.user.id,
