@@ -74,3 +74,17 @@ The earlier source inventory and CI section above describe the historical HEAD `
 - A delayed in-flight Telegram membership ban racing with paid renewal. The test asserts stale database finalization is fenced and reconciliation remains due; it explicitly **does not** claim to undo the already-issued Telegram ban. At the time of this note, [45257239067](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45257239067) (`0de64de7`) has upgrade-validation success but validate/unit tests are still running.
 
 **Residual safety boundary:** Telegram has no DB revision or fencing-token support for a ban already in flight. A newer paid entitlement may be correct in SubPilot while Telegram still applies an older removal; automatic unbanning could override human moderation. Treat this as an unresolved P0 product/operational tradeoff requiring explicit policy and live controlled tests. The old-invite-URL/replacement-URL race remains a separate P1 acceptance case. These CI runs do not authorize closing AUD-018, deploying, or merging to `main`.
+
+
+## Acceptance matrix refresh — 2026-11-23
+
+| Area | Automated evidence | Remaining acceptance |
+| --- | --- | --- |
+| Stars receipt vs admin cancellation | Real receipt handler, concurrent subscription row lock, duplicate charge/event and owner notice: CI `d794e618` passed | Live provider ordering, missing webhook and operator response to unexpected charges |
+| Buyer Stars cancel/resume vs admin intent | Authenticated state updates, out-of-order update IDs and sequence epochs: CI `89c086ff` passed | Live Telegram timing and delayed external responses |
+| Admin Stars recovery after confirmation | Durable intent with pre-recorded `CANCELED` projection; worker finalizes once without another Telegram call: CI `8451fd57` passed | Process death before webhook confirmation, persistent API failures and alerting |
+| In-flight membership ban vs paid renewal | Old worker is fenced from finalizing the renewed grant; reconciliation remains due: CI `0de64de7` passed | Already-issued Telegram ban may still take effect; no automatic unban without proving moderation ownership |
+| Old invite URL vs replacement | Delayed expiry cleanup revokes only the captured old URL; replacement grant survives: CI `ad70044e` passed | Authenticated webhook admin-exclusion and wrong-user paths require their own handler-level race tests |
+| Moderator-exclusion cleanup vs manual re-grant | New PostgreSQL test `a9ffb6cd` exercises delayed cleanup and replacement grant | CI `45258664267` pending at time of this update; separate live moderation acceptance |
+
+**Do not infer closure from passing simulations.** Keep AUD-018 OPEN until live controlled moderation/Stars acceptance and an explicit operator policy for unresolved remote ban ownership are reviewed. A remote ban cannot be cancelled transactionally by a newer PostgreSQL revision; automatic unban can erase a human moderator's action. Continue preserving the one-member, 24-hour, not-sent-before-persistence boundary for unknown-result invite creation.
