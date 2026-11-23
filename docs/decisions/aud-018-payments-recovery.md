@@ -3,7 +3,7 @@
 **Branch:** `audit-018/payments-recovery`  
 **Base commit:** `6f694b12640ef1d80128558fc42f76bd69d35650`  
 **Scope:** B1–B5 only. No participant or invite-link implementation changes, no real payments, no deployment, no merge to `main`.  
-**Status:** Implementation in progress; full CI result pending. AUD-018 remains open pending combined review of directions A and B.
+**Status:** B1–B5 implementation complete; CI green at `645c737f8c7221ca92730007779506b0b750ef03`. AUD-018 remains open pending combined review of directions A and B.
 
 ## B1 — Purchase, invoice dispatch and first payment
 
@@ -74,12 +74,21 @@ Retry policy: 10 failed/unconfirmed attempts with bounded backoff; on exhaustion
 ## New regression coverage
 
 - A stale Stars worker cannot clear a successor claim while its Telegram request is in flight.
+- A pending admin cancellation prevents a buyer resume from changing the desired Telegram state back to active.
 - An authenticated Stars cancellation webhook wakes a pending admin revoke for worker finalization.
 - A recurring Stars payment arriving during admin cancellation is recorded but cannot restore access.
 - A refund arriving while an admin cancellation intent is pending cannot recalculate or reopen the entitlement.
 - The authenticated Telegram Stars refund handler reconciles the original charge and ignores duplicate delivery.
 - Manual administrative cancellation survives a lost Telegram response and can be completed by the lifecycle worker after restart without relying on the webhook.
 - The admin cancellation retry budget exhausts after 10 unconfirmed attempts, remains auditable, and can be explicitly retried after natural expiry.
+
+## CI validation
+
+GitHub Actions run [45150189396](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45150189396) passed on branch HEAD `645c737f8c7221ca92730007779506b0b750ef03`:
+- `validate`: TypeScript typecheck passed; 224 tests passed, 0 failed.
+- `upgrade-validation`: clean PostgreSQL migration, Prisma generation, legacy baseline recreation, forward migration and data/backfill validation passed.
+
+This is automated PostgreSQL/CI evidence only, not a live Telegram or payment acceptance test.
 
 ## Residual risks / acceptance limits
 
