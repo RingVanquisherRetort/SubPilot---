@@ -13,6 +13,7 @@ import {
   requestSubscriptionAccessReconciliation
 } from "@subpilot/payments";
 import { reconcileSubscriptionAccessRemoval } from "./subscription-access-removal.js";
+import { listPendingAccessModerationReviews } from "./access-moderation-review.js";
 
 type Fixture = {
   subscription: { id: string };
@@ -627,5 +628,36 @@ test("moderator exclusion is not overwritten by an expiry retry", { skip: !proce
     assert.equal(unbans, 0);
     const saved = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } });
     assert.equal(saved.revocationReason, "ADMIN_EXCLUDED");
+  });
+});
+
+
+test("moderation review queue is durable, project-scoped and denies unauthorized readers", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, customer, chat, grant, project }) => {
+    await prisma.subscriptionAccessGrant.update({
+      where: { id: grant.id },
+      data: {
+        revocationLastError: "MEMBER_MODERATION_REVIEW_REQUIRED",
+        revocationNextAttemptAt: new Date("2100-01-01T00:00:00.000Z")
+      }
+    });
+    const owner = await prisma.project.findUniqueOrThrow({
+      where: { id: project.id },
+      select: { workspace: { select: { createdById: true } } }
+    });
+    assert.equal(await listPendingAccessModerationReviews(project.id, "unauthorized"), null);
+    const rows = await listPendingAccessModerationReviews(project.id, owner.workspace.createdById);
+    assert.ok(rows);
+    const row = rows.find((item) => item.grantId === grant.id);
+    assert.ok(row);
+    assert.equal(row.telegramChatId, chat.telegramChatId.toString());
+    assert.equal(row.telegramUserId, customer.telegramUserId.toString());
+    assert.equal(row.subscriptionId, subscription.id);
+    assert.equal(row.reason, "MEMBER_MODERATION_REVIEW_REQUIRED");
+    assert.equal((await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id }
+    })).revokedAt, null, "reading the queue must not acknowledge membership removal");
   });
 });
