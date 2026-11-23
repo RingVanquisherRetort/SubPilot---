@@ -813,9 +813,9 @@ test("a recurring Stars payment arriving during admin cancellation is recorded b
 
     const [savedSubscription, savedRenewal, event, savedGrant] = await Promise.all([
       prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id } }),
-      prisma.payment.findUnique({ where: { provider_providerPaymentId: {
+      prisma.payment.findFirst({ where: {
         provider: "TELEGRAM_STARS", providerPaymentId: renewalCharge
-      } } }),
+      } }),
       prisma.paymentWebhookEvent.findUniqueOrThrow({ where: { dedupeKey: "telegram-stars:" + renewalCharge } }),
       prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } })
     ]);
