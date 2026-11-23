@@ -306,6 +306,34 @@ test("PostgreSQL receipt recheck observes a committed admin revoke under the sub
     assert.equal(stale.adminStarsCancelPending, true);
     assert.equal(stale.endsAt?.toISOString(), originalEndsAt.toISOString());
 
+    // A newer sequence epoch may advance the buyer projection, but still cannot
+    // revoke the administrator's durable cancellation intent.
+    await handleProjectBotUpdate(
+      "test-token", project.id, projectBotId,
+      subscriptionUpdate("active", 1) as Parameters<typeof handleProjectBotUpdate>[3],
+      1, 2, updateBot
+    );
+    const newEpoch = await prisma.subscription.findUniqueOrThrow({
+      where: { id: subscription.id }
+    });
+    assert.equal(newEpoch.telegramStarSubscriptionState, "ACTIVE");
+    assert.equal(newEpoch.adminStarsCancelPending, true);
+    assert.equal(newEpoch.endsAt?.toISOString(), originalEndsAt.toISOString());
+
+    // An event from the old epoch must not overwrite the newer buyer state.
+    await handleProjectBotUpdate(
+      "test-token", project.id, projectBotId,
+      subscriptionUpdate("canceled", 999) as Parameters<typeof handleProjectBotUpdate>[3],
+      999, 1, updateBot
+    );
+    const oldEpoch = await prisma.subscription.findUniqueOrThrow({
+      where: { id: subscription.id }
+    });
+    assert.equal(oldEpoch.telegramStarSubscriptionState, "ACTIVE");
+    assert.equal(oldEpoch.adminStarsCancelPending, true);
+    assert.equal(oldEpoch.endsAt?.toISOString(), originalEndsAt.toISOString());
+
+
     assert.equal(await prisma.ownerNotification.count({
       where: {
         projectId: project.id,
