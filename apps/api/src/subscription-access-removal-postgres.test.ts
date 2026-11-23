@@ -874,6 +874,12 @@ test("a recurring Stars payment arriving during admin cancellation is recorded b
     assert.equal(afterCancellation.status, "CANCELLED");
     assert.equal(afterCancellation.adminStarsCancelPending, false);
     assert.equal(afterCancellation.telegramStarSubscriptionState, "CANCELED");
+    const adminRevokeScope = await prisma.subscriptionAccessScope.findUniqueOrThrow({
+      where: { customerId_connectedChatId: {
+        customerId: customer.id, connectedChatId: chat.id
+      } }
+    });
+    assert.equal(adminRevokeScope.desiredRevision, 1n);
 
     // Telegram may retry the same successful-payment update. It remains a
     // single ledger event and cannot reopen the now-cancelled subscription.
