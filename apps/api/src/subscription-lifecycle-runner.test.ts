@@ -9,8 +9,6 @@ import {
 } from "./subscription-lifecycle-lease.js";
 import { runLifecyclePassWithLease } from "./subscription-lifecycle-runner.js";
 
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 test("lifecycle pass stops after lease loss during a stage and cannot release a successor lease", {
   skip: !process.env.DATABASE_URL
 }, async () => {
@@ -19,6 +17,8 @@ test("lifecycle pass stops after lease loss during a stage and cannot release a 
   const successorLeaseId = randomUUID();
   let laterStageStarted = false;
   let lossReason: string | undefined;
+  let notifyLeaseLost!: () => void;
+  const leaseLost = new Promise<void>((resolve) => { notifyLeaseLost = resolve; });
 
   try {
     const completed = await runLifecyclePassWithLease({
@@ -27,7 +27,7 @@ test("lifecycle pass stops after lease loss during a stage and cannot release a 
       acquire: (id) => acquireSubscriptionLifecycleLease(id, key),
       renew: (id) => renewSubscriptionLifecycleLease(id, key),
       release: (id) => releaseSubscriptionLifecycleLease(id, key),
-      onLeaseLost: (reason) => { lossReason = reason; },
+      onLeaseLost: (reason) => { lossReason = reason; notifyLeaseLost(); },
       stages: [
         async () => {
           // Simulate a paused/partitioned worker whose lease expires while the
@@ -37,7 +37,12 @@ test("lifecycle pass stops after lease loss during a stage and cannot release a 
             data: { lockedUntil: new Date(0) }
           });
           assert.equal(await acquireSubscriptionLifecycleLease(successorLeaseId, key), true);
-          await delay(30);
+          // Wait for the actual heartbeat observation rather than assuming
+          // a 30ms timer will run promptly on a busy CI runner.
+          await Promise.race([
+            leaseLost,
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Lease loss heartbeat timed out")), 5_000))
+          ]);
         },
         async () => { laterStageStarted = true; }
       ]
