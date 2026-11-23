@@ -23,7 +23,7 @@ function deferred<T = void>(): {
 async function withDeliveryFixture(run: (fixture: {
   suffix: string;
   subscription: { id: string };
-  customer: { id: string };
+  customer: { id: string; telegramUserId: bigint };
   chat: { id: string; telegramChatId: bigint };
 }) => Promise<void>): Promise<void> {
   const suffix = randomUUID().replace(/-/g, "").slice(0, 12);
@@ -269,6 +269,40 @@ test("delivery withholds an invite for a restricted non-member", {
       where: { subscriptionId_connectedChatId: { subscriptionId: subscription.id, connectedChatId: chat.id } }
     });
     assert.equal(grant.deliveryLastError, "SUBSCRIBER_ADMIN_BANNED");
+  });
+});
+
+test("delivery waits for a pending timed removal before checking membership", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withDeliveryFixture(async ({ subscription, customer, chat }) => {
+    const untilDate = Math.floor(Date.now() / 1000) + 300;
+    await prisma.telegramRemovalIntent.create({
+      data: { botId: 42n, telegramChatId: chat.telegramChatId, telegramUserId: customer.telegramUserId, untilDate }
+    });
+    try {
+      let lookups = 0;
+      let invitations = 0;
+      const bot = { api: {
+        getChatMember: async () => { lookups++; return { status: "member" }; },
+        createChatInviteLink: async () => { invitations++; return { invite_link: "https://t.me/+unused" }; }
+      } } as unknown as Bot;
+      const result = await deliverSubscriptionAccess(bot, subscription.id, [chat.telegramChatId.toString()]);
+      assert.deepEqual(result.links, []);
+      assert.deepEqual(result.failed, ["Access delivery lease chat"]);
+      assert.equal(lookups, 0);
+      assert.equal(invitations, 0);
+      const scope = await prisma.subscriptionAccessScope.findUniqueOrThrow({
+        where: { customerId_connectedChatId: { customerId: customer.id, connectedChatId: chat.id } }
+      });
+      assert.equal(scope.lastErrorCode, "TIMED_REMOVAL_PENDING");
+      assert.ok(scope.nextAttemptAt);
+      assert.ok(scope.nextAttemptAt.getTime() >= (untilDate + 1) * 1000);
+    } finally {
+      await prisma.telegramRemovalIntent.deleteMany({
+        where: { botId: 42n, telegramChatId: chat.telegramChatId, telegramUserId: customer.telegramUserId, untilDate }
+      });
+    }
   });
 });
 
