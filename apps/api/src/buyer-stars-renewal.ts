@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@subpilot/database";
-import { isPaymentFromProjectBot } from "./telegram-payment-origin.js";
 
 type Edit = (args: { user_id: number; telegram_payment_charge_id: string; is_canceled: boolean }) => Promise<boolean>;
 
@@ -14,9 +13,11 @@ export async function queueBuyerRenewal(id: string, projectId: string, customerI
   if (!charge) return false;
   const payment = await prisma.payment.findFirst({
     where: { projectId, customerId, subscriptionId: id, provider: "TELEGRAM_STARS",
-      providerPaymentId: charge, status: "SUCCEEDED" }, select: { metadata: true }
+      providerPaymentId: charge, status: { in: ["SUCCEEDED", "REFUNDING", "REFUNDED"] } }, select: { metadata: true }
   });
-  if (!payment || !isPaymentFromProjectBot(payment.metadata, botId)) return false;
+  const metadata = payment?.metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata) ||
+      metadata.projectBotId !== botId || metadata.source !== "project_bot" || metadata.isRecurring !== true) return false;
   const saved = await prisma.subscription.updateMany({
     where: { ...key, telegramStarInitialChargeId: charge, buyerStarsDueAt: null },
     data: { buyerStarsBotId: botId, buyerStarsChargeId: charge, buyerStarsCanceled: canceled,

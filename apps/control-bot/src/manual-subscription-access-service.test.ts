@@ -318,7 +318,8 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
       );
       await tx.subscription.update({
         where: { id: recurringSubscription.id },
-        data: { reminder1dAt: new Date() }
+        data: { reminder1dAt: new Date(), buyerStarsBotId: projectBot.id, buyerStarsChargeId: initialChargeId,
+          buyerStarsCanceled: false, buyerStarsClaim: randomUUID(), buyerStarsDueAt: new Date(Date.now() + 300_000) }
       });
     }).then(() => { concurrentMutationCommitted = true; });
     const committedBeforeTelegramReturned = await Promise.race([
@@ -339,6 +340,9 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
     const recurringCancelled = await prisma.subscription.findUniqueOrThrow({
       where: { id: recurringSubscription.id }
     });
+    assert.equal(recurringCancelled.buyerStarsCanceled, true);
+    assert.equal(recurringCancelled.buyerStarsClaim, null);
+    assert.ok(recurringCancelled.buyerStarsDueAt && recurringCancelled.buyerStarsDueAt <= new Date());
     assert.equal(recurringCancelled.status, "CANCELLED");
     assert.equal(recurringCancelled.telegramStarSubscriptionState, "CANCELED");
     assert.ok(recurringCancelled.endsAt && recurringCancelled.endsAt.getTime() <= Date.now());

@@ -146,3 +146,8 @@ Initial research candidates for creators who are individuals: YooMoney, Crypto P
 - Market-specific provider configuration.
 - United States and Thailand launch review.
 - Merchant onboarding, tax and compliance requirements per market.
+
+## AUD-018 — buyer renewal recovery
+
+- [x] Persist buyer Stars renewal changes and replay them with the original bot. Fence local confirmation when administrative cancellation supersedes a buyer request.
+- [ ] Verify Telegram responses to repeated renewal requests in a dedicated acceptance environment and define operator recovery for permanent rejection.

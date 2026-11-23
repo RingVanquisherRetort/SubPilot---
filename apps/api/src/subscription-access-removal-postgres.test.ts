@@ -444,10 +444,14 @@ test("late buyer resume after administrative cancellation requeues the winning c
     const charge = randomUUID();
     await prisma.subscription.update({ where, data: { status: "ACTIVE", endsAt: new Date(Date.now() + 86_400_000),
       telegramStarInitialChargeId: charge, telegramStarSubscriptionState: "CANCELED" } });
-    await prisma.payment.create({ data: { subscriptionId: subscription.id, projectId: project.id, customerId: customer.id,
+    const anchor = await prisma.payment.create({ data: { subscriptionId: subscription.id, projectId: project.id, customerId: customer.id,
       amount: "100", currency: "XTR", provider: "TELEGRAM_STARS", providerPaymentId: charge, status: "SUCCEEDED",
-      metadata: { source: "project_bot", projectBotId: "original", isRecurring: true } } });
+      metadata: {} } });
     const enqueue = (bot: string) => queueBuyerRenewal(subscription.id, project.id, customer.id, bot, false);
+    assert.equal(await enqueue("original"), false);
+    await prisma.payment.update({ where: { id: anchor.id }, data: { metadata: {
+      source: "project_bot", projectBotId: "original", isRecurring: true
+    } } });
     assert.equal(await enqueue("other"), false);
     assert.equal(await enqueue("original"), true);
     assert.equal(await enqueue("original"), false);
