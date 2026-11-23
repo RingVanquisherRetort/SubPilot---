@@ -758,6 +758,9 @@ test("a recurring Stars payment arriving during admin cancellation is recorded b
     const initialCharge = "admin-pending-initial-" + randomUUID();
     const renewalCharge = "admin-pending-renewal-" + randomUUID();
     const endsAt = new Date(Date.now() + 7 * 86_400_000);
+    const projectRow = await prisma.project.findUniqueOrThrow({
+      where: { id: project.id }, select: { workspaceId: true }
+    });
     await prisma.subscription.update({ where: { id: subscription.id }, data: {
       status: "ACTIVE",
       endsAt,
@@ -768,7 +771,7 @@ test("a recurring Stars payment arriving during admin cancellation is recorded b
       adminStarsCancelDueAt: new Date(0),
       adminStarsCancelClaim: null,
       adminStarsCancelActorUserId: "test-actor",
-      adminStarsCancelWorkspaceId: "test-workspace"
+      adminStarsCancelWorkspaceId: projectRow.workspaceId
     } });
     const anchor = await prisma.payment.create({ data: {
       subscriptionId: subscription.id,
