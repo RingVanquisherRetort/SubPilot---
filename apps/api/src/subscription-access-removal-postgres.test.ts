@@ -563,3 +563,73 @@ test("a moderator ban surviving the timed removal blocks a paid member's return 
     }
   });
 });
+
+
+test("an admin exclusion committed during a timed removal survives stale Telegram completion", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, customer, chat, grant }) => {
+    let bans = 0;
+    let unbans = 0;
+    const bot = {
+      token: "54321:test",
+      api: {
+        revokeChatInviteLink: async () => true,
+        getChatMember: async () => ({ status: "member" }),
+        banChatMember: async () => {
+          bans++;
+          // Model the authenticated chat_member webhook committing a moderator
+          // exclusion while the Telegram ban request is still in flight.
+          await prisma.$transaction(async tx => {
+            await tx.$queryRawUnsafe(
+              'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+              subscription.id
+            );
+            await tx.$queryRawUnsafe(
+              'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE',
+              grant.id
+            );
+            await lockSubscriptionAccessScope(tx, customer.id, chat.id);
+            await tx.subscriptionAccessGrant.updateMany({
+              where: { id: grant.id, revokedAt: null },
+              data: {
+                revokedAt: new Date(),
+                revocationReason: "ADMIN_EXCLUDED",
+                joinedAt: null
+              }
+            });
+            await requestSubscriptionAccessReconciliation(tx, customer.id, [chat.id]);
+          });
+          return true;
+        },
+        unbanChatMember: async () => { unbans++; return true; }
+      }
+    } as unknown as Bot;
+
+    const result = await reconcileSubscriptionAccessRemoval({
+      bot,
+      subscriptionId: subscription.id,
+      customerId: customer.id,
+      connectedChatId: chat.id,
+      telegramUserId: customer.telegramUserId
+    });
+
+    assert.equal(bans, 1);
+    assert.equal(unbans, 0);
+    assert.equal(result, "LEASE_LOST");
+    const current = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id }
+    });
+    assert.ok(current.revokedAt);
+    assert.equal(current.revocationReason, "ADMIN_EXCLUDED");
+    const scope = await prisma.subscriptionAccessScope.findUniqueOrThrow({
+      where: {
+        customerId_connectedChatId: {
+          customerId: customer.id,
+          connectedChatId: chat.id
+        }
+      }
+    });
+    assert.ok(scope.desiredRevision > scope.appliedRevision);
+  });
+});
