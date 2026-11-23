@@ -373,6 +373,14 @@ test("joined member expiry fails closed without creating a timed ban", { skip: !
     const saved = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } });
     assert.equal(saved.revokedAt, null);
     assert.equal(saved.revocationLastError, "MEMBER_MODERATION_REVIEW_REQUIRED");
+    assert.equal(saved.revocationNextAttemptAt.toISOString(), "2100-01-01T00:00:00.000Z");
+    const notices = await prisma.ownerNotification.findMany({
+      where: { projectId: saved.subscriptionId ? (await prisma.subscription.findUniqueOrThrow({
+        where: { id: subscription.id }, select: { projectId: true }
+      })).projectId : "" , eventType: "ACCESS_MODERATION_REVIEW" }
+    });
+    assert.ok(notices.length > 0, "review must be durably visible to a project owner");
+    assert.ok(notices.every((notice) => notice.messageText.includes(customer.telegramUserId.toString())));
     assert.equal(await prisma.telegramRemovalIntent.count({
       where: { telegramChatId: chat.telegramChatId, telegramUserId: customer.telegramUserId }
     }), 0);
