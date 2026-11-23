@@ -331,6 +331,82 @@ test("a delayed old invite revoke cannot erase a replacement grant URL", {
   });
 });
 
+test("delayed moderator-exclusion invite cleanup cannot erase a newer manual grant", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, customer, chat, grant }) => {
+    const oldUrl = (await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id }
+    })).inviteLink;
+    await prisma.subscription.update({
+      where: { id: subscription.id },
+      data: { status: "ACTIVE", endsAt: new Date(Date.now() + 30 * 86_400_000) }
+    });
+    await prisma.subscriptionAccessGrant.update({
+      where: { id: grant.id },
+      data: { revokedAt: new Date(), revocationReason: "ADMIN_EXCLUDED" }
+    });
+    const revokeStarted = deferred();
+    const releaseRevoke = deferred();
+    const replacementUrl = "https://t.me/+manual-regrant-" + randomUUID();
+    const revokedUrls: string[] = [];
+    const bot = {
+      api: {
+        revokeChatInviteLink: async (_chatId: string, url: string) => {
+          revokedUrls.push(url);
+          revokeStarted.resolve();
+          await releaseRevoke.promise;
+          return true;
+        },
+        getChatMember: async () => { throw new Error("moderator exclusion cleanup must not inspect membership"); },
+        banChatMember: async () => { throw new Error("moderator exclusion cleanup must not ban"); },
+        unbanChatMember: async () => { throw new Error("moderator exclusion cleanup must not unban"); }
+      }
+    } as unknown as Bot;
+    const removal = reconcileSubscriptionAccessRemoval({
+      bot, subscriptionId: subscription.id, customerId: customer.id,
+      connectedChatId: chat.id, telegramUserId: customer.telegramUserId
+    });
+    try {
+      await Promise.race([
+        revokeStarted.promise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("moderator-exclusion cleanup did not start")), 5_000))
+      ]);
+      await prisma.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe(
+          'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+          subscription.id
+        );
+        await lockSubscriptionAccessScope(tx, customer.id, chat.id);
+        await tx.subscriptionAccessGrant.update({
+          where: { id: grant.id },
+          data: {
+            revokedAt: null,
+            revocationReason: null,
+            inviteLink: replacementUrl,
+            expiresAt: new Date(Date.now() + 86_400_000),
+            joinedAt: null
+          }
+        });
+        await requestSubscriptionAccessReconciliation(tx, customer.id, [chat.id]);
+      });
+      releaseRevoke.resolve();
+      assert.equal(await removal, "LEASE_LOST");
+      assert.deepEqual(revokedUrls, [oldUrl]);
+      const saved = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+        where: { id: grant.id }
+      });
+      assert.equal(saved.inviteLink, replacementUrl);
+      assert.equal(saved.revokedAt, null);
+      assert.equal(saved.revocationReason, null);
+    } finally {
+      releaseRevoke.resolve();
+      await removal.catch(() => undefined);
+    }
+  });
+});
+
 test("an overlapping active subscription preserves chat membership during another expiry", {
   skip: !process.env.DATABASE_URL
 }, async () => {
