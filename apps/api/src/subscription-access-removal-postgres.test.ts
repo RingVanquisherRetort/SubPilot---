@@ -844,7 +844,7 @@ test("a recurring Stars payment arriving during admin cancellation is recorded b
 test("the authenticated Stars refund handler reconciles the charge once and ignores duplicate delivery", {
   skip: !process.env.DATABASE_URL
 }, async () => {
-  await withFixture(async ({ subscription, project, customer, chat, grant }) => {
+  await withFixture(async ({ subscription, project, customer, chat }) => {
     const charge = "refund-handler-" + randomUUID();
     const startsAt = new Date(Date.now() - 30 * 86_400_000);
     const endsAt = new Date(Date.now() + 30 * 86_400_000);
@@ -886,7 +886,7 @@ test("the authenticated Stars refund handler reconciles the charge once and igno
     });
     assert.equal(refunded.status, "REFUNDED");
     assert.equal(expired.status, "EXPIRED");
-    assert.equal(expired.endsAt?.toISOString(), new Date().toISOString().slice(0, 0) + expired.endsAt?.toISOString());
+    assert.ok(expired.endsAt);
     assert.equal(scope.desiredRevision, 1n);
 
     await processRefundedStarsPayment("source-bot", context);
@@ -896,6 +896,5 @@ test("the authenticated Stars refund handler reconciles the charge once and igno
     });
     assert.equal(duplicate.status, "EXPIRED");
     assert.equal(duplicateScope.desiredRevision, 1n);
-    assert.ok(grant.id);
   });
 });
