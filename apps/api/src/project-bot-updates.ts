@@ -919,6 +919,26 @@ export async function deliverSubscriptionAccess(
         results.failed.push(label);
         continue;
       }
+      // An older request may still remove a user whom getChatMember currently
+      // reports as present. Keep the revision dirty until the timed removal ends.
+      // Other bots in this chat observe the same Telegram membership.
+      const pendingRemoval = await prisma.telegramRemovalIntent.findFirst({
+        where: {
+          telegramChatId: chat.telegramChatId,
+          telegramUserId: subscription.customer.telegramUserId,
+          untilDate: { gte: Math.floor(Date.now() / 1000) }
+        },
+        orderBy: { untilDate: "desc" },
+        select: { untilDate: true }
+      });
+      if (pendingRemoval) {
+        await failSubscriptionAccessScope(prisma, lease, {
+          retryAt: new Date((pendingRemoval.untilDate + 1) * 1000),
+          errorCode: "TIMED_REMOVAL_PENDING"
+        });
+        results.failed.push(label);
+        continue;
+      }
       let isAlreadyMember = false;
       let isBanned = false;
       try {

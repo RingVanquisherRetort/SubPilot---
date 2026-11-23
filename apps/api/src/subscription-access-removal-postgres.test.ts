@@ -1,6 +1,6 @@
 import { queueBuyerRenewal, applyBuyerRenewal } from "./buyer-stars-renewal.js";
 import { reconcileLateStarsCancellation } from "./late-stars-cancellation.js";
-import { validatePreCheckout } from "./project-bot-updates.js";
+import { deliverSubscriptionAccess, validatePreCheckout } from "./project-bot-updates.js";
 import { hasActiveInviteEntrantGrant } from "./invite-entry-entitlement.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -8,6 +8,7 @@ import { test } from "node:test";
 import type { Bot } from "grammy";
 import { prisma } from "@subpilot/database";
 import {
+  claimSubscriptionAccessScope,
   lockSubscriptionAccessScope,
   requestSubscriptionAccessReconciliation
 } from "@subpilot/payments";
@@ -403,13 +404,20 @@ test("late Stars cancellation survives an ambiguous Telegram reply without reope
   });
 });
 
-test("renewal during an in-flight Telegram ban keeps the grant active and queues repair", { skip: !process.env.DATABASE_URL }, async () => {
+test("renewal during an in-flight Telegram ban waits out the removal then offers a fresh return invite", { skip: !process.env.DATABASE_URL }, async () => {
   await withFixture(async ({ subscription, customer, chat, grant }) => {
     const botId = 64832n;
     let bans = 0;
+    let membership: "member" | "left" = "member";
+    let membershipReads = 0;
+    let invites = 0;
+    const link = "https://t.me/+return-" + randomUUID();
+    const scopeKey = { customerId_connectedChatId: { customerId: customer.id, connectedChatId: chat.id } };
+    const reconcile = () => deliverSubscriptionAccess(bot, subscription.id, [String(chat.telegramChatId)]);
     const bot = { token: "64832:test", api: {
       revokeChatInviteLink: async () => true,
-      getChatMember: async () => ({ status: "member" }),
+      getChatMember: async () => { membershipReads++; return { status: membership }; },
+      createChatInviteLink: async () => { invites++; return { invite_link: link }; },
       banChatMember: async () => {
         bans++;
         await prisma.$transaction(async tx => {
@@ -418,6 +426,17 @@ test("renewal during an in-flight Telegram ban keeps the grant active and queues
           await tx.subscription.update({ where: { id: subscription.id }, data: { status: "ACTIVE", endsAt: new Date(Date.now() + 86_400_000) } });
           await requestSubscriptionAccessReconciliation(tx, customer.id, [chat.id]);
         });
+        // A replacement worker runs while the old Telegram request is outstanding.
+        await prisma.subscriptionAccessScope.update({ where: scopeKey, data: { leaseExpiresAt: new Date(0) } });
+        const reads = membershipReads;
+        const early = await reconcile();
+        assert.equal(early.alreadyJoined.length, 0);
+        assert.equal(early.links.length, 0);
+        assert.equal(membershipReads, reads);
+        const waiting = await prisma.subscriptionAccessScope.findUniqueOrThrow({ where: scopeKey });
+        assert.equal(waiting.lastErrorCode, "TIMED_REMOVAL_PENDING");
+        assert.ok(waiting.nextAttemptAt && waiting.nextAttemptAt > new Date());
+        membership = "left";
         return true;
       }
     } } as unknown as Bot;
@@ -432,6 +451,22 @@ test("renewal during an in-flight Telegram ban keeps the grant active and queues
         where: { customerId_connectedChatId: { customerId: customer.id, connectedChatId: chat.id } }
       });
       assert.ok(scope.desiredRevision > scope.appliedRevision);
+      // Advance only the stored deadlines so the restarted worker can claim its persisted job.
+      await prisma.telegramRemovalIntent.updateMany({ where: { botId, telegramChatId: chat.telegramChatId },
+        data: { untilDate: Math.floor(Date.now() / 1000) - 1 } });
+      await prisma.subscriptionAccessScope.update({ where: scopeKey, data: { nextAttemptAt: new Date(0) } });
+      const lease = await claimSubscriptionAccessScope(prisma, customer.id, chat.id);
+      assert.ok(lease);
+      const repaired = await deliverSubscriptionAccess(bot, subscription.id, [String(chat.telegramChatId)], () => true, lease);
+      assert.equal(repaired.links.length, 1);
+      assert.ok(repaired.links[0]?.endsWith(link));
+      assert.equal(invites, 1);
+      const ready = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } });
+      assert.equal(ready.joinedAt, null);
+      assert.equal(ready.inviteLink, link);
+      assert.equal(ready.revokedAt, null);
+      const settled = await prisma.subscriptionAccessScope.findUniqueOrThrow({ where: scopeKey });
+      assert.equal(settled.appliedRevision, settled.desiredRevision);
     } finally {
       await prisma.telegramRemovalIntent.deleteMany({ where: { botId, telegramChatId: chat.telegramChatId } });
     }
@@ -502,5 +537,29 @@ test("ambiguous buyer cancellation retries against the original charge and prese
     assert.deepEqual(saved.endsAt, endsAt);
     assert.equal(saved.telegramStarSubscriptionState, "CANCELED");
     assert.equal(calls, 2);
+  });
+});
+
+test("a moderator ban surviving the timed removal blocks a paid member's return invite", { skip: !process.env.DATABASE_URL }, async () => {
+  await withFixture(async ({ subscription, customer, chat, grant }) => {
+    const where = { botId: 64832n, telegramChatId: chat.telegramChatId, telegramUserId: customer.telegramUserId };
+    await prisma.subscription.update({ where: { id: subscription.id }, data: { status: "ACTIVE", endsAt: new Date(Date.now() + 86_400_000) } });
+    await prisma.telegramRemovalIntent.create({ data: { ...where, untilDate: Math.floor(Date.now() / 1000) - 1 } });
+    const calls: string[] = [];
+    const bot = { api: {
+      getChatMember: async () => { calls.push("lookup"); return { status: "kicked", until_date: 0 }; },
+      unbanChatMember: async () => { calls.push("unban"); return true; },
+      createChatInviteLink: async () => { calls.push("invite"); return { invite_link: "unused" }; }
+    } } as unknown as Bot;
+    try {
+      const result = await deliverSubscriptionAccess(bot, subscription.id, [String(chat.telegramChatId)]);
+      assert.deepEqual(calls, ["lookup"]);
+      assert.equal(result.links.length, 0);
+      assert.equal(result.failed.length, 1);
+      const row = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } });
+      assert.equal(row.deliveryLastError, "SUBSCRIBER_ADMIN_BANNED");
+    } finally {
+      await prisma.telegramRemovalIntent.deleteMany({ where });
+    }
   });
 });

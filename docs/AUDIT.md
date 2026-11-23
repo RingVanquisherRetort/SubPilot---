@@ -158,3 +158,7 @@ Failed compensation for a known invite URL is durable and retried with the origi
 The buyer callback records the requested auto-renewal state against the paid subscription, original charge and issuing bot. The callback and lifecycle runner share the same conditional claim. Telegram I/O takes place after that claim commits. An ambiguous result is eligible for replay after five minutes. Manual revocation supersedes the buyer intent in its own transaction. A late worker response schedules another application of the latest intent. The buyer worker only updates renewal metadata and preserves the paid access period.
 
 The migration is additive. Drain pending requests before rolling back to a runner that cannot consume them. Outstanding acceptance includes ambiguous repeated responses in Telegram, process death with an externally delayed request, and operator handling of persistent failures. AUD-018 remains open.
+
+### Renewal during a timed removal
+
+Delivery checks the durable removal intent for the Telegram user and chat before observing membership. While the removal deadline is pending it releases the scope lease and schedules another observation after the deadline. This covers a replacement worker running before an old ban request returns. Recovery re-reads Telegram membership and can offer a fresh invite to an absent paid member. A remaining Telegram ban still blocks delivery. The customer must accept the return invite. Delivery of the notification and live Telegram timing remain separate acceptance items.

@@ -151,3 +151,5 @@ Initial research candidates for creators who are individuals: YooMoney, Crypto P
 
 - [x] Persist buyer Stars renewal changes and replay them with the original bot. Fence local confirmation when administrative cancellation supersedes a buyer request.
 - [ ] Verify Telegram responses to repeated renewal requests in a dedicated acceptance environment and define operator recovery for permanent rejection.
+
+- [x] Recheck paid access after an in-flight timed removal expires and exercise the return-invite path in PostgreSQL.

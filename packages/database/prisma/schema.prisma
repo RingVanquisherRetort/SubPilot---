@@ -726,6 +726,7 @@ model TelegramRemovalIntent {
   telegramUserId BigInt
   untilDate      Int
   @@id([botId, telegramChatId, telegramUserId, untilDate])
+  @@index([telegramChatId, telegramUserId, untilDate], map: "TelegramRemovalIntent_membership_deadline_idx")
 }
 
 model InviteCompensation {
