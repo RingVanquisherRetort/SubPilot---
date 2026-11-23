@@ -17,3 +17,13 @@ export function getInvoiceDispatchState(metadata: unknown): InvoiceDispatchState
 export function hasInvoiceDispatchStarted(metadata: unknown): boolean {
   return getInvoiceDispatchState(metadata) !== "NOT_STARTED";
 }
+
+
+/**
+ * A dispatch marker means Telegram may already have a payable invoice.
+ * Without a Telegram cancellation primitive, never expire it locally and issue
+ * a replacement invoice automatically.
+ */
+export function shouldCancelStalePendingPayment(metadata: unknown): boolean {
+  return getInvoiceDispatchState(metadata) === "NOT_STARTED";
+}
