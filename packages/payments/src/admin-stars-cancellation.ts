@@ -107,7 +107,7 @@ export async function reconcileAdminStarsCancellation(
       const failed = await tx.subscription.updateMany({
         where: {
           id: subscriptionId,
-          status: "ACTIVE",
+          status: { in: ["ACTIVE", "EXPIRED", "CANCELLED"] },
           adminStarsCancelPending: true,
           adminStarsCancelClaim: claim,
           telegramStarInitialChargeId: snapshot.chargeId
