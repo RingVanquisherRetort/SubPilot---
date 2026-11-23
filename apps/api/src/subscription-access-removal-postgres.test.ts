@@ -2330,6 +2330,55 @@ test("two operators confirming the same absence produce one revocation and audit
   });
 });
 
+test("parked moderation review survives a failed Telegram lookup and a fresh operator retry", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ grant, project }) => {
+    const owner = await prisma.project.findUniqueOrThrow({
+      where: { id: project.id },
+      select: { workspace: { select: { createdById: true } } }
+    });
+    const actor = owner.workspace.createdById;
+    await prisma.subscriptionAccessGrant.update({
+      where: { id: grant.id },
+      data: {
+        inviteLink: "",
+        revocationLastError: "MEMBER_MODERATION_REVIEW_REQUIRED"
+      }
+    });
+    // The failed request is not allowed to acknowledge or consume the case.
+    const unavailableBot = { api: {
+      getChatMember: async () => { throw new Error("Telegram temporarily unavailable"); }
+    } } as unknown as Bot;
+    assert.equal(await confirmPendingAccessModerationReview(
+      project.id, actor, grant.id, unavailableBot
+    ), "TELEGRAM_CHECK_FAILED");
+    assert.equal((await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id }
+    })).revokedAt, null);
+    const pending = await listPendingAccessModerationReviews(project.id, actor);
+    assert.ok(pending?.some((item) => item.grantId === grant.id));
+
+    // Simulate a fresh operator invocation: no process-local state or cached
+    // membership response is needed to resume the durable review.
+    const recoveredBot = { api: {
+      getChatMember: async () => ({ status: "left" })
+    } } as unknown as Bot;
+    assert.equal(await confirmPendingAccessModerationReview(
+      project.id, actor, grant.id, recoveredBot
+    ), "CONFIRMED");
+    assert.equal(await confirmPendingAccessModerationReview(
+      project.id, actor, grant.id, recoveredBot
+    ), "NO_LONGER_PENDING");
+    assert.equal(await prisma.auditLog.count({
+      where: { projectId: project.id, resourceId: grant.id,
+        action: "ACCESS_MODERATION_REVIEW_CONFIRMED" }
+    }), 1);
+    assert.ok(!(await listPendingAccessModerationReviews(project.id, actor))
+      ?.some((item) => item.grantId === grant.id));
+  });
+});
+
 test("control bot exposes parked cases through the project menu and handles a disconnected project bot", {
   skip: !process.env.DATABASE_URL
 }, async () => {
