@@ -401,6 +401,13 @@ model Subscription {
   @@index([lateStarsCancelDueAt])
   lateStarsCancelDueAt DateTime?
   lateStarsCancelBotId String?
+  adminStarsCancelPending Boolean @default(false)
+  adminStarsCancelDueAt DateTime?
+  adminStarsCancelBotId String?
+  adminStarsCancelClaim String?
+  adminStarsCancelActorUserId String?
+  adminStarsCancelWorkspaceId String?
+  @@index([adminStarsCancelDueAt])
   telegramStarInitialChargeId String? @unique
   telegramStarSubscriptionState TelegramStarSubscriptionState?
   telegramStarSubscriptionLastUpdateId Int?
