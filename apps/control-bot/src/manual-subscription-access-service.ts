@@ -500,7 +500,9 @@ export async function revokeSubscriptionAccessManually(
           adminStarsCancelBotId: projectBotId,
           adminStarsCancelClaim: null,
           adminStarsCancelActorUserId: input.actorUserId,
-          adminStarsCancelWorkspaceId: input.workspaceId
+          adminStarsCancelWorkspaceId: input.workspaceId,
+          adminStarsCancelAttempts: 0,
+          adminStarsCancelLastError: null
         }
       });
       if (!target.adminStarsCancelPending) {
