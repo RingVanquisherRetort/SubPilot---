@@ -1,7 +1,7 @@
 # AUD-018 — verified source inventory (2026-11-23)
 
 Reviewed branch: `feat/subscription-lifecycle-ui`  
-Reviewed HEAD: `7e77c2ebaab91b8b88d2a4a091741b9a6d7cfd88`  
+Reviewed HEAD: `05e239d576bc41603c37ebb3f2badb38f5dc24da`  
 Status: **OPEN — CI green at reviewed HEAD; source review and live Telegram acceptance remain open**
 
 This document records only behavior verified in the source at the exact HEAD above. It is not a claim that every access-changing callsite in the repository has been exhaustively enumerated.
@@ -27,32 +27,38 @@ This document records only behavior verified in the source at the exact HEAD abo
 - A surviving Telegram ban blocks the return invite; the PostgreSQL test named `a moderator ban surviving the timed removal blocks a paid member's return invite` asserts no unban or invite call.
 - Buyer Stars renewal and late initial Stars cancellation now use durable due/claim state and execute Telegram I/O outside the transaction. The older statement that these two project-bot calls remain inside interactive transactions is stale for this HEAD.
 
-## Second-pass source findings at HEAD `7e77c2e`
+## Second-pass source findings at HEAD `05e239d`
 
 - **Webhook invite revocation:** the admin-exclusion handler does acquire the customer/chat advisory lock while changing the grant and increments the durable desired revision in the same transaction. It then revokes the captured invite URL outside a claimed lease. The wrong-user and stale-entry handlers likewise target a captured URL; their later database transitions compare that URL against the current grant before clearing it. This is weaker than a full lease protocol, but it is not evidence that a stale webhook can revoke a different replacement URL. The remaining requirement is a deterministic delayed-old-revoke/replacement-link test, not an unproven assertion that all such calls are unsafe.
 - **Invite-create unknown result:** the code requests a 24-hour expiry and member_limit 1; the link is sent to the buyer only after its URL is persisted and the current lease is revalidated. If Telegram creates the link but its response is lost, SubPilot never learns or sends that URL, so it cannot revoke it. This is an irreducible orphan-resource window with a bounded Telegram expiry, not a demonstrated buyer-access leak. Preserve this limitation in the operational policy; do not claim exact cleanup is possible.
 - **Manual recurring revoke:** the control-bot path correctly keeps Telegram I/O outside DB transactions and rechecks admin rights, subscription identity and charge anchor before committing. If the process dies after Telegram confirms cancellation but before the second transaction commits, the local subscription remains active. The authenticated Telegram star_subscription update can set telegramStarSubscriptionState=CANCELED; a later manual retry then skips the remote call. This recovery dependency needs a PostgreSQL test covering both webhook-before-retry and delayed/missing-webhook behavior.
+- **Stars subscription webhook routing:** the authenticated top-level subscription update is parsed and persisted directly. It now returns before grammY's ordinary update dispatcher, which does not route this custom update type and otherwise can throw when botInfo is not initialized. The PostgreSQL test exercises cancellation persistence and rejects an older subsequent update.
+- **Manual revoke recovery test:** a simulated lost Telegram response leaves the local subscription active; after the authenticated webhook state is projected as CANCELED, retry completes the local administrative revoke without issuing another Telegram cancellation.
+- **Invite-create lost-response test:** a simulated remote acceptance followed by a lost response returns no buyer link, leaves the grant URL empty, and confirms there is no URL available for compensation.
 - **Stars retry state:** buyer renewal and late initial cancellation persist due/claim state before Telegram I/O. The late-cancellation PostgreSQL test already simulates a lost response after remote success and proves the cancelled subscription is not reopened. Broader buyer cancel/resume, payment webhook and admin-revoke orderings remain unproven.
 
 ## Latest CI validation
 
-GitHub Actions run [45122005897](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45122005897) completed successfully for this exact HEAD: validate passed typecheck and unit tests; upgrade-validation passed legacy schema recreation, forward migrations, data/backfill checks and migration-history verification. This is CI evidence only; no live Telegram/payment API was called.
+GitHub Actions run [45123755090](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45123755090) completed successfully for code HEAD `05e239d`: validate passed typecheck and unit tests; upgrade-validation passed legacy schema recreation, forward migrations, data/backfill checks and migration-history verification. This is CI evidence only; no live Telegram/payment API was called.
 
 ## P0 risks still open
 
-1. **Remote moderation interleaving during a timed ban.** The DB lease cannot be passed to Telegram as a fencing token. The current five-minute ban is a remote side effect that may still be outstanding after local ownership/revision changes. Existing tests cover a replacement worker waiting on a persisted removal intent and a moderator ban that remains after the timed removal; they do not prove every ordering of a moderator action against a delayed/in-flight Telegram ban request. Do not claim this race is eliminated.
-2. **Stars/payment ordering and manual revoke recovery.** Add PostgreSQL races for payment webhook vs administrative revoke, buyer cancel/resume vs manual revoke, delayed remote responses and duplicate/reordered events. Test manual revoke process death after Telegram success both with and without the corresponding star_subscription webhook arriving before retry.
-3. **Webhook URL-generation regression coverage.** The webhook paths revoke captured invite URLs outside a claimed scope lease. The source has compare-before-clear checks, so do not assume a newer URL can be revoked; add delayed-response tests proving replacement URLs and newer entitlement state survive.
-4. **Invite-create unknown-result window (bounded residual).** If Telegram creates a link but the response is lost, SubPilot cannot know or revoke the URL. Because the current request is one-member, expires after 24 hours, and is not sent before persistence, document this as an untracked expiring resource rather than claim a fully preventable access leak.
+1. **Remote moderation interleaving during a timed ban.** The DB lease cannot be passed to Telegram as a fencing token. A five-minute ban request may still be outstanding after local ownership/revision changes. Existing tests cover a replacement worker waiting on a persisted removal intent, a moderator exclusion committed while the timed ban is in flight, and a moderator ban that remains after the timed removal; they do not prove every Telegram-side ordering of a moderator action against a delayed ban request. Do not claim this race is eliminated.
+2. **Stars/payment ordering and manual revoke recovery.** PostgreSQL coverage now proves the webhook's CANCELED state projection, stale-update rejection, and retry recovery when that state arrives before the operator retry. Still required are payment webhook vs administrative revoke, buyer cancel/resume vs manual revoke, delayed remote responses, duplicate/reordered events, and the manual-revoke path when the webhook is delayed or absent.
+
+## P1 / bounded residuals
+
+1. **Webhook invite URL-generation coverage.** Admin-exclusion and wrong-user/stale-entry handlers revoke captured invite URLs outside a claimed scope lease. The source compares the same URL before local cleanup, so a stale request is not shown to revoke a different replacement URL. Add a delayed-old-URL/replacement-URL test to verify that guarantee.
+2. **Invite-create unknown-result window.** If Telegram creates a link but the response is lost, SubPilot cannot know or revoke the URL. The request is one-member, expires after 24 hours, and the URL is not sent before persistence. A PostgreSQL regression test now proves that no URL is exposed or falsely queued for compensation in this case. Keep this as a bounded orphan-resource limitation in the operational policy.
 
 ## Required next engineering steps
 
 1. Add deterministic tests for delayed/in-flight timed ban versus moderator permanent ban, renewal/new scope revision and stale worker response. If Telegram semantics cannot guarantee moderator precedence, document the safest product behavior rather than claiming a DB lease can fence Telegram.
-2. Add crash-boundary tests for invite creation: before request, accepted-but-response-lost, URL received but DB write failed, lease superseded and compensation failure. Keep the 24-hour/one-member/not-sent-before-persistence bounds explicit.
-3. Add webhook race tests where an old invite revoke is delayed while a manual re-grant and replacement invite are committed; prove the replacement URL and newer grant state survive.
-4. Add PostgreSQL concurrency and process-recovery tests for Stars/payment webhook/manual revoke, including the star_subscription update arriving before and after retry.
-5. Re-run complete CI on the final audited SHA. No P0 closure, merge to `main`, or production deployment is authorized by this document.
-
+2. Add PostgreSQL concurrency and recovery tests for Stars/payment webhook/manual revoke: payment webhook versus admin revoke, buyer cancel/resume versus manual revoke, delayed remote responses, duplicate/reordered events, and webhook arriving after the retry has already begun.
+3. Add a delayed old-invite-revoke versus manual re-grant/replacement-invite test; prove the new URL and newer grant state survive.
+4. Preserve the documented 24-hour/one-member/not-sent-before-persistence bound for the create-invite unknown-result case.
+5. Re-run complete CI on any later code change. No P0 closure, merge to `main`, or production deployment is authorized by this document.
+ 
 ## Validation boundary
 
 The branch source was inspected through GitHub at the SHA above. No local test command was run as part of this source inventory, no live Telegram/payment API was contacted, and no production data or secrets were accessed.
