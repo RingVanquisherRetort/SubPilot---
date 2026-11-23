@@ -1,3 +1,4 @@
+import { validatePreCheckout } from "./project-bot-updates.js";
 import { hasActiveInviteEntrantGrant } from "./invite-entry-entitlement.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -324,5 +325,25 @@ test("an entrant using another buyer's invite is checked against their own activ
     assert.equal(await hasActiveInviteEntrantGrant(project.id, chat.id, customer.telegramUserId + 1n), false);
     await prisma.subscriptionAccessGrant.update({ where: { id: grant.id }, data: { revokedAt: new Date(), revocationReason: "ADMIN_REVOKED" } });
     assert.equal(await allowed(), false);
+  });
+});
+
+test("Stars pre-checkout rejects mixed legacy destinations and preserves existing grants", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, customer, project, chat, grant }) => {
+    const second = await prisma.connectedChat.create({
+      data: { projectId: project.id, telegramChatId: chat.telegramChatId + 1n, type: "SUPERGROUP", isActive: true }
+    });
+    const payment = await prisma.payment.create({ data: {
+      projectId: project.id, customerId: customer.id, subscriptionId: subscription.id,
+      amount: "100", currency: "XTR", provider: "TELEGRAM_STARS", status: "PENDING",
+      idempotencyKey: randomUUID(), metadata: { projectBotId: "source", chatIds: [String(chat.telegramChatId), String(second.telegramChatId)] }
+    } });
+    const query = { invoice_payload: payment.id, from: { id: Number(customer.telegramUserId) }, currency: "XTR", total_amount: 100 };
+    assert.equal(await validatePreCheckout(query, project.id, "source"), true);
+    await prisma.connectedChat.update({ where: { id: second.id }, data: { type: "GROUP" } });
+    assert.equal(await validatePreCheckout(query, project.id, "source"), false);
+    assert.equal((await prisma.subscriptionAccessGrant.findUniqueOrThrow({where: {id: grant.id}})).revokedAt, null);
   });
 });

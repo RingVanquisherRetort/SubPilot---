@@ -420,7 +420,7 @@ async function createPurchaseInvoice(
   }
 }
 
-async function validatePreCheckout(
+export async function validatePreCheckout(
   query: {
     invoice_payload: string;
     from: { id: number };
