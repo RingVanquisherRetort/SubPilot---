@@ -41,6 +41,10 @@ export async function reconcileAdminStarsCancellation(
         adminStarsCancelPending: true,
         adminStarsCancelDueAt: true,
         adminStarsCancelBotId: true,
+        adminStarsCancelAttempts: true,
+        adminStarsCancelActorUserId: true,
+        adminStarsCancelWorkspaceId: true,
+        project: { select: { id: true } },
         customer: { select: { id: true, telegramUserId: true } }
       }
     });
@@ -71,6 +75,10 @@ export async function reconcileAdminStarsCancellation(
       chargeId: current.telegramStarInitialChargeId,
       telegramUserId: current.customer.telegramUserId,
       customerId: current.customer.id,
+      projectId: current.project.id,
+      attempts: current.adminStarsCancelAttempts,
+      actorUserId: current.adminStarsCancelActorUserId,
+      workspaceId: current.adminStarsCancelWorkspaceId,
       alreadyCanceled: current.telegramStarSubscriptionState === "CANCELED"
     };
   });
@@ -78,10 +86,8 @@ export async function reconcileAdminStarsCancellation(
   if (!snapshot) return false;
 
   const userId = Number(snapshot.telegramUserId);
-  if (!Number.isSafeInteger(userId) || userId <= 0) return false;
-
   let confirmed = snapshot.alreadyCanceled;
-  if (!confirmed) {
+  if (!confirmed && Number.isSafeInteger(userId) && userId > 0) {
     try {
       confirmed = await cancel({
         user_id: userId,
@@ -93,7 +99,49 @@ export async function reconcileAdminStarsCancellation(
       // after the claim lease and a retry repeats the idempotent desired state.
     }
   }
-  if (!confirmed) return false;
+  if (!confirmed) {
+    const attempts = snapshot.attempts + 1;
+    const exhausted = attempts >= 10;
+    const retryDelay = Math.min(60 * 60_000, 30_000 * 2 ** Math.min(attempts - 1, 6));
+    await prisma.$transaction(async (tx) => {
+      const failed = await tx.subscription.updateMany({
+        where: {
+          id: subscriptionId,
+          status: "ACTIVE",
+          adminStarsCancelPending: true,
+          adminStarsCancelClaim: claim,
+          telegramStarInitialChargeId: snapshot.chargeId
+        },
+        data: {
+          adminStarsCancelAttempts: attempts,
+          adminStarsCancelLastError: "TELEGRAM_CANCEL_UNCONFIRMED",
+          adminStarsCancelClaim: null,
+          adminStarsCancelDueAt: exhausted ? null : new Date(Date.now() + retryDelay)
+        }
+      });
+      if (failed.count === 1 && exhausted && snapshot.workspaceId) {
+        const actor = snapshot.actorUserId
+          ? await tx.user.findUnique({ where: { id: snapshot.actorUserId }, select: { id: true } })
+          : null;
+        await tx.auditLog.create({
+          data: {
+            workspaceId: snapshot.workspaceId,
+            projectId: snapshot.projectId,
+            actorUserId: actor?.id ?? null,
+            action: "SUBSCRIPTION_ACCESS_REVOKE_RETRY_EXHAUSTED",
+            resourceType: "Subscription",
+            resourceId: subscriptionId,
+            metadata: {
+              recurringRenewalCancelled: false,
+              attempts,
+              errorCode: "TELEGRAM_CANCEL_UNCONFIRMED"
+            }
+          }
+        });
+      }
+    });
+    return false;
+  }
 
   return prisma.$transaction(async (tx) => {
     await tx.$queryRawUnsafe(
@@ -150,6 +198,8 @@ export async function reconcileAdminStarsCancellation(
         adminStarsCancelClaim: null,
         adminStarsCancelActorUserId: null,
         adminStarsCancelWorkspaceId: null,
+        adminStarsCancelAttempts: 0,
+        adminStarsCancelLastError: null,
         ...(current.buyerStarsChargeId === snapshot.chargeId
           ? { buyerStarsCanceled: true, buyerStarsDueAt: finalizedAt, buyerStarsClaim: null }
           : {})
