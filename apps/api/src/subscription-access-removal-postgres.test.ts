@@ -1730,15 +1730,23 @@ test("a fresh process reconciles a confirmed Telegram ban after SIGKILL and natu
       assert.ok(scope.leaseExpiresAt);
       // Allow for database/runner clock skew and lease expiry visibility on CI.
       await delay(Math.max(0, scope.leaseExpiresAt.getTime() - Date.now()) + 1_500);
-      const successor = start();
-      try {
-        let result: unknown;
-        successor.on("message", value => { result = value; });
-        assert.deepEqual(await once(successor, "exit"), [0, null]);
-        assert.equal(result, "FAILED"); // Deliberate escalation to the owner.
-      } finally {
-        if (successor.exitCode === null && successor.signalCode === null) successor.kill("SIGKILL");
+      // A replacement may race with the database lease deadline. Retry only
+      // LEASE_BUSY in a fresh process; no Telegram mutation should occur then.
+      let recoveredResult: unknown;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const successor = start();
+        try {
+          let result: unknown;
+          successor.on("message", value => { result = value; });
+          assert.deepEqual(await once(successor, "exit"), [0, null]);
+          recoveredResult = result;
+        } finally {
+          if (successor.exitCode === null && successor.signalCode === null) successor.kill("SIGKILL");
+        }
+        if (recoveredResult !== "LEASE_BUSY") break;
+        await delay(2_000);
       }
+      assert.equal(recoveredResult, "FAILED"); // Deliberate escalation to the owner.
       const recovered = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where });
       assert.equal(recovered.revocationLastError, "MEMBER_BAN_OWNERSHIP_UNCERTAIN");
       assert.equal(recovered.revokedAt, null);
