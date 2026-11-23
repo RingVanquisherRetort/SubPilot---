@@ -407,6 +407,8 @@ model Subscription {
   adminStarsCancelClaim String?
   adminStarsCancelActorUserId String?
   adminStarsCancelWorkspaceId String?
+  adminStarsCancelAttempts Int @default(0)
+  adminStarsCancelLastError String?
   @@index([adminStarsCancelDueAt])
   telegramStarInitialChargeId String? @unique
   telegramStarSubscriptionState TelegramStarSubscriptionState?
