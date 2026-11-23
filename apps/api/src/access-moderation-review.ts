@@ -97,7 +97,35 @@ export async function inspectPendingAccessModerationReview(
 > {
   const authorizedQueue = await listPendingAccessModerationReviews(projectId, actorUserId, 100);
   if (authorizedQueue === null) return { state: "UNAUTHORIZED" };
-  const row = authorizedQueue.find((item) => item.grantId === grantId);
+  // A case may fall beyond the first 100 entries; do not confuse pagination
+  // with authorization or with the absence of a pending review.
+  let row = authorizedQueue.find((item) => item.grantId === grantId);
+  if (!row) {
+    const direct = await prisma.subscriptionAccessGrant.findFirst({
+      where: {
+        id: grantId, revokedAt: null,
+        revocationLastError: {
+          in: ["MEMBER_MODERATION_REVIEW_REQUIRED", "MEMBER_BAN_OWNERSHIP_UNCERTAIN", "LEGACY_GROUP_REMOVAL_REVIEW"]
+        },
+        subscription: {
+          projectId,
+          OR: [
+            { status: "EXPIRED" },
+            { status: "CANCELLED" },
+            { status: "ACTIVE", endsAt: { lte: new Date() } }
+          ]
+        }
+      },
+      select: {
+        connectedChat: { select: { telegramChatId: true } },
+        subscription: { select: { customer: { select: { telegramUserId: true } } } }
+      }
+    });
+    if (direct) row = {
+      telegramChatId: direct.connectedChat.telegramChatId.toString(),
+      telegramUserId: direct.subscription.customer.telegramUserId.toString()
+    } as (typeof authorizedQueue)[number];
+  }
   if (!row) {
     const renewed = await prisma.subscriptionAccessGrant.findFirst({
       where: { id: grantId, subscription: { projectId } },
