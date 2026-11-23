@@ -1404,12 +1404,23 @@ export function createControlBot(token: string): Bot {
       orderBy: [{ isActive: "desc" }, { title: "asc" }],
       take: 30
     });
+    const projectBot = await prisma.projectBot.findFirst({
+      where: { projectId, status: "ACTIVE" },
+      select: { username: true }
+    });
+    const canManage = await canAccessProject(projectId, user.id, ADMIN_ROLES);
+    const keyboard = new InlineKeyboard();
+    if (canManage && projectBot?.username) {
+      keyboard.url("➕ Выбрать канал и добавить бота",
+        `https://t.me/${projectBot.username}?startchannel&admin=invite_users+restrict_members`).row();
+    }
+    keyboard.text("⬅️ В главное меню", "ui:home");
     const lines = chats.map((chat, i) =>
       `${i + 1}. ${chat.title ?? chat.username ?? chat.telegramChatId.toString()} — ${chat.isActive ? "активна" : "неактивна"}`
     );
     await ctx.editMessageText(
       lines.length ? `Каналы и группы «${project.name}»:\n\n${lines.join("\n")}\n\nДля активности боту нужны права приглашать пользователей и ограничивать участников. Неактивная площадка также может означать, что достигнут лимит тарифа пространства. Проверьте раздел «Тариф пространства».` : "Пока нет подключённых каналов или групп. Добавьте бота проекта администратором с правами приглашать пользователей и ограничивать участников.",
-      { reply_markup: backHomeKeyboard() }
+      { reply_markup: keyboard }
     );
   });
 
