@@ -163,6 +163,16 @@ export async function confirmPendingAccessModerationReview(
       }));
     if (!authorized) return "UNAUTHORIZED" as const;
 
+    const anchor = await tx.subscriptionAccessGrant.findUnique({
+      where: { id: grantId },
+      select: { subscriptionId: true }
+    });
+    if (!anchor) return "NO_LONGER_PENDING" as const;
+    // Match the subscription -> grant lock order used by the removal worker.
+    await tx.$queryRawUnsafe(
+      'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+      anchor.subscriptionId
+    );
     await tx.$queryRawUnsafe(
       'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE', grantId
     );
@@ -181,10 +191,6 @@ export async function confirmPendingAccessModerationReview(
       !["MEMBER_MODERATION_REVIEW_REQUIRED", "MEMBER_BAN_OWNERSHIP_UNCERTAIN", "LEGACY_GROUP_REMOVAL_REVIEW"].includes(grant.revocationLastError ?? "")) {
       return "NO_LONGER_PENDING" as const;
     }
-    await tx.$queryRawUnsafe(
-      'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
-      grant.subscriptionId
-    );
     await lockSubscriptionAccessScope(tx, grant.subscription.customerId, grant.connectedChatId);
     const now = new Date();
     const subscription = await tx.subscription.findUnique({
