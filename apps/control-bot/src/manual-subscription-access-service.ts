@@ -2,6 +2,7 @@ import { prisma } from "@subpilot/database";
 import { lockSubscriptionAccessScopes, requestSubscriptionAccessReconciliation } from "@subpilot/payments";
 import { Bot } from "grammy";
 import { decryptSecret } from "@subpilot/security";
+import { reconcileAdminStarsCancellation } from "./admin-stars-cancellation.js";
 
 type Transaction = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$use" | "$extends">;
 
@@ -452,7 +453,8 @@ export async function revokeSubscriptionAccessManually(
 
     const hasRecurringAnchor = Boolean(target.telegramStarInitialChargeId);
     let cancellation: TelegramStarRenewalCancellationInput | null = null;
-    if (target.telegramStarInitialChargeId && target.telegramStarSubscriptionState !== "CANCELED") {
+    let cancellationBotId: string | null = null;
+    if (target.telegramStarInitialChargeId) {
       const initialPayment = await tx.payment.findFirst({
         where: {
           subscriptionId: target.id,
@@ -478,11 +480,28 @@ export async function revokeSubscriptionAccessManually(
       if (!projectBot) {
         throw new ManualSubscriptionAccessError("TELEGRAM_RENEWAL_CANCEL_FAILED");
       }
-      cancellation = {
-        telegramUserId: target.customer.telegramUserId,
-        telegramPaymentChargeId: target.telegramStarInitialChargeId,
-        encryptedBotToken: projectBot.tokenEncrypted
-      };
+      cancellationBotId = projectBotId;
+      if (target.telegramStarSubscriptionState !== "CANCELED") {
+        cancellation = {
+          telegramUserId: target.customer.telegramUserId,
+          telegramPaymentChargeId: target.telegramStarInitialChargeId,
+          encryptedBotToken: projectBot.tokenEncrypted
+        };
+      }
+
+      // Persist the administrative intent before the first Telegram request.
+      // The lifecycle worker can resume it after a process crash or lost reply.
+      await tx.subscription.update({
+        where: { id: target.id },
+        data: {
+          adminStarsCancelPending: true,
+          adminStarsCancelDueAt: new Date(),
+          adminStarsCancelBotId: projectBotId,
+          adminStarsCancelClaim: null,
+          adminStarsCancelActorUserId: input.actorUserId,
+          adminStarsCancelWorkspaceId: input.workspaceId
+        }
+      });
     }
 
     return {
@@ -494,26 +513,35 @@ export async function revokeSubscriptionAccessManually(
       status: target.status,
       initialChargeId: target.telegramStarInitialChargeId,
       hasRecurringAnchor,
+      cancellationBotId,
       connectedChatIds: targetGrants.map((grant) => grant.connectedChatId),
       cancellation
     };
   }, { isolationLevel: "ReadCommitted", maxWait: 10_000, timeout: 15_000 });
 
-  let renewalCancellationConfirmed = snapshot.hasRecurringAnchor && !snapshot.cancellation;
-  if (snapshot.cancellation) {
-    try {
-      renewalCancellationConfirmed = await (dependencies.cancelTelegramRenewal ?? cancelTelegramStarRenewal)(
-        snapshot.cancellation
-      );
-    } catch {
-      renewalCancellationConfirmed = false;
-    }
+  if (snapshot.hasRecurringAnchor && snapshot.cancellationBotId) {
+    const renewalCancellationConfirmed = await reconcileAdminStarsCancellation(
+      snapshot.subscriptionId,
+      snapshot.cancellationBotId,
+      async () => {
+        if (!snapshot.cancellation) return false;
+        return (dependencies.cancelTelegramRenewal ?? cancelTelegramStarRenewal)(snapshot.cancellation);
+      }
+    );
     if (!renewalCancellationConfirmed) {
-      // Fail closed: the subscription remains active and its access is not revoked.
+      // The durable intent remains queued; the lifecycle worker retries it.
+      // Access is not revoked until Telegram confirms cancellation.
       throw new ManualSubscriptionAccessError("TELEGRAM_RENEWAL_CANCEL_FAILED");
     }
+    return {
+      subscriptionId: snapshot.subscriptionId,
+      projectName: snapshot.projectName,
+      planTitle: snapshot.planTitle,
+      recurringRenewalCancelled: true
+    };
   }
 
+  const renewalCancellationConfirmed = false;
   const now = new Date();
   return prisma.$transaction(async (tx) => {
     // Re-authorize and re-read after the external call. The subscription may
