@@ -13,7 +13,7 @@ import {
   requestSubscriptionAccessReconciliation
 } from "@subpilot/payments";
 import { reconcileSubscriptionAccessRemoval } from "./subscription-access-removal.js";
-import { listPendingAccessModerationReviews } from "./access-moderation-review.js";
+import { inspectPendingAccessModerationReview, listPendingAccessModerationReviews } from "./access-moderation-review.js";
 
 type Fixture = {
   subscription: { id: string };
@@ -669,5 +669,43 @@ test("moderation review queue is durable, project-scoped and denies unauthorized
     assert.equal((await prisma.subscriptionAccessGrant.findUniqueOrThrow({
       where: { id: grant.id }
     })).revokedAt, null, "reading the queue must not acknowledge membership removal");
+  });
+});
+
+
+test("moderation preflight is read-only and never unbans a Telegram member", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ grant, project }) => {
+    await prisma.subscriptionAccessGrant.update({
+      where: { id: grant.id },
+      data: { revocationLastError: "MEMBER_MODERATION_REVIEW_REQUIRED" }
+    });
+    const owner = await prisma.project.findUniqueOrThrow({
+      where: { id: project.id },
+      select: { workspace: { select: { createdById: true } } }
+    });
+    let lookups = 0;
+    let unbans = 0;
+    const bot = {
+      api: {
+        getChatMember: async () => { lookups += 1; return { status: "kicked" }; },
+        unbanChatMember: async () => { unbans += 1; return true; }
+      }
+    } as unknown as Bot;
+    assert.deepEqual(await inspectPendingAccessModerationReview(
+      project.id, "unauthorized", grant.id, bot
+    ), { state: "UNAUTHORIZED" });
+    assert.equal(lookups, 0);
+    const result = await inspectPendingAccessModerationReview(
+      project.id, owner.workspace.createdById, grant.id, bot
+    );
+    assert.equal(result.state, "REVIEW_REQUIRED");
+    if (result.state === "REVIEW_REQUIRED") assert.equal(result.membership, "kicked");
+    assert.equal(lookups, 1);
+    assert.equal(unbans, 0);
+    assert.equal((await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id }
+    })).revokedAt, null);
   });
 });
