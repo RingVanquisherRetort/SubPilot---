@@ -765,8 +765,10 @@ test("a recurring Stars payment arriving during admin cancellation is recorded b
       telegramStarSubscriptionState: "ACTIVE",
       adminStarsCancelPending: true,
       adminStarsCancelBotId: "source-bot",
-      adminStarsCancelDueAt: new Date(Date.now() + 300_000),
-      adminStarsCancelClaim: "in-flight-admin-claim"
+      adminStarsCancelDueAt: new Date(0),
+      adminStarsCancelClaim: null,
+      adminStarsCancelActorUserId: "test-actor",
+      adminStarsCancelWorkspaceId: "test-workspace"
     } });
     const anchor = await prisma.payment.create({ data: {
       subscriptionId: subscription.id,
@@ -790,6 +792,21 @@ test("a recurring Stars payment arriving during admin cancellation is recorded b
         chatIds: [chat.telegramChatId.toString()]
       }
     } });
+
+    const { reconcileAdminStarsCancellation } = await import("@subpilot/payments");
+    const cancellationStarted = deferred();
+    const finishCancellation = deferred();
+    const adminCancellation = reconcileAdminStarsCancellation(
+      subscription.id,
+      "source-bot",
+      async args => {
+        assert.equal(args.telegram_payment_charge_id, initialCharge);
+        cancellationStarted.resolve();
+        await finishCancellation.promise;
+        return true;
+      }
+    );
+    await cancellationStarted.promise;
 
     const replies: string[] = [];
     const fakeBot = { api: { raw: {
@@ -828,8 +845,19 @@ test("a recurring Stars payment arriving during admin cancellation is recorded b
     assert.equal(replies.length, 1);
     assert.match(replies[0] ?? "", /срок доступа не продлён/);
 
-    // Telegram may retry the same successful-payment update. The charge ledger
-    // row and entitlement must remain single-write while the buyer gets a safe reply.
+    // The payment webhook completed while Telegram cancellation was still in
+    // flight. The durable admin intent must win when the remote response returns.
+    finishCancellation.resolve();
+    assert.equal(await adminCancellation, true);
+    const afterCancellation = await prisma.subscription.findUniqueOrThrow({
+      where: { id: subscription.id }
+    });
+    assert.equal(afterCancellation.status, "CANCELLED");
+    assert.equal(afterCancellation.adminStarsCancelPending, false);
+    assert.equal(afterCancellation.telegramStarSubscriptionState, "CANCELED");
+
+    // Telegram may retry the same successful-payment update. It remains a
+    // single ledger event and cannot reopen the now-cancelled subscription.
     await processSuccessfulStarsPayment(fakeBot, project.id, "source-bot", fakeContext);
     assert.equal(await prisma.payment.count({
       where: { provider: "TELEGRAM_STARS", providerPaymentId: renewalCharge }
@@ -837,6 +865,10 @@ test("a recurring Stars payment arriving during admin cancellation is recorded b
     assert.equal(await prisma.paymentWebhookEvent.count({
       where: { dedupeKey: "telegram-stars:" + renewalCharge }
     }), 1);
+    const afterReplay = await prisma.subscription.findUniqueOrThrow({
+      where: { id: subscription.id }
+    });
+    assert.equal(afterReplay.status, "CANCELLED");
   });
 });
 
