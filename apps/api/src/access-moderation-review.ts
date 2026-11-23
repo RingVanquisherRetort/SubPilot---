@@ -1,3 +1,4 @@
+import type { Bot } from "grammy";
 import { prisma } from "@subpilot/database";
 
 /**
@@ -76,4 +77,54 @@ export async function listPendingAccessModerationReviews(
     subscriptionStatus: grant.subscription.status,
     subscriptionEndsAt: grant.subscription.endsAt
   }));
+}
+
+/**
+ * Live, read-only preflight for an operator. This is NOT a resolution:
+ * the membership observation can become stale immediately after Telegram
+ * responds, so it must never be used alone to mark access revoked.
+ */
+export async function inspectPendingAccessModerationReview(
+  projectId: string,
+  actorUserId: string,
+  grantId: string,
+  bot: Pick<Bot, "api">
+): Promise<
+  | { state: "UNAUTHORIZED" | "NO_LONGER_PENDING" | "ENTITLEMENT_ACTIVE" }
+  | { state: "TELEGRAM_CHECK_FAILED" }
+  | { state: "REVIEW_REQUIRED"; membership: string; telegramChatId: string; telegramUserId: string }
+> {
+  const authorizedQueue = await listPendingAccessModerationReviews(projectId, actorUserId, 100);
+  if (authorizedQueue === null) return { state: "UNAUTHORIZED" };
+  const row = authorizedQueue.find((item) => item.grantId === grantId);
+  if (!row) {
+    const renewed = await prisma.subscriptionAccessGrant.findFirst({
+      where: { id: grantId, subscription: { projectId } },
+      select: {
+        revokedAt: true,
+        revocationLastError: true,
+        subscription: { select: { status: true, endsAt: true } }
+      }
+    });
+    if (renewed?.revokedAt === null && renewed.revocationLastError &&
+      ["MEMBER_MODERATION_REVIEW_REQUIRED", "MEMBER_BAN_OWNERSHIP_UNCERTAIN", "LEGACY_GROUP_REMOVAL_REVIEW"].includes(renewed.revocationLastError) &&
+      renewed.subscription.status === "ACTIVE" &&
+      (renewed.subscription.endsAt === null || renewed.subscription.endsAt > new Date())) {
+      return { state: "ENTITLEMENT_ACTIVE" };
+    }
+    return { state: "NO_LONGER_PENDING" };
+  }
+  const userId = Number(row.telegramUserId);
+  if (!Number.isSafeInteger(userId) || userId <= 0) return { state: "TELEGRAM_CHECK_FAILED" };
+  try {
+    const member = await bot.api.getChatMember(row.telegramChatId, userId);
+    return {
+      state: "REVIEW_REQUIRED",
+      membership: member.status,
+      telegramChatId: row.telegramChatId,
+      telegramUserId: row.telegramUserId
+    };
+  } catch {
+    return { state: "TELEGRAM_CHECK_FAILED" };
+  }
 }
