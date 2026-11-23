@@ -1212,7 +1212,7 @@ export function createControlBot(token: string): Bot {
     }
     const chat = await prisma.connectedChat.findFirst({
       where: { id: chatId, projectId: plan.projectId, isActive: true },
-      select: { id: true }
+      select: { id: true, type: true }
     });
     if (!chat) {
       await ctx.answerCallbackQuery({ text: "Площадка недоступна или отключена.", show_alert: true });
@@ -1247,6 +1247,10 @@ export function createControlBot(token: string): Bot {
         }
       });
     } else {
+      if (chat.type === "GROUP") {
+        await ctx.answerCallbackQuery({ text: "Для продаж подключите канал или супергруппу.", show_alert: true });
+        return;
+      }
       await prisma.creatorPlanChat.create({
         data: { creatorPlanId: planId, connectedChatId: chatId }
       });
@@ -2916,13 +2920,13 @@ export function createControlBot(token: string): Bot {
       }
 
       const activeChats = await prisma.connectedChat.findMany({
-        where: { projectId: project.id, isActive: true },
+        where: { projectId: project.id, isActive: true, type: { in: ["CHANNEL", "SUPERGROUP"] } },
         select: { id: true }
       });
 
       if (activeChats.length === 0) {
         await ctx.reply(
-          "В проекте пока нет активных каналов или групп.\n\n" +
+          "В проекте пока нет активных каналов или супергрупп.\n\n" +
           "Сначала добавьте бота проекта администратором и выдайте права приглашать пользователей и ограничивать участников."
         );
         return;
@@ -3081,7 +3085,7 @@ export function createControlBot(token: string): Bot {
 
       const chat = await prisma.connectedChat.findFirst({
         where: { id: chatId, projectId: plan.projectId, isActive: true },
-        select: { id: true, title: true, username: true }
+        select: { id: true, title: true, username: true, type: true }
       });
 
       if (!chat) {
@@ -3089,6 +3093,10 @@ export function createControlBot(token: string): Bot {
         return;
       }
 
+      if (chat.type === "GROUP") {
+        await ctx.reply("Для продаж подключите канал или супергруппу.");
+        return;
+      }
       await prisma.creatorPlanChat.upsert({
         where: {
           creatorPlanId_connectedChatId: {
@@ -3982,11 +3990,11 @@ export function createControlBot(token: string): Bot {
             return;
           }
           const activeChats = await prisma.connectedChat.findMany({
-            where: { projectId: project.id, isActive: true },
+            where: { projectId: project.id, isActive: true, type: { in: ["CHANNEL", "SUPERGROUP"] } },
             select: { id: true }
           });
           if (activeChats.length === 0) {
-            await ctx.reply("Сначала добавьте бота проекта администратором хотя бы в один канал или группу и выдайте права приглашать пользователей и ограничивать участников.", {
+            await ctx.reply("Сначала добавьте бота проекта администратором хотя бы в один канал или супергруппу и выдайте права приглашать пользователей и ограничивать участников.", {
               reply_markup: new InlineKeyboard().text("Подключить бота", `ui:connect:${project.id}`).row().text("К проекту", `ui:project:${project.id}`)
             });
             return;

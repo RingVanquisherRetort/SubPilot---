@@ -1,3 +1,4 @@
+import { paidInvoiceChatIds } from "./paid-chat-checkout.js";
 import { hasActiveInviteEntrantGrant } from "./invite-entry-entitlement.js";
 import { randomUUID } from "node:crypto";
 import { Bot, InlineKeyboard, type Context } from "grammy";
@@ -85,7 +86,7 @@ async function createPurchaseInvoice(
   }
 
   const plan = await prisma.creatorPlan.findFirst({
-    where: { id: planId, projectId, status: "ACTIVE" },
+    where: { id: planId, projectId, status: "ACTIVE", chats: { some: { connectedChat: { isActive: true } }, none: { connectedChat: { type: "GROUP" } } } },
     include: {
       chats: {
         include: { connectedChat: true }
@@ -437,7 +438,7 @@ async function validatePreCheckout(
     }
   });
 
-  return Boolean(
+  if (!(
     payment &&
     isPaymentFromProjectBot(payment.metadata, projectBotId) &&
     payment.projectId === projectId &&
@@ -448,7 +449,14 @@ async function validatePreCheckout(
     payment.customer.telegramUserId === BigInt(query.from.id) &&
     query.currency === "XTR" &&
     Number(payment.amount.toString()) === query.total_amount
-  );
+  )) return false;
+
+  const destinations = paidInvoiceChatIds(payment.metadata);
+  if (!destinations) return false;
+  const eligible = await prisma.connectedChat.count({
+    where: { projectId, telegramChatId: { in: destinations }, isActive: true, type: { in: ["CHANNEL", "SUPERGROUP"] } }
+  });
+  return eligible === destinations.length;
 }
 
 const ACCESS_DELIVERY_ERROR_CODES = new Set([
@@ -2057,7 +2065,7 @@ export async function handleProjectBotUpdate(
         projectId,
         status: "ACTIVE",
         currency: "XTR",
-        chats: { some: { connectedChat: { isActive: true } } }
+        chats: { some: { connectedChat: { isActive: true } }, none: { connectedChat: { type: "GROUP" } } }
       },
       include: {
         chats: {
@@ -2100,7 +2108,7 @@ export async function handleProjectBotUpdate(
   const purchaseTermsText =
     "Условия покупки цифрового доступа. Продавцом доступа и ответственным за содержание проекта является его Администратор. " +
     "Покупатель оплачивает выбранный тариф в Telegram Stars. Доступ выдаётся после подтверждения успешного платежа Telegram " +
-    "и действует в течение срока, указанного в тарифе. По окончании оплаченного срока доступ к подключённым каналам и группам " +
+    "и действует в течение срока, указанного в тарифе. По окончании оплаченного срока доступ к подключённым каналам и супергруппам " +
     "отключается, если подписка не продлена. До оплаты ознакомьтесь с описанием тарифа и условиями проекта. " +
     "При вопросах по оплате, ошибочной оплате или возврату используйте команду /paysupport.";
 
@@ -2115,7 +2123,7 @@ export async function handleProjectBotUpdate(
       return;
     }
     const plan = await prisma.creatorPlan.findFirst({
-      where: { id: planId, projectId, status: "ACTIVE" },
+      where: { id: planId, projectId, status: "ACTIVE", chats: { some: { connectedChat: { isActive: true } }, none: { connectedChat: { type: "GROUP" } } } },
       include: { chats: { include: { connectedChat: true } } }
     });
 

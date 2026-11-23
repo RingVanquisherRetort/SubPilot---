@@ -138,3 +138,7 @@ Invite delivery now records grant failure and scope retry in one transaction und
 ### Compromised invite entry
 
 After a different buyer consumes an invite, the project bot checks the entrant’s own active grant for the chat. The compromised URL still goes through cleanup and rotation. An already absent or excluded entrant requires no membership mutation. Unresolved membership is reported to the owner; this path does not ban or unban the entrant. Automatic removal with external race protection remains open. The other stale-entry handler and ordinary expiry still need a consistent removal protocol.
+
+### Paid chat eligibility
+
+New paid plans link channels and supergroups. A legacy plan containing a basic group is hidden from the buyer catalog and direct purchase. Pre-checkout revalidates every recorded invoice destination; missing, inactive, unknown or basic-group destinations require a fresh invoice. Successful receipts and existing grants are processed independently of this sales gate. Existing recurring authorizations require separate lifecycle handling; this gate does not cancel them.
