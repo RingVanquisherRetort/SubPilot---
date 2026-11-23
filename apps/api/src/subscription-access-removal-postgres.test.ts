@@ -1033,7 +1033,7 @@ test("a late successful Stars payment reactivates an invoice-timed-out subscript
           checkoutSurface: "TELEGRAM_BOT",
           projectBotId: "source-bot",
           planId: plan.id,
-          planTitle: plan.title,
+          planTitle: "Revocation coordinator plan",
           durationDays: 30,
           isRecurring: false,
           chatIds: [chat.telegramChatId.toString()],
