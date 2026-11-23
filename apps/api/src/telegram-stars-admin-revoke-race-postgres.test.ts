@@ -166,6 +166,79 @@ test("PostgreSQL receipt recheck observes a committed admin revoke under the sub
     assert.equal(replies.length, 2);
     assert.ok(replies.every((reply) => reply.includes("не продлён")));
 
+    // Race the actual receipt handler with a second admin intent transaction.
+    // Start with an unrevoked subscription, hold the row lock, then commit
+    // the admin intent while the receipt is waiting for that same lock.
+    await prisma.subscription.update({
+      where: { id: subscription.id },
+      data: {
+        adminStarsCancelPending: false,
+        adminStarsCancelDueAt: null,
+        adminStarsCancelBotId: null
+      }
+    });
+    const racingChargeId = "stars-admin-race-inflight-" + suffix;
+    const racingCtx = {
+      ...ctx,
+      message: {
+        successful_payment: {
+          ...((ctx as unknown as { message: { successful_payment: Record<string, unknown> } }).message.successful_payment),
+          telegram_payment_charge_id: racingChargeId
+        }
+      }
+    } as Parameters<typeof processSuccessfulStarsPayment>[3];
+    const adminLocked = deferred();
+    const releaseAdmin = deferred();
+    const admin = prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'SELECT "id" FROM "Subscription" WHERE "id" = $1 FOR UPDATE',
+        subscription.id
+      );
+      adminLocked.resolve();
+      await releaseAdmin.promise;
+      await tx.subscription.update({
+        where: { id: subscription.id },
+        data: {
+          adminStarsCancelPending: true,
+          adminStarsCancelDueAt: new Date("2026-11-23T00:00:00.000Z"),
+          adminStarsCancelBotId: "admin-test-bot"
+        }
+      });
+    });
+    try {
+      await adminLocked.promise;
+      const racingReceipt = processSuccessfulStarsPayment(bot, project.id, projectBotId, racingCtx);
+      let receiptSettled = false;
+      void racingReceipt.then(
+        () => { receiptSettled = true; },
+        () => { receiptSettled = true; }
+      );
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        assert.equal(receiptSettled, false, "receipt cannot finish while admin owns subscription row lock");
+      } finally {
+        releaseAdmin.resolve();
+      }
+      await Promise.all([admin, racingReceipt]);
+    } finally {
+      releaseAdmin.resolve();
+      await admin.catch(() => undefined);
+    }
+    const racedSubscription = await prisma.subscription.findUniqueOrThrow({
+      where: { id: subscription.id }
+    });
+    assert.equal(racedSubscription.adminStarsCancelPending, true);
+    assert.equal(racedSubscription.endsAt?.toISOString(), originalEndsAt.toISOString());
+    assert.equal(await prisma.payment.count({
+      where: { subscriptionId: subscription.id, providerPaymentId: racingChargeId }
+    }), 1);
+    assert.equal(await prisma.paymentWebhookEvent.count({
+      where: { dedupeKey: "telegram-stars:" + racingChargeId }
+    }), 1);
+    assert.equal(await prisma.subscriptionAccessGrant.count({
+      where: { subscriptionId: subscription.id }
+    }), 0);
+
   } finally {
     releaseFirst.resolve();
     if (first) await first.catch(() => undefined);
