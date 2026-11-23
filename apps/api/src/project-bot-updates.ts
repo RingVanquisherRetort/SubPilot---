@@ -194,16 +194,16 @@ async function createPurchaseInvoice(
         customerId: customer.id,
         subscriptionId: subscription.id,
         provider: "TELEGRAM_STARS",
-        status: "PENDING"
+        status: { in: ["PENDING", "CANCELLED"] }
       },
-      orderBy: { createdAt: "desc" },
-      take: 10
+      orderBy: { createdAt: "desc" }
     });
     const reusablePayment = existingPayments.find((candidate) => {
       const metadata = candidate.metadata && typeof candidate.metadata === "object" && !Array.isArray(candidate.metadata)
         ? candidate.metadata as Record<string, unknown>
         : {};
-      return metadata.projectBotId === projectBotId;
+      return metadata.projectBotId === projectBotId &&
+        (candidate.status === "PENDING" || getInvoiceDispatchState(metadata) !== "NOT_STARTED");
     });
 
     if (reusablePayment) {
