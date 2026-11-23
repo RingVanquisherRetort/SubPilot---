@@ -16,4 +16,14 @@ WHERE subscription."status" = 'CANCELLED'
       FROM "SubscriptionAccessGrant" AS access_grant
       WHERE access_grant."subscriptionId" = subscription."id"
     )
+    OR EXISTS (
+      SELECT 1
+      FROM "AuditLog" AS audit
+      WHERE audit."resourceType" = 'Subscription'
+        AND audit."resourceId" = subscription."id"
+        AND audit."action" IN (
+          'SUBSCRIPTION_ACCESS_REVOKE_REQUESTED',
+          'SUBSCRIPTION_ACCESS_REVOKE_CONFIRMED'
+        )
+    )
   );
