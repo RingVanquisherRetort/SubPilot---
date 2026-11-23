@@ -1076,3 +1076,69 @@ test("a late successful Stars payment reactivates an invoice-timed-out subscript
     assert.ok(savedGrant);
   });
 });
+
+
+test("a late payment cannot reopen a subscription with an explicit admin revocation marker", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, project, customer, chat, plan }) => {
+    const revokedAt = new Date(Date.now() - 60_000);
+    await prisma.subscription.update({
+      where: { id: subscription.id },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: revokedAt,
+        adminAccessRevokedAt: revokedAt
+      }
+    });
+    const payment = await prisma.payment.create({
+      data: {
+        projectId: project.id,
+        customerId: customer.id,
+        subscriptionId: subscription.id,
+        provider: "TELEGRAM_STARS",
+        amount: "100",
+        currency: "XTR",
+        status: "CANCELLED",
+        metadata: {
+          source: "project_bot",
+          productType: "TELEGRAM_CHANNEL_ACCESS",
+          checkoutSurface: "TELEGRAM_BOT",
+          projectBotId: "source-bot",
+          planId: plan.id,
+          planTitle: plan.title,
+          durationDays: 30,
+          isRecurring: false,
+          chatIds: [chat.telegramChatId.toString()],
+          invoiceDispatchStartedAt: new Date(Date.now() - 25 * 60 * 60_000).toISOString()
+        }
+      }
+    });
+    const fakeContext = {
+      from: { id: Number(customer.telegramUserId) },
+      message: {
+        successful_payment: {
+          invoice_payload: payment.id,
+          telegram_payment_charge_id: "admin-revoked-late-charge-" + randomUUID(),
+          currency: "XTR",
+          total_amount: 100
+        }
+      },
+      reply: async () => ({} as never)
+    } as never;
+
+    await processSuccessfulStarsPayment({ api: {} } as unknown as Bot, project.id, "source-bot", fakeContext);
+
+    const [savedSubscription, savedPayment, event] = await Promise.all([
+      prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id } }),
+      prisma.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+      prisma.paymentWebhookEvent.findFirst({
+        where: { dedupeKey: { startsWith: "telegram-stars:admin-revoked-late-charge-" } }
+      })
+    ]);
+    assert.equal(savedPayment.status, "SUCCEEDED");
+    assert.equal(savedSubscription.status, "CANCELLED");
+    assert.equal(savedSubscription.adminAccessRevokedAt?.toISOString(), revokedAt.toISOString());
+    assert.equal((event?.payload as Record<string, unknown> | undefined)?.accessSuppressedByAdminRevocation, true);
+  });
+});
