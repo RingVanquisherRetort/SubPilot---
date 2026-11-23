@@ -564,8 +564,18 @@ test("manual grants and trials are audited, scoped, and revoke without fabricati
       new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000))
     ]);
 
-    releaseCancellation.resolve(undefined);
+    // A webhook can commit while Telegram is still processing the admin
+    // cancellation. Access must not be revoked merely because the webhook
+    // reported CANCELED: the administrative operation has not finished yet.
     await concurrentMutation;
+    const duringRemoteCancellation = await prisma.subscription.findUniqueOrThrow({
+      where: { id: recurringSubscription.id }
+    });
+    assert.equal(duringRemoteCancellation.status, "ACTIVE");
+    assert.equal(duringRemoteCancellation.adminStarsCancelPending, true);
+    assert.equal(duringRemoteCancellation.telegramStarSubscriptionState, "CANCELED");
+    assert.equal(duringRemoteCancellation.adminAccessRevokedAt, null);
+    releaseCancellation.resolve(undefined);
     const recurringRevocation = await recurringRevocationPromise;
     assert.equal(committedBeforeTelegramReturned, true, "the DB row lock must be released before waiting for Telegram");
     assert.equal(concurrentMutationCommitted, true);
