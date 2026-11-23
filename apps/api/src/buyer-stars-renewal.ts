@@ -6,6 +6,7 @@ type Edit = (args: { user_id: number; telegram_payment_charge_id: string; is_can
 export async function queueBuyerRenewal(id: string, projectId: string, customerId: string, botId: string, canceled: boolean) {
   const now = new Date();
   const key = { id, projectId, customerId, status: "ACTIVE" as const,
+    adminStarsCancelPending: false,
     telegramStarSubscriptionState: canceled ? "ACTIVE" as const : "CANCELED" as const,
     OR: [{ endsAt: null }, { endsAt: { gt: now } }] };
   const row = await prisma.subscription.findFirst({ where: key, select: { telegramStarInitialChargeId: true } });
@@ -31,12 +32,14 @@ export async function applyBuyerRenewal(id: string, botId: string, edit: Edit) {
   const due = { id, buyerStarsBotId: botId, buyerStarsDueAt: { lte: now } };
   const row = await prisma.subscription.findFirst({ where: due, select: {
     status: true, endsAt: true, buyerStarsCanceled: true, buyerStarsChargeId: true,
-    telegramStarInitialChargeId: true, customer: { select: { telegramUserId: true } }
+    telegramStarInitialChargeId: true, adminStarsCancelPending: true,
+    customer: { select: { telegramUserId: true } }
   } });
   if (!row || row.buyerStarsCanceled === null || !row.buyerStarsChargeId) return false;
   const charge = row.buyerStarsChargeId;
   const active = row.status === "ACTIVE" && (!row.endsAt || row.endsAt > now);
-  const canceled = row.buyerStarsCanceled || !active || row.telegramStarInitialChargeId !== charge;
+  const canceled = row.adminStarsCancelPending || row.buyerStarsCanceled || !active ||
+    row.telegramStarInitialChargeId !== charge;
   const claim = randomUUID();
   const intent = { id, buyerStarsBotId: botId, buyerStarsChargeId: charge, buyerStarsCanceled: row.buyerStarsCanceled };
   const saved = await prisma.subscription.updateMany({
