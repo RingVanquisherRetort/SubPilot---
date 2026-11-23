@@ -23,7 +23,9 @@ test("lifecycle pass stops after lease loss during a stage and cannot release a 
   try {
     const completed = await runLifecyclePassWithLease({
       leaseId: firstLeaseId,
-      heartbeatMs: 5,
+      // Give the successor's acquisition a deterministic window before the
+      // first heartbeat can race the deliberate expiry of the old lease.
+      heartbeatMs: 2_000,
       acquire: (id) => acquireSubscriptionLifecycleLease(id, key),
       renew: (id) => renewSubscriptionLifecycleLease(id, key),
       release: (id) => releaseSubscriptionLifecycleLease(id, key),
@@ -41,7 +43,7 @@ test("lifecycle pass stops after lease loss during a stage and cannot release a 
           // a 30ms timer will run promptly on a busy CI runner.
           await Promise.race([
             leaseLost,
-            new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Lease loss heartbeat timed out")), 5_000))
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Lease loss heartbeat timed out")), 10_000))
           ]);
         },
         async () => { laterStageStarted = true; }
