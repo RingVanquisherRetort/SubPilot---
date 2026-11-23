@@ -194,3 +194,5 @@ export {
   DEFAULT_SUBSCRIPTION_ACCESS_SCOPE_LEASE_TTL_MS
 } from "./subscription-access-scope-lease.js";
 export type { SubscriptionAccessScopeLease } from "./subscription-access-scope-lease.js";
+
+export { reconcileAdminStarsCancellation } from "./admin-stars-cancellation.js";
