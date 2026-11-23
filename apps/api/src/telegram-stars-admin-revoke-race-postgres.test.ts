@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { prisma } from "@subpilot/database";
 import { isStarsAccessSuppressedByAdminRevocation } from "./telegram-star-payment-kind.js";
+import { processSuccessfulStarsPayment } from "./project-bot-updates.js";
 
 function deferred() {
   let resolve!: () => void;
@@ -103,6 +104,68 @@ test("PostgreSQL receipt recheck observes a committed admin revoke under the sub
     assert.equal(saved.status, "ACTIVE");
     assert.equal(saved.adminStarsCancelPending, true);
     assert.equal(saved.endsAt?.toISOString(), originalEndsAt.toISOString());
+
+    // Exercise the real Stars receipt handler twice after the revoke intent.
+    // The first delivery must record the charge without extending access; the
+    // duplicate must not create another payment or grant.
+    const projectBotId = "stars-admin-race-bot-" + suffix;
+    const chargeId = "stars-admin-race-renewal-" + suffix;
+    const anchorPayment = await prisma.payment.create({
+      data: {
+        projectId: project.id,
+        customerId: customer.id,
+        subscriptionId: subscription.id,
+        provider: "TELEGRAM_STARS",
+        providerPaymentId: "stars-admin-race-initial-" + suffix,
+        amount: "250",
+        currency: "XTR",
+        status: "SUCCEEDED",
+        paidAt: new Date("2026-11-01T00:00:00.000Z"),
+        metadata: { isRecurring: true, durationDays: 30, projectBotId }
+      }
+    });
+    await prisma.subscription.update({
+      where: { id: subscription.id },
+      data: { telegramStarInitialChargeId: anchorPayment.providerPaymentId }
+    });
+    const replies: string[] = [];
+    const ctx = {
+      from: { id: Number(customer.telegramUserId) },
+      message: {
+        successful_payment: {
+          invoice_payload: anchorPayment.id,
+          telegram_payment_charge_id: chargeId,
+          provider_payment_charge_id: "provider-" + suffix,
+          currency: "XTR",
+          total_amount: 250,
+          is_recurring: true
+        }
+      },
+      reply: async (message: string) => { replies.push(message); }
+    } as unknown as Parameters<typeof processSuccessfulStarsPayment>[3];
+    const bot = {} as Parameters<typeof processSuccessfulStarsPayment>[0];
+    await processSuccessfulStarsPayment(bot, project.id, projectBotId, ctx);
+    await processSuccessfulStarsPayment(bot, project.id, projectBotId, ctx);
+    const renewalRows = await prisma.payment.findMany({
+      where: { subscriptionId: subscription.id, providerPaymentId: chargeId }
+    });
+    assert.equal(renewalRows.length, 1, "duplicate receipt must not create a second charge");
+    assert.equal(renewalRows[0]?.status, "SUCCEEDED");
+    const eventRows = await prisma.paymentWebhookEvent.count({
+      where: { dedupeKey: "telegram-stars:" + chargeId }
+    });
+    assert.equal(eventRows, 1, "duplicate receipt must not create a second webhook event");
+    const finalSubscription = await prisma.subscription.findUniqueOrThrow({
+      where: { id: subscription.id }
+    });
+    assert.equal(finalSubscription.adminStarsCancelPending, true);
+    assert.equal(finalSubscription.endsAt?.toISOString(), originalEndsAt.toISOString());
+    assert.equal(await prisma.subscriptionAccessGrant.count({
+      where: { subscriptionId: subscription.id }
+    }), 0);
+    assert.equal(replies.length, 2);
+    assert.ok(replies.every((reply) => reply.includes("не продлён")));
+
   } finally {
     releaseFirst.resolve();
     if (first) await first.catch(() => undefined);
