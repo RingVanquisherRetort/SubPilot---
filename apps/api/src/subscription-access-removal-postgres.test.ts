@@ -1,6 +1,6 @@
 import { queueBuyerRenewal, applyBuyerRenewal } from "./buyer-stars-renewal.js";
 import { reconcileLateStarsCancellation } from "./late-stars-cancellation.js";
-import { deliverSubscriptionAccess, handleProjectBotUpdate, processRefundedStarsPayment, processSuccessfulStarsPayment, validatePreCheckout } from "./project-bot-updates.js";
+import { deliverSubscriptionAccess, handleProjectBotUpdate, recordSubscriptionAccessRevocationFailure, processRefundedStarsPayment, processSuccessfulStarsPayment, validatePreCheckout } from "./project-bot-updates.js";
 import { hasActiveInviteEntrantGrant } from "./invite-entry-entitlement.js";
 import { fork } from "node:child_process";
 import { once } from "node:events";
@@ -404,6 +404,49 @@ test("delayed moderator-exclusion invite cleanup cannot erase a newer manual gra
       releaseRevoke.resolve();
       await removal.catch(() => undefined);
     }
+  });
+});
+
+test("stale webhook revoke failure cannot consume a replacement invite retry budget", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, grant }) => {
+    const oldUrl = (await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id }
+    })).inviteLink;
+    const newUrl = "https://t.me/+fresh-grant-" + randomUUID();
+    await prisma.subscriptionAccessGrant.update({
+      where: { id: grant.id },
+      data: {
+        revokedAt: new Date(),
+        revocationReason: "ADMIN_EXCLUDED",
+        revocationAttempts: 0,
+        revocationLastError: null,
+        inviteLink: newUrl
+      }
+    });
+    await recordSubscriptionAccessRevocationFailure(
+      subscription.id, grant.id, "INVITE_REVOKE_FAILED",
+      new Date(), undefined, oldUrl
+    );
+    const afterStaleFailure = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id }
+    });
+    assert.equal(afterStaleFailure.inviteLink, newUrl);
+    assert.equal(afterStaleFailure.revocationAttempts, 0);
+    assert.equal(afterStaleFailure.revocationLastError, null);
+
+    // A failure against the current URL must still be scheduled for retry.
+    await recordSubscriptionAccessRevocationFailure(
+      subscription.id, grant.id, "INVITE_REVOKE_FAILED",
+      new Date(), undefined, newUrl
+    );
+    const afterCurrentFailure = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { id: grant.id }
+    });
+    assert.equal(afterCurrentFailure.inviteLink, newUrl);
+    assert.equal(afterCurrentFailure.revocationAttempts, 1);
+    assert.equal(afterCurrentFailure.revocationLastError, "INVITE_REVOKE_FAILED");
   });
 });
 
