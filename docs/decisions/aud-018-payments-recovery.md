@@ -3,7 +3,7 @@
 **Branch:** `audit-018/payments-recovery`  
 **Base commit:** `6f694b12640ef1d80128558fc42f76bd69d35650`  
 **Scope:** B1–B5 only. No participant or invite-link implementation changes, no real payments, no deployment, no merge to `main`.  
-**Status:** B1–B5 implementation complete; CI green at `645c737f8c7221ca92730007779506b0b750ef03`. AUD-018 remains open pending combined review of directions A and B.
+**Status:** B1–B5 implementation complete; full CI green at code HEAD `6e26c36b819932b196a84b110f76bb2e42a0a427`. AUD-018 remains open pending combined review of directions A and B.
 
 ## B1 — Purchase, invoice dispatch and first payment
 
@@ -14,6 +14,7 @@
 - Pre-checkout validates the invoice anchor, originating project bot, buyer, amount, currency, project status and destination snapshot.
 - Successful-payment processing is serialized on the subscription row and records a charge-keyed webhook event in the same transaction as payment/entitlement changes.
 - Existing tests cover invoice dispatch state, checkout destination snapshots, bot-origin validation and PostgreSQL advisory-lock single-claim behavior.
+- PostgreSQL webhook coverage now exercises first recurring charge activation/anchor persistence and late successful-payment recovery after local invoice timeout; duplicate first-charge delivery remains one ledger event.
 
 **Remaining boundary:** Telegram's acceptance of an invoice whose send response was lost cannot be queried reliably from the local database. The safe policy is to avoid issuing a duplicate invoice and direct the buyer to the original bot message or support.
 
@@ -23,7 +24,7 @@
 - Later charges are separate ledger rows keyed by their Telegram charge ID; the original invoice remains the payload anchor.
 - Duplicate/reordered payment updates are serialized and deduplicated by the charge event key.
 - A successful payment received after an administrative revoke is recorded for reconciliation but must not reopen or extend the entitlement.
-- The new PostgreSQL regression test exercises a recurring renewal arriving while an admin cancellation intent is pending.
+- PostgreSQL tests exercise both an ordinary recurring renewal (including duplicate replay) and a renewal arriving while an admin cancellation intent is pending.
 
 ## B3 — Buyer cancellation and resumption
 
@@ -81,6 +82,7 @@ Retry policy: 10 failed/unconfirmed attempts with bounded backoff; on exhaustion
 
 - A stale Stars worker cannot clear a successor claim while its Telegram request is in flight.
 - A successful Stars payment arriving after the local pending-payment timeout reactivates the entitlement unless an explicit admin-revocation marker exists.
+- The first recurring charge creates the durable original-charge anchor and activates exactly once; a later recurring charge creates one period-specific ledger row and extends to Telegram's expiration date.
 - A successful Stars payment arriving after a confirmed admin revoke remains recorded but cannot reopen access.
 - PostgreSQL stale-payment cleanup leaves any possibly dispatched invoice pending and cancels only never-dispatched payments; invoice-state unit tests cover the ambiguity gate.
 - A pending admin cancellation prevents a buyer resume from changing the desired Telegram state back to active.
@@ -93,13 +95,11 @@ Retry policy: 10 failed/unconfirmed attempts with bounded backoff; on exhaustion
 
 ## CI validation
 
-GitHub Actions run [45150189396](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45150189396) passed on branch HEAD `645c737f8c7221ca92730007779506b0b750ef03`:
-- `validate`: TypeScript typecheck passed; 224 tests passed, 0 failed.
-- `upgrade-validation`: clean PostgreSQL migration, Prisma generation, legacy baseline recreation, forward migration and data/backfill validation passed.
+GitHub Actions run [45151832794](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45151832794) passed on code HEAD `6e26c36b819932b196a84b110f76bb2e42a0a427`:
+- `validate`: TypeScript typecheck passed; 230 tests passed, 0 failed, 0 skipped.
+- `upgrade-validation`: clean PostgreSQL migrations, Prisma generation, legacy baseline recreation, forward migration and data/backfill validation passed.
 
 This is automated PostgreSQL/CI evidence only, not a live Telegram or payment acceptance test.
-
-A subsequent P0 hardening pass added the explicit admin-revocation marker and made invoice expiry/reissue conservative. The CI run for the resulting HEAD is pending; do not treat the earlier green run as validation of these follow-up commits.
 
 ## Residual risks / acceptance limits
 
@@ -107,5 +107,5 @@ A subsequent P0 hardening pass added the explicit admin-revocation marker and ma
 2. If Telegram accepted cancellation but both its response and the authenticated subscription update are permanently lost, the worker retries the same cancellation intent. After 10 unconfirmed attempts it stops automatic retries and leaves an auditable pending intent for operator retry; the entitlement remains in its current state (ACTIVE or naturally EXPIRED) until confirmation.
 3. Telegram Stars invoice creation, actual charge capture, real renewal timing, real refund delivery, webhook retry ordering and the remote effects of `editUserStarSubscription` cannot be proven by PostgreSQL mocks/CI.
 4. A dispatched invoice cannot be revoked by the local worker. It is therefore retained as pending indefinitely and blocks automatic replacement; if the buyer cannot find the original invoice message, operator support is required. A payment received after an explicit admin revoke is recorded and flagged for review; the local system cannot prevent Telegram from charging an already-issued invoice.
-4. No real Telegram or payment-provider operation was performed. Live acceptance remains a separate gated activity.
-5. This document does not close AUD-018. Direction A and the combined P0 review remain required.
+5. No real Telegram or payment-provider operation was performed. Live acceptance remains a separate gated activity.
+6. This document does not close AUD-018. Direction A and the combined P0 review remain required.
