@@ -1191,3 +1191,185 @@ test("stale invoice cleanup keeps dispatched Telegram invoices payable and cance
     assert.equal(savedNotDispatched.status, "CANCELLED");
   });
 });
+
+
+test("a first recurring Stars charge anchors and activates the subscription exactly once", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, project, customer, chat, plan }) => {
+    const charge = "first-recurring-" + randomUUID();
+    const expiration = Math.floor((Date.now() + 30 * 86_400_000) / 1000);
+    await prisma.creatorPlan.update({
+      where: { id: plan.id },
+      data: { isRecurring: true, durationDays: 30 }
+    });
+    await prisma.subscriptionAccessGrant.deleteMany({ where: { subscriptionId: subscription.id } });
+    await prisma.subscription.update({
+      where: { id: subscription.id },
+      data: {
+        status: "PENDING",
+        startsAt: null,
+        endsAt: null,
+        cancelledAt: null,
+        telegramStarInitialChargeId: null,
+        telegramStarSubscriptionState: null,
+        adminAccessRevokedAt: null
+      }
+    });
+    const payment = await prisma.payment.create({
+      data: {
+        projectId: project.id,
+        customerId: customer.id,
+        subscriptionId: subscription.id,
+        provider: "TELEGRAM_STARS",
+        amount: "100",
+        currency: "XTR",
+        status: "PENDING",
+        metadata: {
+          source: "project_bot",
+          productType: "TELEGRAM_CHANNEL_ACCESS",
+          checkoutSurface: "TELEGRAM_BOT",
+          projectBotId: "source-bot",
+          planId: plan.id,
+          planTitle: "Revocation coordinator plan",
+          durationDays: 30,
+          isRecurring: true,
+          chatIds: [chat.telegramChatId.toString()]
+        }
+      }
+    });
+    const fakeBot = {
+      api: { getChatMember: async () => ({ status: "member" }) }
+    } as unknown as Bot;
+    const fakeContext = {
+      from: { id: Number(customer.telegramUserId) },
+      message: {
+        successful_payment: {
+          invoice_payload: payment.id,
+          telegram_payment_charge_id: charge,
+          provider_payment_charge_id: "provider-" + charge,
+          currency: "XTR",
+          total_amount: 100,
+          subscription_expiration_date: expiration,
+          is_recurring: true,
+          is_first_recurring: true
+        }
+      },
+      reply: async () => ({} as never)
+    } as never;
+
+    await processSuccessfulStarsPayment(fakeBot, project.id, "source-bot", fakeContext);
+    const first = await prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id } });
+    assert.equal(first.status, "ACTIVE");
+    assert.equal(first.telegramStarInitialChargeId, charge);
+    assert.equal(first.telegramStarSubscriptionState, "ACTIVE");
+    assert.equal(first.endsAt?.getTime(), expiration * 1000);
+
+    await processSuccessfulStarsPayment(fakeBot, project.id, "source-bot", fakeContext);
+    const [savedPayment, savedSubscription, eventCount, chargeCount, grantCount] = await Promise.all([
+      prisma.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+      prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id } }),
+      prisma.paymentWebhookEvent.count({ where: { dedupeKey: "telegram-stars:" + charge } }),
+      prisma.payment.count({ where: { provider: "TELEGRAM_STARS", providerPaymentId: charge } }),
+      prisma.subscriptionAccessGrant.count({ where: { subscriptionId: subscription.id } })
+    ]);
+    assert.equal(savedPayment.status, "SUCCEEDED");
+    assert.equal(savedSubscription.endsAt?.getTime(), expiration * 1000);
+    assert.equal(eventCount, 1);
+    assert.equal(chargeCount, 1);
+    assert.equal(grantCount, 1);
+  });
+});
+
+
+test("a recurring Stars renewal creates one charge ledger row and extends from the Telegram expiration", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withFixture(async ({ subscription, project, customer, chat, plan }) => {
+    const initialCharge = "renewal-anchor-" + randomUUID();
+    const renewalCharge = "renewal-charge-" + randomUUID();
+    const now = Date.now();
+    const currentEnd = new Date(now + 10 * 86_400_000);
+    const renewedEndSeconds = Math.floor((now + 40 * 86_400_000) / 1000);
+    await prisma.creatorPlan.update({
+      where: { id: plan.id },
+      data: { isRecurring: true, durationDays: 30 }
+    });
+    await prisma.subscription.update({
+      where: { id: subscription.id },
+      data: {
+        status: "ACTIVE",
+        startsAt: new Date(now - 30 * 86_400_000),
+        endsAt: currentEnd,
+        telegramStarInitialChargeId: initialCharge,
+        telegramStarSubscriptionState: "ACTIVE",
+        adminAccessRevokedAt: null
+      }
+    });
+    const anchor = await prisma.payment.create({
+      data: {
+        projectId: project.id,
+        customerId: customer.id,
+        subscriptionId: subscription.id,
+        provider: "TELEGRAM_STARS",
+        providerPaymentId: initialCharge,
+        amount: "100",
+        currency: "XTR",
+        status: "SUCCEEDED",
+        paidAt: new Date(now - 30 * 86_400_000),
+        metadata: {
+          source: "project_bot",
+          productType: "TELEGRAM_CHANNEL_ACCESS",
+          checkoutSurface: "TELEGRAM_BOT",
+          projectBotId: "source-bot",
+          planId: plan.id,
+          planTitle: "Revocation coordinator plan",
+          durationDays: 30,
+          isRecurring: true,
+          chatIds: [chat.telegramChatId.toString()]
+        }
+      }
+    });
+    const fakeBot = {
+      api: {
+        getChatMember: async () => ({ status: "member" }),
+        revokeChatInviteLink: async () => true
+      }
+    } as unknown as Bot;
+    const fakeContext = {
+      from: { id: Number(customer.telegramUserId) },
+      message: {
+        successful_payment: {
+          invoice_payload: anchor.id,
+          telegram_payment_charge_id: renewalCharge,
+          provider_payment_charge_id: "provider-" + renewalCharge,
+          currency: "XTR",
+          total_amount: 100,
+          subscription_expiration_date: renewedEndSeconds,
+          is_recurring: true
+        }
+      },
+      reply: async () => ({} as never)
+    } as never;
+
+    await processSuccessfulStarsPayment(fakeBot, project.id, "source-bot", fakeContext);
+    const first = await prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id } });
+    assert.equal(first.endsAt?.getTime(), renewedEndSeconds * 1000);
+    assert.equal(first.telegramStarInitialChargeId, initialCharge);
+
+    await processSuccessfulStarsPayment(fakeBot, project.id, "source-bot", fakeContext);
+    const [saved, savedSubscription, eventCount] = await Promise.all([
+      prisma.payment.findFirstOrThrow({
+        where: { subscriptionId: subscription.id, providerPaymentId: renewalCharge }
+      }),
+      prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id } }),
+      prisma.paymentWebhookEvent.count({ where: { dedupeKey: "telegram-stars:" + renewalCharge } })
+    ]);
+    const metadata = saved.metadata as Record<string, unknown>;
+    assert.equal(saved.status, "SUCCEEDED");
+    assert.equal(metadata.originalPaymentId, anchor.id);
+    assert.equal(metadata.isRenewal, true);
+    assert.equal(savedSubscription.endsAt?.getTime(), renewedEndSeconds * 1000);
+    assert.equal(eventCount, 1);
+  });
+});
