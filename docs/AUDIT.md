@@ -166,3 +166,9 @@ Delivery checks the durable removal intent for the Telegram user and chat before
 ### Project bot live acceptance — first private command
 
 A live private `/start` reached the staging webhook but failed during dispatch. Initialize the grammY project bot before calling `handleUpdate`. The regression test checks the initial `getMe` and the buyer menu reply using a local Bot API stub. Membership and moderation acceptance is tracked separately.
+
+### AUD-018 live acceptance on 2026-11-23
+
+Staging ran commit `60b6ba7c589465979826138fd46ebecb494abe83`. The test subscriber was an ordinary channel member. After the project administrator revoked the remaining subscription, the subscriber observed removal and Telegram returned `kicked` from `getChatMember`. Both channel subscription records were cancelled and both grants had revocation timestamps. The subscriber then opened **My subscriptions** in the project bot and confirmed the empty-list response. The cause of an earlier empty-list report before revocation remains unverified.
+
+During the check Telegram reported HTTP 401 for the webhook while the Codespaces API port was private. Restoring public access to the staging HTTP port returned external readiness to HTTP 200 and the Telegram update backlog drained. This run covers administrative revocation and the subsequent buyer menu response. Live re-entry following authorized removal of the ban and a concurrent moderator restriction still require separate checks. AUD-018 remains open.
