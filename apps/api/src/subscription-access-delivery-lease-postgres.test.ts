@@ -303,3 +303,30 @@ test("invite delivery treats a transport failure as unknown membership, not as p
     assert.equal(grant.deliveryLastError, "MEMBERSHIP_LOOKUP_FAILED");
   });
 });
+
+test("a superseded membership lookup failure leaves the newer entitlement retry budget intact", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  await withDeliveryFixture(async ({ subscription, customer, chat }) => {
+    const bot = { api: {
+      getChatMember: async () => {
+        await prisma.$transaction(async (tx) => {
+          await lockSubscriptionAccessScope(tx, customer.id, chat.id);
+          await requestSubscriptionAccessReconciliation(tx, customer.id, [chat.id]);
+        });
+        throw new Error("transport failure");
+      }
+    } } as unknown as Bot;
+    await deliverSubscriptionAccess(bot, subscription.id, [chat.telegramChatId.toString()]);
+    const grant = await prisma.subscriptionAccessGrant.findUniqueOrThrow({
+      where: { subscriptionId_connectedChatId: { subscriptionId: subscription.id, connectedChatId: chat.id } }
+    });
+    assert.equal(grant.deliveryAttempts, 0);
+    assert.equal(grant.deliveryLastError, null);
+    const scope = await prisma.subscriptionAccessScope.findUniqueOrThrow({
+      where: { customerId_connectedChatId: { customerId: customer.id, connectedChatId: chat.id } }
+    });
+    assert.ok(scope.desiredRevision > scope.appliedRevision);
+    assert.equal(scope.leaseToken, null);
+  });
+});

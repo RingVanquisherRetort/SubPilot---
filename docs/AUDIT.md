@@ -132,3 +132,5 @@ These items have been inspected in source; the table does not claim that every s
 ### AUD-018 expiry moderation review
 
 An absent member (`left`) needs only local grant finalization. Restricted members, administrators and owners require moderation review; expiry records a failure and does not mutate their Telegram permissions. PostgreSQL regressions check all four statuses. Ordinary member removal and webhook recovery still require review for external races.
+
+Invite delivery now records grant failure and scope retry in one transaction under the customer/chat lock. A superseded lookup cannot consume the new entitlement's retry budget. A PostgreSQL test changes the revision during the external lookup and checks both grant and queue state.

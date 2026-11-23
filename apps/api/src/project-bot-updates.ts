@@ -779,10 +779,20 @@ export async function deliverSubscriptionAccess(
     ));
     const fail = async (errorCode: string): Promise<void> => {
       if (!ownsLease()) return;
-      await recordSubscriptionAccessDeliveryFailure(subscriptionId, chat.id, errorCode);
-      await failSubscriptionAccessScope(prisma, lease, {
-        retryAt,
-        errorCode: "ACCESS_DELIVERY_" + errorCode
+      await prisma.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe(
+          'SELECT "id" FROM "SubscriptionAccessGrant" WHERE "subscriptionId" = $1 AND "connectedChatId" = $2 FOR UPDATE',
+          subscriptionId, chat.id
+        );
+        await lockSubscriptionAccessScope(tx, prepared.customerId, chat.id);
+        if (!await scopeStillCurrent(tx)) {
+          await completeSubscriptionAccessScope(tx, lease);
+          return;
+        }
+        const released = await failSubscriptionAccessScope(tx, lease, {
+          retryAt, errorCode: "ACCESS_DELIVERY_" + errorCode
+        });
+        if (released) await recordSubscriptionAccessDeliveryFailureUsing(tx, subscriptionId, chat.id, errorCode);
       });
     };
     const scopeStillCurrent = async (tx: Transaction): Promise<boolean> => {
