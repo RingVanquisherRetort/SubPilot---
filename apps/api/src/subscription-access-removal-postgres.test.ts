@@ -708,6 +708,9 @@ test("authenticated Stars cancellation webhook wakes a pending admin revoke for 
 }, async () => {
   await withFixture(async ({ subscription, project, customer }) => {
     const charge = "admin-webhook-" + randomUUID();
+    const projectRow = await prisma.project.findUniqueOrThrow({
+      where: { id: project.id }, select: { workspaceId: true }
+    });
     const payment = await prisma.payment.create({ data: {
       subscriptionId: subscription.id,
       projectId: project.id,
@@ -729,7 +732,7 @@ test("authenticated Stars cancellation webhook wakes a pending admin revoke for 
       adminStarsCancelClaim: "stale-worker-claim",
       adminStarsCancelDueAt: new Date(Date.now() + 300_000),
       adminStarsCancelActorUserId: "audit-actor",
-      adminStarsCancelWorkspaceId: "audit-workspace"
+      adminStarsCancelWorkspaceId: projectRow.workspaceId
     } });
 
     await handleProjectBotUpdate("unused-test-token", project.id, "source-bot", {
@@ -747,6 +750,19 @@ test("authenticated Stars cancellation webhook wakes a pending admin revoke for 
     assert.equal(updated.adminStarsCancelPending, true);
     assert.equal(updated.adminStarsCancelClaim, null);
     assert.ok(updated.adminStarsCancelDueAt && updated.adminStarsCancelDueAt <= new Date());
+
+    const { reconcileAdminStarsCancellation } = await import("@subpilot/payments");
+    let repeatedTelegramCalls = 0;
+    assert.equal(await reconcileAdminStarsCancellation(
+      subscription.id,
+      "source-bot",
+      async () => { repeatedTelegramCalls += 1; return false; }
+    ), true);
+    assert.equal(repeatedTelegramCalls, 0);
+    const finalized = await prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id } });
+    assert.equal(finalized.status, "CANCELLED");
+    assert.equal(finalized.adminStarsCancelPending, false);
+    assert.equal(finalized.telegramStarSubscriptionState, "CANCELED");
   });
 });
 
