@@ -1728,7 +1728,8 @@ test("a fresh process reconciles a confirmed Telegram ban after SIGKILL and natu
         where: { customerId_connectedChatId: { customerId: customer.id, connectedChatId: chat.id } }
       });
       assert.ok(scope.leaseExpiresAt);
-      await delay(Math.max(0, scope.leaseExpiresAt.getTime() - Date.now()) + 100);
+      // Allow for database/runner clock skew and lease expiry visibility on CI.
+      await delay(Math.max(0, scope.leaseExpiresAt.getTime() - Date.now()) + 1_500);
       const successor = start();
       try {
         let result: unknown;
