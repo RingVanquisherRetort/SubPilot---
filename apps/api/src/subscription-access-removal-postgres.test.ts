@@ -287,3 +287,27 @@ test("ambiguous ban after failed unban cannot silently clear a moderator exclusi
     assert.equal(current.revocationLastError, "MEMBER_BAN_OWNERSHIP_UNCERTAIN");
   });
 });
+
+for (const status of ["left", "restricted", "administrator", "creator"] as const) {
+  test("expiry preserves Telegram moderation for status " + status, {
+    skip: !process.env.DATABASE_URL
+  }, async () => {
+    await withFixture(async ({ subscription, customer, chat, grant }) => {
+      let mutations = 0;
+      const bot = { api: {
+        revokeChatInviteLink: async () => true,
+        getChatMember: async () => ({ status, is_member: true }),
+        banChatMember: async () => { mutations++; return true; },
+        unbanChatMember: async () => { mutations++; return true; }
+      } } as unknown as Bot;
+      const result = await reconcileSubscriptionAccessRemoval({
+        bot, subscriptionId: subscription.id, customerId: customer.id,
+        connectedChatId: chat.id, telegramUserId: customer.telegramUserId
+      });
+      assert.equal(mutations, 0);
+      assert.equal(result, status === "left" ? "REVOKED" : "FAILED");
+      const saved = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } });
+      assert.equal(saved.revokedAt !== null, status === "left");
+    });
+  });
+}

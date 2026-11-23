@@ -128,3 +128,7 @@ These items have been inspected in source; the table does not claim that every s
 3. Close AUD-003/AUD-004 with focused handler-level coverage and operational checks where appropriate.
 4. Continue the central-bot role/callback and project-bot payment/access handler review.
 5. Re-run CI on the final audited branch; schedule live Telegram/provider acceptance separately.
+
+### AUD-018 expiry moderation review
+
+An absent member (`left`) needs only local grant finalization. Restricted members, administrators and owners require moderation review; expiry records a failure and does not mutate their Telegram permissions. PostgreSQL regressions check all four statuses. Ordinary member removal and webhook recovery still require review for external races.

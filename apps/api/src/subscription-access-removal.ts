@@ -352,7 +352,10 @@ export async function reconcileSubscriptionAccessRemoval(
         (member.status === "restricted" && !member.is_member)
       ) {
         revocationReason = "ADMIN_EXCLUDED";
-      } else {
+      } else if (member.status === "restricted" || member.status === "administrator" || member.status === "creator") {
+        await fail("MEMBER_MODERATION_REVIEW_REQUIRED");
+        return "FAILED";
+      } else if (member.status === "member") {
         if (!await isCurrentRevision()) return "LEASE_LOST";
 
         // Persist an ambiguity marker before the remote ban. If this process
