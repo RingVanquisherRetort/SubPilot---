@@ -84,6 +84,7 @@ test("PostgreSQL workspace lock serializes simultaneous Telegram chat activation
         wasAlreadyActive: false,
         billing: billing ? {
           status: billing.status,
+          currentPeriodEnd: billing.currentPeriodEnd,
           platformPlanIsActive: billing.platformPlan.isActive,
           features: billing.platformPlan.features
         } : null,
@@ -126,6 +127,7 @@ test("PostgreSQL workspace lock serializes simultaneous Telegram chat activation
         wasAlreadyActive: false,
         billing: billing ? {
           status: billing.status,
+          currentPeriodEnd: billing.currentPeriodEnd,
           platformPlanIsActive: billing.platformPlan.isActive,
           features: billing.platformPlan.features
         } : null,
@@ -153,6 +155,7 @@ test("PostgreSQL workspace lock serializes simultaneous Telegram chat activation
         wasAlreadyActive: false,
         billing: billing ? {
           status: billing.status,
+          currentPeriodEnd: billing.currentPeriodEnd,
           platformPlanIsActive: billing.platformPlan.isActive,
           features: billing.platformPlan.features
         } : null,
@@ -161,6 +164,16 @@ test("PostgreSQL workspace lock serializes simultaneous Telegram chat activation
     }, { isolationLevel: "ReadCommitted" });
     assert.equal(activationAfterSlotFreed, true);
     assert.equal(inactiveChat.isActive, false);
+    await prisma.workspaceBilling.update({
+      where: { workspaceId: workspace.id },
+      data: { currentPeriodEnd: new Date(0) }
+    });
+    assert.equal((await connectChat(3)).isActive, false);
+    await prisma.workspaceBilling.update({
+      where: { workspaceId: workspace.id },
+      data: { currentPeriodEnd: new Date(Date.now() + 60_000) }
+    });
+    assert.equal((await connectChat(4)).isActive, true);
   } finally {
     if (workspaceId) await prisma.workspace.deleteMany({ where: { id: workspaceId } });
     if (platformPlanId) await prisma.platformPlan.deleteMany({ where: { id: platformPlanId } });
