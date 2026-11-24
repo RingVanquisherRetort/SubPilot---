@@ -2029,6 +2029,7 @@ export async function handleProjectBotUpdate(
             wasAlreadyActive: Boolean(existingChat?.isActive),
             billing: billing ? {
               status: billing.status,
+              currentPeriodEnd: billing.currentPeriodEnd,
               platformPlanIsActive: billing.platformPlan.isActive,
               features: billing.platformPlan.features
             } : null,
