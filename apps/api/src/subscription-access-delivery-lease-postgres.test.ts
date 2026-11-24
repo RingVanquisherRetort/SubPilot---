@@ -498,3 +498,37 @@ test("a failed compensation can be resumed using only the persisted stale link",
     assert.equal(await prisma.inviteCompensation.count({ where: { inviteLink: url } }), 0);
   } finally { await prisma.inviteCompensation.deleteMany({ where: { inviteLink: url } }); }
 });
+
+test("explicit manual unban restores delivery of a fresh single-member invitation", { skip: !process.env.DATABASE_URL }, async () => {
+  const { applyManualGrantUnban } = await import("../../control-bot/src/manual-grant-unban.js");
+  await withDeliveryFixture(async ({ subscription, customer, chat, suffix }) => {
+    const sub = await prisma.subscription.findUniqueOrThrow({ where: { id: subscription.id }, include: { project: { include: { workspace: true } } } });
+    const actor = sub.project.workspace.createdById;
+    await prisma.user.update({ where: { id: actor }, data: { telegramId: customer.telegramUserId + 1n } });
+    await prisma.subscription.update({ where: { id: subscription.id }, data: { grantType: "MANUAL" } });
+    await requestSubscriptionAccessReconciliation(prisma, customer.id, [chat.id]);
+    const scope = await prisma.subscriptionAccessScope.findUniqueOrThrow({ where: { customerId_connectedChatId: { customerId: customer.id, connectedChatId: chat.id } } });
+    let unbans = 0, invitations = 0;
+    const link = "https://t.me/+manual-reentry-" + suffix;
+    const bot = { token: "12345:test", api: {
+      getChatMember: async (_chat: string, id: number) => id === Number(customer.telegramUserId)
+        ? { status: unbans ? "left" : "kicked" } : { status: "administrator", can_restrict_members: true },
+      unbanChatMember: async () => { unbans++; return true; },
+      createChatInviteLink: async (_chat: string, options: { member_limit?: number }) => {
+        assert.equal(options.member_limit, 1);
+        invitations++;
+        return { invite_link: link };
+      }
+    } } as unknown as Bot;
+    await applyManualGrantUnban({ scope, bot, subscriptionId: subscription.id, actorUserId: actor, grantAuditId: randomUUID() });
+    const result = await deliverSubscriptionAccess(bot, subscription.id, [chat.telegramChatId.toString()]);
+    assert.equal(unbans, 1);
+    assert.equal(invitations, 1);
+    assert.deepEqual(result.links, ["Access delivery lease chat: " + link]);
+    assert.deepEqual(result.failed, []);
+    assert.deepEqual(result.blocked, []);
+    const grant = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { subscriptionId_connectedChatId: { subscriptionId: subscription.id, connectedChatId: chat.id } } });
+    assert.equal(grant.inviteLink, link);
+    assert.equal(grant.revokedAt, null);
+  });
+});
