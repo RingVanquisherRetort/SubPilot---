@@ -2483,3 +2483,27 @@ test("confirmed manual unban requeues failed invite delivery without replaying u
     assert.ok(current.desiredRevision > scope.desiredRevision);
   });
 });
+
+test("manual unban does not dispatch after entitlement changes during membership lookup", { skip: !process.env.DATABASE_URL }, async () => {
+  const { applyManualGrantUnban } = await import("../../control-bot/src/manual-grant-unban.js");
+  await withFixture(async ({ customer, chat, subscription, project, grant }) => {
+    const { workspace } = await prisma.project.findUniqueOrThrow({ where: { id: project.id }, include: { workspace: true } });
+    await prisma.user.update({ where: { id: workspace.createdById }, data: { telegramId: customer.telegramUserId + 1n } });
+    await prisma.subscription.update({ where: { id: subscription.id }, data: { status: "ACTIVE", endsAt: null, grantType: "MANUAL" } });
+    await requestSubscriptionAccessReconciliation(prisma, customer.id, [chat.id]);
+    const scope = await prisma.subscriptionAccessScope.findUniqueOrThrow({ where: { customerId_connectedChatId: { customerId: customer.id, connectedChatId: chat.id } } });
+    let dispatched = 0;
+    const bot = { api: {
+      getChatMember: async (_chat: string, id: number) => {
+        if (id === Number(customer.telegramUserId)) return { status: "kicked" };
+        await prisma.subscription.update({ where: { id: subscription.id }, data: { status: "CANCELLED" } });
+        await requestSubscriptionAccessReconciliation(prisma, customer.id, [chat.id]);
+        return { status: "administrator", can_restrict_members: true };
+      },
+      unbanChatMember: async () => { dispatched++; return true; }
+    } } as unknown as Bot;
+    await applyManualGrantUnban({ scope, bot, subscriptionId: subscription.id, actorUserId: workspace.createdById, grantAuditId: randomUUID() });
+    assert.equal(dispatched, 0);
+    assert.equal(await prisma.auditLog.count({ where: { resourceId: grant.id, action: "MANUAL_GRANT_UNBAN_DISPATCHED" } }), 0);
+  });
+});
