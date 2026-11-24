@@ -188,10 +188,12 @@ export function formatWorkspaceBillingOverview(
     );
   } else {
     const billing = overview.billing;
+    const periodExpired = billing.currentPeriodEnd !== null && billing.currentPeriodEnd.getTime() <= Date.now();
+    const effectiveStatus = periodExpired && ["ACTIVE", "TRIALING"].includes(billing.status) ? "EXPIRED" : billing.status;
     lines.push(
       `План: ${billing.plan.title} (${billing.plan.code})`,
       `Стоимость: ${billing.plan.price} ${billing.plan.currency} за ${billing.plan.billingPeriodDays} дн.`,
-      `Статус подписки: ${BILLING_STATUS_LABELS[billing.status] ?? billing.status.toLowerCase()}`
+      `Статус подписки: ${BILLING_STATUS_LABELS[effectiveStatus] ?? effectiveStatus.toLowerCase()}`
     );
     if (!billing.plan.isActive) lines.push("⚠️ План выключен в каталоге.");
     if (billing.currentPeriodEnd) {
