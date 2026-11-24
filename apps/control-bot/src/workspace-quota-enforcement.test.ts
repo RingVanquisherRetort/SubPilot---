@@ -71,6 +71,23 @@ test("PostgreSQL workspace quotas serialize concurrent creation and archived-res
       }
     });
 
+    // An expired period must not allow new resources even if status is stale.
+    await prisma.workspaceBilling.update({
+      where: { workspaceId: workspace.id },
+      data: { currentPeriodEnd: new Date(Date.now() - 60_000) }
+    });
+    await assert.rejects(
+      withWorkspaceQuotaTransaction(workspace.id, "projects", async () => {
+        assert.fail("Expired billing must not reach the mutation");
+      }),
+      /Подписка рабочего пространства истекла/
+    );
+    await prisma.workspaceBilling.update({
+      where: { workspaceId: workspace.id },
+      data: { currentPeriodEnd: new Date(Date.now() + 86_400_000) }
+    });
+    await withWorkspaceQuotaTransaction(workspace.id, "projects", async () => true);
+
     const firstMember = await prisma.user.create({
       data: { telegramId: telegramBase + 1n, firstName: "Quota member one" }
     });
