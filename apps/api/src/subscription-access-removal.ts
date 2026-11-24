@@ -383,7 +383,7 @@ export async function reconcileSubscriptionAccessRemoval(
           await tx.$queryRawUnsafe('SELECT "id" FROM "SubscriptionAccessGrant" WHERE "id" = $1 FOR UPDATE', currentSnapshot.grantId);
           const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
             'SELECT "id" FROM "SubscriptionAccessScope" WHERE "id" = $1 AND "leaseToken" = $2 ' +
-            'AND "desiredRevision" = $3 AND "leaseExpiresAt" > clock_timestamp() FOR UPDATE',
+            'AND "desiredRevision" = $3 AND "leaseExpiresAt" > (clock_timestamp() AT TIME ZONE 'UTC') FOR UPDATE',
             lease.id, lease.leaseToken, lease.revision
           );
           if (!rows.length) return false;
