@@ -40,6 +40,9 @@ export async function assertWorkspaceQuotaInTransaction(
   if (!["ACTIVE", "TRIALING"].includes(billing.status)) {
     throw new Error("Подписка рабочего пространства не активна. Управление ресурсами временно ограничено.");
   }
+  if (billing.currentPeriodEnd && billing.currentPeriodEnd.getTime() <= Date.now()) {
+    throw new Error("Подписка рабочего пространства истекла. Продлите тариф для добавления ресурсов.");
+  }
   if (!billing.platformPlan.isActive) {
     throw new Error("Тариф рабочего пространства отключён. Обратитесь к владельцу пространства.");
   }
