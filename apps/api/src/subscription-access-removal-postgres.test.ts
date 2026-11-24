@@ -2451,3 +2451,35 @@ test("an explicit manual grant requires live moderator rights and consumes its u
     assert.equal(dispatched, 1);
   });
 });
+
+test("confirmed manual unban requeues failed invite delivery without replaying unban", { skip: !process.env.DATABASE_URL }, async () => {
+  const { applyManualGrantUnban } = await import("../../control-bot/src/manual-grant-unban.js");
+  await withFixture(async ({ customer, chat, subscription, project, grant }) => {
+    const { workspace } = await prisma.project.findUniqueOrThrow({ where: { id: project.id }, include: { workspace: true } });
+    await prisma.user.update({ where: { id: workspace.createdById }, data: { telegramId: customer.telegramUserId + 1n } });
+    await prisma.subscription.update({ where: { id: subscription.id }, data: { status: "ACTIVE", endsAt: null, grantType: "MANUAL" } });
+    await prisma.subscriptionAccessGrant.update({ where: { id: grant.id }, data: {
+      deliveryAttempts: 5, deliveryFailedAt: new Date(), deliveryLastError: "MEMBER_BLOCKED", joinedAt: new Date()
+    } });
+    await requestSubscriptionAccessReconciliation(prisma, customer.id, [chat.id]);
+    const scope = await prisma.subscriptionAccessScope.findUniqueOrThrow({ where: { customerId_connectedChatId: { customerId: customer.id, connectedChatId: chat.id } } });
+    let dispatched = 0;
+    const bot = { api: {
+      getChatMember: async (_chat: string, id: number) => id === Number(customer.telegramUserId)
+        ? { status: dispatched ? "left" : "kicked" } : { status: "administrator", can_restrict_members: true },
+      unbanChatMember: async () => { dispatched++; return true; }
+    } } as unknown as Bot;
+    const input = { scope, bot, subscriptionId: subscription.id, actorUserId: workspace.createdById, grantAuditId: randomUUID() };
+    await applyManualGrantUnban(input);
+    await applyManualGrantUnban(input);
+    assert.equal(dispatched, 1);
+    const updated = await prisma.subscriptionAccessGrant.findUniqueOrThrow({ where: { id: grant.id } });
+    assert.equal(updated.deliveryAttempts, 0);
+    assert.equal(updated.deliveryFailedAt, null);
+    assert.equal(updated.deliveryLastError, null);
+    assert.equal(updated.joinedAt, null);
+    assert.ok(updated.deliveryNextAttemptAt);
+    const current = await prisma.subscriptionAccessScope.findUniqueOrThrow({ where: { id: scope.id } });
+    assert.ok(current.desiredRevision > scope.desiredRevision);
+  });
+});
