@@ -2422,3 +2422,32 @@ test("control bot exposes parked cases through the project menu and handles a di
     }
   });
 });
+
+test("an explicit manual grant requires live moderator rights and consumes its unban authority once", { skip: !process.env.DATABASE_URL }, async () => {
+  const { applyManualGrantUnban } = await import("../../control-bot/src/manual-grant-unban.js");
+  await withFixture(async ({ customer, chat, subscription, project }) => {
+    const { workspace } = await prisma.project.findUniqueOrThrow({ where: { id: project.id }, include: { workspace: true } });
+    // Existing fixtures use synthetic owner IDs outside the Telegram numeric range.
+    await prisma.user.update({ where: { id: workspace.createdById }, data: { telegramId: customer.telegramUserId + 1n } });
+    await prisma.subscription.update({ where: { id: subscription.id }, data: { status: "ACTIVE", endsAt: null, grantType: "MANUAL" } });
+    await requestSubscriptionAccessReconciliation(prisma, customer.id, [chat.id]);
+    const scope = await prisma.subscriptionAccessScope.findUniqueOrThrow({ where: { customerId_connectedChatId: { customerId: customer.id, connectedChatId: chat.id } } });
+    let moderator = false, dispatched = 0;
+    const bot = { api: {
+      getChatMember: async (_chat: string, id: number) => id === Number(customer.telegramUserId)
+        ? { status: "kicked" } : { status: "administrator", can_restrict_members: moderator },
+      unbanChatMember: async (_chat: string, _id: number, options: unknown) => {
+        assert.deepEqual(options, { only_if_banned: true });
+        dispatched++;
+        throw new Error("lost reply");
+      }
+    } } as unknown as Bot;
+    const input = { scope, bot, subscriptionId: subscription.id, actorUserId: workspace.createdById, grantAuditId: randomUUID() };
+    await applyManualGrantUnban(input);
+    assert.equal(dispatched, 0);
+    moderator = true;
+    await assert.rejects(applyManualGrantUnban(input), /lost reply/);
+    await applyManualGrantUnban(input);
+    assert.equal(dispatched, 1);
+  });
+});

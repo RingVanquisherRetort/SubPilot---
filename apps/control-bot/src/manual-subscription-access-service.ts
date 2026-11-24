@@ -1,3 +1,4 @@
+import { applyManualGrantUnban } from "./manual-grant-unban.js";
 import { prisma } from "@subpilot/database";
 import { lockSubscriptionAccessScopes, requestSubscriptionAccessReconciliation, reconcileAdminStarsCancellation } from "@subpilot/payments";
 import { Bot } from "grammy";
@@ -229,7 +230,7 @@ export async function grantManualSubscriptionAccess(input: AccessOperationInput 
   const telegramUserId = parseTelegramUserId(input.telegramUserId);
   const now = new Date();
 
-  return prisma.$transaction(async (tx) => {
+  const { scopes, grantAuditId, ...result } = await prisma.$transaction(async (tx) => {
     await lockWorkspace(tx, input.workspaceId);
     await assertWorkspaceAdmin(tx, input.workspaceId, input.actorUserId);
     const { project, plan } = await validateProjectAndPlan(tx, input);
@@ -296,7 +297,7 @@ export async function grantManualSubscriptionAccess(input: AccessOperationInput 
     }
 
     await ensureAccessGrantRows(tx, subscriptionId, connectedChatIds, now);
-    await tx.auditLog.create({
+    const audit = await tx.auditLog.create({
       data: {
         workspaceId: input.workspaceId,
         projectId: project.id,
@@ -315,8 +316,9 @@ export async function grantManualSubscriptionAccess(input: AccessOperationInput 
       }
     });
 
+    const scopes = await tx.subscriptionAccessScope.findMany({ where: { customerId: customer.id, connectedChatId: { in: connectedChatIds } } });
     return {
-      subscriptionId,
+      scopes, grantAuditId: audit.id, subscriptionId,
       projectName: project.name,
       planTitle: plan.title,
       telegramUserId: telegramUserId.toString(),
@@ -325,6 +327,19 @@ export async function grantManualSubscriptionAccess(input: AccessOperationInput 
       destinations: connectedChatIds.length
     };
   }, { isolationLevel: "ReadCommitted" });
+  const source = await prisma.projectBot.findFirst({ where: { projectId: input.projectId, status: "ACTIVE" },
+    orderBy: [{ isPrimary: "desc" }, { createdAt: "desc" }], select: { tokenEncrypted: true } });
+  for (const scope of scopes) {
+    if (!source) break;
+    try {
+      await applyManualGrantUnban({ bot: new Bot(decryptSecret(source.tokenEncrypted)), scope,
+        grantAuditId, actorUserId: input.actorUserId, subscriptionId: result.subscriptionId });
+    } catch {
+      // The grant is committed. An ambiguous remote mutation must never be replayed.
+      console.warn("Manual grant membership check or unban could not be confirmed");
+    }
+  }
+  return result;
 }
 
 export async function grantTrialSubscriptionAccess(input: AccessOperationInput & {

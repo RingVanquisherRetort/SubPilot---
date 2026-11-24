@@ -830,7 +830,7 @@ export function createControlBot(token: string): Bot {
       }
       keyboard.text("⬅️ К управлению подписками", "ui:subaccess:" + projectId);
       await ctx.editMessageText(
-        (kind === "trial" ? "Выберите тариф для пробного доступа:" : "Выберите тариф для ручной выдачи:") +
+        (kind === "trial" ? "Выберите тариф для пробного доступа:" : "Выберите тариф для ручной выдачи. Если получатель заблокирован, бот попробует снять блокировку в тех каналах, где у вас есть право блокировать участников:") +
         "\n\n" + plans.map((plan) => "• " + plan.title + " — площадок: " + plan._count.chats).join("\n"),
         { reply_markup: keyboard }
       );
