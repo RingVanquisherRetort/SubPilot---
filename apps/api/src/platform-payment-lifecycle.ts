@@ -155,7 +155,6 @@ async function processVerifiedRefund(input: {
     return "MANUAL_REVIEW";
   }
 
-  await lockWorkspace(tx, payment.workspaceId);
   const billing = await tx.workspaceBilling.findUnique({
     where: { workspaceId: payment.workspaceId }
   });
@@ -304,13 +303,27 @@ async function processVerifiedEvent(input: {
       return "MANUAL_REVIEW";
     }
 
-    const payment = await tx.platformPayment.findFirst({
-      where: {
-        id: input.event.paymentReference,
-        providerConnectionId: input.connectionId,
-        provider: "YOOKASSA"
-      }
+    const paymentWhere = {
+      id: input.event.paymentReference,
+      providerConnectionId: input.connectionId,
+      provider: "YOOKASSA" as const
+    };
+    const candidate = await tx.platformPayment.findFirst({
+      where: paymentWhere,
+      select: { id: true, workspaceId: true }
     });
+    // Keep the workspace-before-payment lock order used by checkout.
+    // Different webhook event IDs may refer to the same payment.
+    if (candidate) {
+      await lockWorkspace(tx, candidate.workspaceId);
+      await tx.$queryRawUnsafe(
+        'SELECT "id" FROM "PlatformPayment" WHERE "id" = $1 FOR UPDATE',
+        candidate.id
+      );
+    }
+    const payment = candidate ? await tx.platformPayment.findFirst({
+      where: paymentWhere
+    }) : null;
     if (!payment) {
       await setManualReview(tx, record.id, "LOCAL_PAYMENT_NOT_FOUND");
       return "MANUAL_REVIEW";
@@ -362,7 +375,6 @@ async function processVerifiedEvent(input: {
     let periodEnd: Date | null = null;
 
     if (decision.nextStatus === "SUCCEEDED") {
-      await lockWorkspace(tx, payment.workspaceId);
       const billing = await tx.workspaceBilling.findUnique({
         where: { workspaceId: payment.workspaceId }
       });
