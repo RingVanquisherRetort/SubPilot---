@@ -182,13 +182,20 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
         captured_at: "2026-11-21T12:00:00.000Z"
       }
     };
-    const first = await processYooKassaWebhook({
-      connectionId: connection.id,
-      headers: {},
-      rawBody: JSON.stringify(notification),
-      body: notification
-    }, { fetch: fakeFetch });
-    assert.deepEqual(first, { authenticated: true, processed: 1, duplicates: 0, manualReview: 0 });
+    const concurrentResults = await Promise.all(Array.from({ length: 4 }, () =>
+      processYooKassaWebhook({
+        connectionId: connection.id,
+        headers: {},
+        rawBody: JSON.stringify(notification),
+        body: notification
+      }, { fetch: fakeFetch })
+    ));
+    assert.ok(concurrentResults.every((result) => result.authenticated && result.manualReview === 0));
+    assert.equal(concurrentResults.reduce((sum, result) => sum + result.processed, 0), 1);
+    assert.equal(concurrentResults.reduce((sum, result) => sum + result.duplicates, 0), 3);
+    assert.equal(await prisma.auditLog.count({
+      where: { workspaceId: workspace.id, resourceId: paymentId, action: "PLATFORM_PAYMENT_SUCCEEDED" }
+    }), 1);
 
     const paid = await prisma.platformPayment.findUniqueOrThrow({ where: { id: paymentId } });
     assert.equal(paid.status, "SUCCEEDED");
