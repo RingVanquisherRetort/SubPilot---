@@ -136,3 +136,18 @@ test("fails closed when the live usage counter is invalid", () => {
     }), false);
   }
 });
+
+test("expired paid periods block new chats but preserve existing chats", () => {
+  for (const status of ["ACTIVE", "TRIALING"]) {
+    const input = {
+      hasRequiredRights: true,
+      wasAlreadyActive: false,
+      billing: billing({ status, currentPeriodEnd: new Date(0) }),
+      currentActiveChats: 0
+    };
+    assert.equal(shouldActivateConnectedChat(input), false);
+    assert.equal(shouldActivateConnectedChat({ ...input, wasAlreadyActive: true }), true);
+    assert.equal(shouldActivateConnectedChat({ ...input, billing: billing({ status, currentPeriodEnd: new Date(Date.now() + 60_000) }) }), true);
+    assert.equal(shouldActivateConnectedChat({ ...input, billing: billing({ status, currentPeriodEnd: null }) }), true);
+  }
+});
