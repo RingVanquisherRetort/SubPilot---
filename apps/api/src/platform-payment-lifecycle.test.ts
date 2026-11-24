@@ -270,17 +270,28 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
         amount: { value: "99.00", currency: "RUB" }
       }
     };
-    const refundResult = await processYooKassaWebhook({
-      connectionId: connection.id,
-      headers: {},
-      rawBody: JSON.stringify(refundNotification),
-      body: refundNotification
-    }, { fetch: fakeFetch });
+    const [refundResult, replayedSuccess] = await Promise.all([
+      processYooKassaWebhook({
+        connectionId: connection.id,
+        headers: {},
+        rawBody: JSON.stringify(refundNotification),
+        body: refundNotification
+      }, { fetch: fakeFetch }),
+      processYooKassaWebhook({
+        connectionId: connection.id,
+        headers: {},
+        rawBody: JSON.stringify(notification),
+        body: notification
+      }, { fetch: fakeFetch })
+    ]);
     assert.deepEqual(refundResult, {
       authenticated: true,
       processed: 1,
       duplicates: 0,
       manualReview: 0
+    });
+    assert.deepEqual(replayedSuccess, {
+      authenticated: true, processed: 0, duplicates: 1, manualReview: 0
     });
     // A delayed success notification must not restore refunded access.
     const lateSuccess = await processYooKassaWebhook({
