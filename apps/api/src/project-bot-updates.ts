@@ -579,7 +579,7 @@ export async function recordSubscriptionAccessRevocationFailure(
       const checkedAt = new Date();
       const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
         'SELECT "id" FROM "SubscriptionAccessScope" WHERE "id" = $1 AND "leaseToken" = $2 ' +
-        'AND "desiredRevision" = $3 AND "leaseExpiresAt" > (clock_timestamp() AT TIME ZONE 'UTC') FOR UPDATE',
+        `AND "desiredRevision" = $3 AND "leaseExpiresAt" > (clock_timestamp() AT TIME ZONE 'UTC') FOR UPDATE`,
         fence.lease.id, fence.lease.leaseToken, fence.lease.revision
       );
       if (!rows.length || !await failSubscriptionAccessScope(tx, fence.lease, {
