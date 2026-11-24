@@ -7,6 +7,7 @@ const REQUIRED_LIMIT_KEYS = [
 
 export interface ConnectedChatQuotaBillingState {
   status: string;
+  currentPeriodEnd?: Date | null;
   platformPlanIsActive: boolean;
   features: unknown;
 }
@@ -36,6 +37,7 @@ export function shouldActivateConnectedChat(
     input.billing.status !== "ACTIVE" &&
     input.billing.status !== "TRIALING"
   ) return false;
+  if (input.billing.currentPeriodEnd && !(input.billing.currentPeriodEnd.getTime() > Date.now())) return false;
   if (!input.billing.platformPlanIsActive) return false;
   if (!Number.isSafeInteger(input.currentActiveChats) || input.currentActiveChats < 0) {
     return false;
