@@ -282,6 +282,18 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
       duplicates: 0,
       manualReview: 0
     });
+    // A delayed success notification must not restore refunded access.
+    const lateSuccess = await processYooKassaWebhook({
+      connectionId: connection.id,
+      headers: {},
+      rawBody: JSON.stringify(notification),
+      body: notification
+    }, { fetch: fakeFetch });
+    assert.deepEqual(lateSuccess, { authenticated: true, processed: 0, duplicates: 1, manualReview: 0 });
+    assert.equal(await prisma.auditLog.count({
+      where: { workspaceId: workspace.id, resourceId: paymentId, action: "PLATFORM_PAYMENT_SUCCEEDED" }
+    }), 1);
+
     const paymentAfterRefundNotice = await prisma.platformPayment.findUniqueOrThrow({ where: { id: paymentId } });
     const billingAfterRefundNotice = await prisma.workspaceBilling.findUniqueOrThrow({ where: { workspaceId: workspace.id } });
     assert.equal(paymentAfterRefundNotice.status, "REFUNDED");
