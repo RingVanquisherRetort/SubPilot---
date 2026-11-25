@@ -356,6 +356,21 @@ test("agency analytics aggregate subscribers, churn, renewals and revenue by cur
       }),
       (error: unknown) => error instanceof AgencyAnalyticsError && error.code === "INVALID_RANGE"
     );
+    await prisma.projectMember.update({
+      where: { projectId_userId: { projectId: projectB.id, userId: scopedViewer.id } },
+      data: { role: "VIEWER" }
+    });
+    await assert.rejects(
+      getAgencyAnalytics({ workspaceId: workspace.id, actorUserId: scopedViewer.id, now }),
+      (error: unknown) => error instanceof AgencyAnalyticsError && error.code === "PERMISSION_DENIED"
+    );
+    await prisma.workspaceMember.delete({
+      where: { workspaceId_userId: { workspaceId: workspace.id, userId: manager.id } }
+    });
+    await assert.rejects(
+      getAgencyAnalytics({ workspaceId: workspace.id, actorUserId: manager.id, now }),
+      (error: unknown) => error instanceof AgencyAnalyticsError && error.code === "ACTOR_NOT_MEMBER"
+    );
   } finally {
     if (foreignWorkspaceId) await prisma.workspace.deleteMany({ where: { id: foreignWorkspaceId } });
     if (workspaceId) await prisma.workspace.deleteMany({ where: { id: workspaceId } });
