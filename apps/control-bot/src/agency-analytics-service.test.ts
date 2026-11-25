@@ -377,3 +377,31 @@ test("agency analytics aggregate subscribers, churn, renewals and revenue by cur
     if (userIds.length) await prisma.user.deleteMany({ where: { id: { in: userIds } } });
   }
 });
+
+
+test("agency report retries only serialization conflicts and remains bounded", async () => {
+  const { retryAgencyReport, AgencyAnalyticsError } = await import("./agency-analytics-service.js");
+  const conflict = Object.assign(new Error("serialization conflict"), { code: "P2034" });
+  let attempts = 0;
+  const result = await retryAgencyReport(async () => {
+    if (++attempts < 3) throw conflict;
+    return "fresh report";
+  });
+  assert.equal(result, "fresh report");
+  assert.equal(attempts, 3);
+
+  attempts = 0;
+  await assert.rejects(retryAgencyReport(async () => {
+    attempts++;
+    throw conflict;
+  }), (error: unknown) => error === conflict);
+  assert.equal(attempts, 3);
+
+  attempts = 0;
+  const denied = new AgencyAnalyticsError("ACTOR_NOT_MEMBER");
+  await assert.rejects(retryAgencyReport(async () => {
+    if (++attempts === 1) throw conflict;
+    throw denied;
+  }), (error: unknown) => error === denied);
+  assert.equal(attempts, 2);
+});
