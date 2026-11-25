@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { Bot } from "grammy";
 import { handleProjectBotUpdate } from "./project-bot-updates.js";
 
-test("first private /start initializes the project bot and sends the buyer menu", async () => {
+test("first private /start initializes the project bot and requests a language", async () => {
   const calls: string[] = [];
   let reply = "";
   const server = createServer(async (req, res) => {
@@ -31,7 +31,9 @@ test("first private /start initializes the project bot and sends the buyer menu"
       entities: [{ offset: 0, length: 6, type: "bot_command" }]
     } }, 1, 0, bot);
     assert.deepEqual(calls, ["getMe", "sendMessage"]);
-    assert.match(reply, /buyer:plans/);
+    assert.match(reply, /buyer:locale:ru/);
+    assert.match(reply, /buyer:locale:en/);
+    assert.doesNotMatch(reply, /buyer:plans/);
   } finally {
     server.close();
     server.closeAllConnections();
