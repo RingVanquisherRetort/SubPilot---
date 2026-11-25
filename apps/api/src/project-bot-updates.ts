@@ -2187,6 +2187,7 @@ export async function handleProjectBotUpdate(
   });
 
   projectBot.command("paysupport", async (ctx) => {
+    const en = (await buyerLocale(ctx)) === "en";
     if (!(await requirePrivateBuyerChat(ctx))) return;
     const project = await prisma.project.findUnique({
       where: { id: projectId },
@@ -2202,7 +2203,7 @@ export async function handleProjectBotUpdate(
 
     const contact = project?.creatorUser ?? project?.workspace.createdBy;
     if (!contact) {
-      await ctx.reply("По вопросам оплаты обратитесь к администратору проекта через его описание или официальный канал связи.");
+      await ctx.reply((en ? "For payment questions, contact the project administrator through the project description or official contact channel." : "По вопросам оплаты обратитесь к администратору проекта через его описание или официальный канал связи."));
       return;
     }
 
@@ -2210,14 +2211,15 @@ export async function handleProjectBotUpdate(
       ? "https://t.me/" + contact.username
       : "tg://user?id=" + contact.telegramId.toString();
     await ctx.reply(
-      "Поддержка по оплате и возвратам. Напишите владельцу проекта: " + contactUrl +
-      "\nУкажите дату и сумму платежа, а также сохраните квитанцию Telegram."
+      (en ? "Payment and refund support. Contact the project owner: " : "Поддержка по оплате и возвратам. Напишите владельцу проекта: ") + contactUrl +
+      (en ? "\nInclude the payment date and amount, and keep your Telegram receipt." : "\nУкажите дату и сумму платежа, а также сохраните квитанцию Telegram.")
     );
   });
 
   projectBot.command("access", async (ctx) => {
+    const en = (await buyerLocale(ctx)) === "en";
     if (!ctx.chat || ctx.chat.type !== "private" || !ctx.from) {
-      await ctx.reply("Запросить ссылки можно только в личном чате с ботом проекта.");
+      await ctx.reply((en ? "Request links in a private chat with the project bot." : "Запросить ссылки можно только в личном чате с ботом проекта."));
       return;
     }
 
@@ -2230,7 +2232,7 @@ export async function handleProjectBotUpdate(
       }
     });
     if (!customer) {
-      await ctx.reply("У вас пока нет оформленных подписок в этом проекте.");
+      await ctx.reply((en ? "You have no subscriptions in this project yet." : "У вас пока нет оформленных подписок в этом проекте."));
       return;
     }
 
@@ -2251,7 +2253,7 @@ export async function handleProjectBotUpdate(
     });
 
     if (subscriptions.length === 0) {
-      await ctx.reply("Активных подписок не найдено. Посмотреть тарифы можно командой /plans.");
+      await ctx.reply((en ? "No active subscriptions found. View plans using /plans." : "Активных подписок не найдено. Посмотреть тарифы можно командой /plans."));
       return;
     }
 
@@ -2411,7 +2413,7 @@ export async function handleProjectBotUpdate(
     await prisma.projectCustomer.upsert({
       where: { projectId_telegramUserId: { projectId, telegramUserId: BigInt(ctx.from.id) } },
       create: { projectId, telegramUserId: BigInt(ctx.from.id), interfaceLocale: locale,
-        firstName: ctx.from.first_name, lastName: ctx.from.last_name, username: ctx.from.username },
+        firstName: ctx.from.first_name, lastName: ctx.from.last_name ?? null, username: ctx.from.username ?? null },
       update: { interfaceLocale: locale }
     });
     await showBuyerHome(ctx, locale);
@@ -2442,6 +2444,7 @@ export async function handleProjectBotUpdate(
   });
 
   projectBot.callbackQuery(/^star-sub:(cancel|resume):(.+)$/, async (ctx) => {
+    const en = (await buyerLocale(ctx)) === "en";
     if (!(await requirePrivateBuyerChat(ctx)) || !ctx.from) return;
     await ctx.answerCallbackQuery();
 
@@ -2459,36 +2462,37 @@ export async function handleProjectBotUpdate(
       select: { id: true }
     });
     if (!customer) {
-      await ctx.reply("Подписка не найдена. Обновите меню через /subscription.");
+      await ctx.reply((en ? "Subscription not found. Refresh using /subscription." : "Подписка не найдена. Обновите меню через /subscription."));
       return;
     }
 
     try {
       const queued = await queueBuyerRenewal(subscriptionId, projectId, customer.id, projectBotId, action === "cancel");
       if (!queued) {
-        await ctx.reply("Состояние подписки изменилось или запрос уже обрабатывается. Проверьте /subscription.");
+        await ctx.reply((en ? "Subscription status changed or a request is already processing. Check /subscription." : "Состояние подписки изменилось или запрос уже обрабатывается. Проверьте /subscription."));
         return;
       }
       if (!await applyBuyerRenewal(subscriptionId, projectBotId, (args) => projectBot.api.raw.editUserStarSubscription(args))) {
-        await ctx.reply("Запрос принят. Проверьте состояние автопродления позже через /subscription.");
+        await ctx.reply((en ? "Request accepted. Check renewal status later using /subscription." : "Запрос принят. Проверьте состояние автопродления позже через /subscription."));
         return;
       }
-      await ctx.reply("Запрос обработан. Текущее состояние подписки указано ниже.");
+      await ctx.reply((en ? "Request processed. Current subscription status is shown below." : "Запрос обработан. Текущее состояние подписки указано ниже."));
       await showBuyerSubscriptionSettings(ctx);
     } catch (error) {
       console.error(
         "Could not update Telegram Stars subscription renewal state:",
         error instanceof Error ? error.name : "UnknownError"
       );
-      await ctx.reply("Не удалось изменить автопродление в Telegram. Попробуйте позже или обратитесь в /paysupport.");
+      await ctx.reply((en ? "Could not change auto-renewal in Telegram. Try later or use /paysupport." : "Не удалось изменить автопродление в Telegram. Попробуйте позже или обратитесь в /paysupport."));
     }
   });
   projectBot.callbackQuery("buyer:help", async (ctx) => {
+    const en = (await buyerLocale(ctx)) === "en";
     if (!(await requirePrivateBuyerChat(ctx))) return;
     await ctx.answerCallbackQuery();
     await ctx.reply(
-      "Выберите тариф кнопкой в меню. Оплата проходит внутри Telegram в Stars. После подтверждения оплаты бот пришлёт персональные ссылки для вступления. Каждая ссылка действует 24 часа и рассчитана на одного участника.",
-      { reply_markup: new InlineKeyboard().text("💎 Выбрать подписку", "buyer:plans") }
+      (en ? "Choose a plan from the menu. Pay in Telegram Stars. After payment confirmation, the bot sends personal invite links. Each link is valid for 24 hours and intended for one member." : "Выберите тариф кнопкой в меню. Оплата проходит внутри Telegram в Stars. После подтверждения оплаты бот пришлёт персональные ссылки для вступления. Каждая ссылка действует 24 часа и рассчитана на одного участника."),
+      { reply_markup: new InlineKeyboard().text((en ? "💎 Choose a plan" : "💎 Выбрать подписку"), "buyer:plans") }
     );
   });
 
