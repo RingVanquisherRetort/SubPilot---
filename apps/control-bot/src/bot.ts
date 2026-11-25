@@ -1265,6 +1265,7 @@ export function createControlBot(token: string): Bot {
     const planId = ctx.match[1];
     if (!planId) return;
     const user = await upsertTelegramUser(ctx);
+    const en = user.interfaceLocale === "en";
     const plan = await prisma.creatorPlan.findFirst({
       where: { id: planId },
       select: { id: true, projectId: true }
@@ -1274,7 +1275,7 @@ export function createControlBot(token: string): Bot {
       : null;
     const canManageProject = Boolean(project && MANAGER_ROLES.includes(project.accessRole as typeof MANAGER_ROLES[number]));
     if (!plan || !project) {
-      await ctx.reply("Тариф не найден или у вас нет доступа.");
+      await ctx.reply((en ? "Plan not found or access denied." : "Тариф не найден или у вас нет доступа."));
       return;
     }
 
@@ -1298,11 +1299,11 @@ export function createControlBot(token: string): Bot {
         canManageProject ? `p:ct:${planId}:${chat.id}` : `p:v:${plan.projectId}:${planId}`
       ).row();
     }
-    keyboard.text("⬅️ К тарифу", `p:v:${plan.projectId}:${planId}`);
+    keyboard.text((en ? "⬅️ Back to plan" : "⬅️ К тарифу"), `p:v:${plan.projectId}:${planId}`);
     await ctx.editMessageText(
       chats.length
-        ? "Каналы и группы тарифа. Нажмите на площадку, чтобы привязать или отвязать её:\n\n✅ — доступ включён в тариф\n➕ — нажмите, чтобы добавить"
-        : "В проекте нет активных каналов или групп. Сначала добавьте бота проекта администратором в нужную площадку.",
+        ? (en ? "Plan channels and groups. Select a chat to link or unlink it:\n\n✅ — included\n➕ — select to add" : "Каналы и группы тарифа. Нажмите на площадку, чтобы привязать или отвязать её:\n\n✅ — доступ включён в тариф\n➕ — нажмите, чтобы добавить")
+        : (en ? "No active channels or groups. Add the project bot as an administrator first." : "В проекте нет активных каналов или групп. Сначала добавьте бота проекта администратором в нужную площадку."),
       { reply_markup: keyboard }
     );
   });
@@ -1312,12 +1313,13 @@ export function createControlBot(token: string): Bot {
     const chatId = ctx.match[2];
     if (!planId || !chatId) return;
     const user = await upsertTelegramUser(ctx);
+    const en = user.interfaceLocale === "en";
     const plan = await prisma.creatorPlan.findFirst({
       where: { id: planId },
       select: { id: true, projectId: true }
     });
     if (!plan || !(await canAccessProject(plan.projectId, user.id, MANAGER_ROLES))) {
-      await ctx.reply("Нет прав изменять площадки этого тарифа.");
+      await ctx.reply((en ? "You do not have permission to modify this plan's chats." : "Нет прав изменять площадки этого тарифа."));
       return;
     }
     const chat = await prisma.connectedChat.findFirst({
@@ -1325,7 +1327,7 @@ export function createControlBot(token: string): Bot {
       select: { id: true, type: true }
     });
     if (!chat) {
-      await ctx.answerCallbackQuery({ text: "Площадка недоступна или отключена.", show_alert: true });
+      await ctx.answerCallbackQuery({ text: (en ? "Chat unavailable or disabled." : "Площадка недоступна или отключена."), show_alert: true });
       return;
     }
 
@@ -1343,7 +1345,7 @@ export function createControlBot(token: string): Bot {
       });
       if (activeLinkCount <= 1) {
         await ctx.answerCallbackQuery({
-          text: "У тарифа должна оставаться хотя бы одна активная площадка.",
+          text: (en ? "The plan must retain at least one active chat." : "У тарифа должна оставаться хотя бы одна активная площадка."),
           show_alert: true
         });
         return;
@@ -1358,14 +1360,14 @@ export function createControlBot(token: string): Bot {
       });
     } else {
       if (chat.type === "GROUP") {
-        await ctx.answerCallbackQuery({ text: "Для продаж подключите канал или супергруппу.", show_alert: true });
+        await ctx.answerCallbackQuery({ text: (en ? "Connect a channel or supergroup to sell access." : "Для продаж подключите канал или супергруппу."), show_alert: true });
         return;
       }
       await prisma.creatorPlanChat.create({
         data: { creatorPlanId: planId, connectedChatId: chatId }
       });
     }
-    await ctx.answerCallbackQuery({ text: "Список площадок обновлён." });
+    await ctx.answerCallbackQuery({ text: (en ? "Chat list updated." : "Список площадок обновлён.") });
 
     const [linked, chats] = await Promise.all([
       prisma.creatorPlanChat.findMany({
@@ -1387,9 +1389,9 @@ export function createControlBot(token: string): Bot {
         `p:ct:${planId}:${item.id}`
       ).row();
     }
-    keyboard.text("⬅️ К тарифу", `p:v:${plan.projectId}:${planId}`);
+    keyboard.text((en ? "⬅️ Back to plan" : "⬅️ К тарифу"), `p:v:${plan.projectId}:${planId}`);
     await ctx.editMessageText(
-      "Площадки тарифа обновлены. Нажмите на площадку, чтобы изменить выбор:\n\n✅ — доступ включён в тариф\n➕ — нажмите, чтобы добавить",
+      (en ? "Plan chats updated. Select a chat to change its inclusion:\n\n✅ — included\n➕ — select to add" : "Площадки тарифа обновлены. Нажмите на площадку, чтобы изменить выбор:\n\n✅ — доступ включён в тариф\n➕ — нажмите, чтобы добавить"),
       { reply_markup: keyboard }
     );
   });
@@ -1510,6 +1512,7 @@ export function createControlBot(token: string): Bot {
   bot.callbackQuery(/^ui:chats:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const user = await upsertTelegramUser(ctx);
+    const en = user.interfaceLocale === "en";
     const projectId = ctx.match[1];
     if (!projectId) return;
     const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
@@ -1526,15 +1529,15 @@ export function createControlBot(token: string): Bot {
     const canManage = await canAccessProject(projectId, user.id, ADMIN_ROLES);
     const keyboard = new InlineKeyboard();
     if (canManage && projectBot?.username) {
-      keyboard.url("➕ Выбрать канал и добавить бота",
+      keyboard.url((en ? "➕ Select channel and add bot" : "➕ Выбрать канал и добавить бота"),
         `https://t.me/${projectBot.username}?startchannel&admin=invite_users+restrict_members`).row();
     }
-    keyboard.text("⬅️ В главное меню", "ui:home");
+    keyboard.text((en ? "⬅️ Main menu" : "⬅️ В главное меню"), "ui:home");
     const lines = chats.map((chat, i) =>
-      `${i + 1}. ${chat.title ?? chat.username ?? chat.telegramChatId.toString()} — ${chat.isActive ? "активна" : "неактивна"}`
+      `${i + 1}. ${chat.title ?? chat.username ?? chat.telegramChatId.toString()} — ${chat.isActive ? (en ? "active" : "активна") : (en ? "inactive" : "неактивна")}`
     );
     await ctx.editMessageText(
-      lines.length ? `Каналы и группы «${project.name}»:\n\n${lines.join("\n")}\n\nДля активности боту нужны права приглашать пользователей и ограничивать участников. Неактивная площадка также может означать, что достигнут лимит тарифа пространства. Проверьте раздел «Тариф пространства».` : "Пока нет подключённых каналов или групп. Добавьте бота проекта администратором с правами приглашать пользователей и ограничивать участников.",
+      lines.length ? (en ? `Channels and groups for ${project.name}:\n\n${lines.join("\n")}\n\nThe bot needs invite and restrict member permissions. Inactive chats may also indicate a workspace quota limit. Check the workspace plan.` : `Каналы и группы «${project.name}»:\n\n${lines.join("\n")}\n\nДля активности боту нужны права приглашать пользователей и ограничивать участников. Неактивная площадка также может означать, что достигнут лимит тарифа пространства. Проверьте раздел «Тариф пространства».`) : (en ? "No connected channels or groups. Add the project bot as an administrator with invite and restrict member permissions." : "Пока нет подключённых каналов или групп. Добавьте бота проекта администратором с правами приглашать пользователей и ограничивать участников."),
       { reply_markup: keyboard }
     );
   });
