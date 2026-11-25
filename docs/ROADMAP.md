@@ -142,6 +142,14 @@ Initial research candidates for creators who are individuals: YooMoney, Crypto P
 - [x] Agency-wide audit history and CSV exports in the central bot; OWNER/ADMIN see the full workspace feed, while other members see only projects where they have effective MANAGER access (responsible-creator assignment or explicit ProjectMember MANAGER grant); a ProjectMember VIEWER grant alone is insufficient.
 - [ ] Live Telegram acceptance test for workspace roles, project-member assignment/removal, creator assignment, unauthorized project access, and cleanup after a member is removed.
 
+### AGENCY-01 — hardening checkpoint (25 November 2026)
+
+- [x] Consistent financial report snapshot and bounded full-transaction retry for Prisma P2034 and raw PostgreSQL SQLSTATE 40001.
+- [x] CSV formula-prefix protection, cross-workspace isolation and role/membership revocation regression tests.
+- [x] Real PostgreSQL serialization conflict recovery verified by [CI 45516927029](https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45516927029) at `5b481afab9f0590c8e80323bdf005b75f3f0e098`.
+- [ ] Verify full report behavior under concurrent permission revocation and financial mutations; the database conflict test exercises the retry helper, not the complete report.
+- [ ] Complete live Telegram role, analytics and audit export acceptance before closing AGENCY-01.
+
 ## Stage 8 — International expansion
 
 - English localization and multi-currency display.
