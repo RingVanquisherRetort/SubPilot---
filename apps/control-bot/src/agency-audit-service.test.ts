@@ -250,3 +250,17 @@ test("agency audit history and exports obey project roles and omit raw metadata"
     if (userIds.length) await prisma.user.deleteMany({ where: { id: { in: userIds } } });
   }
 });
+
+
+test("agency CSV neutralizes spreadsheet formula prefixes and preserves quoting", async () => {
+  const { buildAgencyAuditCsv } = await import("./agency-audit-service.js");
+  for (const value of ["=1+1", "  +1", "-1", "@SUM(1)", "＝1", "＋1", "－1", "＠SUM(1)", "\ttext", "\rtext", "\ntext"]) {
+    const csv = buildAgencyAuditCsv([{
+      id: "csv", createdAt: new Date("2026-01-01T00:00:00Z"),
+      projectName: value, action: "TEST", resourceType: "Project",
+      resourceId: null, actor: 'Name, "quoted"'
+    }]);
+    assert.ok(csv.includes('"' + "'" + value + '"'), JSON.stringify(value));
+    assert.ok(csv.includes('"Name, ""quoted"""'));
+  }
+});
