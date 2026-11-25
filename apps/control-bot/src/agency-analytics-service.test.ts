@@ -405,3 +405,31 @@ test("agency report retries only serialization conflicts and remains bounded", a
   }), (error: unknown) => error === denied);
   assert.equal(attempts, 2);
 });
+
+
+test("agency report retries a real PostgreSQL serialization conflict", {
+  skip: !process.env.DATABASE_URL
+}, async () => {
+  const { prisma } = await import("@subpilot/database");
+  const { retryAgencyReport } = await import("./agency-analytics-service.js");
+  const suffix = randomUUID();
+  const user = await prisma.user.create({
+    data: { telegramId: BigInt(Date.now()) * 1000000n + BigInt(Math.floor(Math.random() * 100000)), firstName: "Snapshot test" }
+  });
+  try {
+    let attempts = 0;
+    const result = await retryAgencyReport(() => prisma.$transaction(async (tx) => {
+      attempts++;
+      const snapshot = await tx.user.findUniqueOrThrow({ where: { id: user.id } });
+      if (attempts === 1) {
+        await prisma.user.update({ where: { id: user.id }, data: { firstName: suffix } });
+      }
+      await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${user.id} FOR UPDATE`;
+      return snapshot.firstName;
+    }, { isolationLevel: "RepeatableRead" }));
+    assert.equal(attempts, 2);
+    assert.equal(result, suffix);
+  } finally {
+    await prisma.user.delete({ where: { id: user.id } });
+  }
+});
