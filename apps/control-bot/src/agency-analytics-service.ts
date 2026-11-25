@@ -474,5 +474,5 @@ export async function getAgencyAnalytics(input: {
       revenueByCurrency: formatRevenue(revenueTotals),
       projects: projectsReport
     };
-  }, { isolationLevel: "ReadCommitted" });
+  }, { isolationLevel: "RepeatableRead" });
 }
