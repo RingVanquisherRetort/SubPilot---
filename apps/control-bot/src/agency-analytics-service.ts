@@ -476,8 +476,11 @@ export async function getAgencyAnalytics(input: {
     };
   }, { isolationLevel: "RepeatableRead" });
 
-  // A concurrent workspace mutation can invalidate a repeatable-read snapshot.
-  // Retry the entire read, including fresh authorization, never a partial report.
+  return retryAgencyReport(readReport);
+}
+
+// Retry the entire read, including fresh authorization, never a partial report.
+export async function retryAgencyReport<T>(readReport: () => Promise<T>): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
       return await readReport();
