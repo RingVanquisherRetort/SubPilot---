@@ -1147,6 +1147,7 @@ export function createControlBot(token: string): Bot {
   bot.callbackQuery(/^ui:plans:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const user = await upsertTelegramUser(ctx);
+    const en = user.interfaceLocale === "en";
     const projectId = ctx.match[1];
     if (!projectId) return;
     const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
@@ -1166,14 +1167,14 @@ export function createControlBot(token: string): Bot {
       ).row();
     }
     if (canManageProject) {
-      keyboard.text("➕ Создать тариф", `ui:createplan:${projectId}`).row()
-        .text("🗄 Архив тарифов", `ui:archivedplans:${projectId}`).row();
+      keyboard.text(en ? "➕ Create plan" : "➕ Создать тариф", `ui:createplan:${projectId}`).row()
+        .text(en ? "🗄 Archived plans" : "🗄 Архив тарифов", `ui:archivedplans:${projectId}`).row();
     }
-    keyboard.text("⬅️ К проекту", `ui:project:${projectId}`);
+    keyboard.text(en ? "⬅️ Back to project" : "⬅️ К проекту", `ui:project:${projectId}`);
     await ctx.editMessageText(
       plans.length
-        ? `Активные тарифы «${project.name}»:\nВыберите тариф для управления:`
-        : `В проекте «${project.name}» пока нет активных тарифов.`,
+        ? (en ? `Active plans for ${project.name}:\nSelect a plan to manage:` : `Активные тарифы «${project.name}»:\nВыберите тариф для управления:`)
+        : (en ? `No active plans for ${project.name} yet.` : `В проекте «${project.name}» пока нет активных тарифов.`),
       { reply_markup: keyboard }
     );
   });
@@ -1484,17 +1485,19 @@ export function createControlBot(token: string): Bot {
     const projectId = ctx.match[1];
     if (!projectId) return;
     const user = await upsertTelegramUser(ctx);
+    const en = user.interfaceLocale === "en";
     const project = await canAccessProject(projectId, user.id, MANAGER_ROLES);
     if (!project) {
-      await ctx.reply("Нет прав создавать тарифы в этом проекте.");
+      await ctx.reply(en ? "You do not have permission to create plans in this project." : "Нет прав создавать тарифы в этом проекте.");
       return;
     }
     setPendingTextAction(ctx.from.id, { kind: "create_plan", projectId });
     await ctx.reply(
+      en ? "Enter plan details in one message:\nTitle | Price in Stars | Days | Auto-renewal (optional; да/нет)\n\nOne-time payment: VIP | 499 | 30\nAuto-renewal: VIP monthly | 499 | 30 | да\nAuto-renewal requires a 30-day period. For lifetime access, enter 0 days without auto-renewal." :
       "Введите данные тарифа в одном сообщении в формате:\nНазвание | Цена в Stars | Дней | Автопродление (да/нет, необязательно)\n\n" +
       "Пример разового платежа: VIP | 499 | 30\nПример автопродления: VIP на месяц | 499 | 30 | да\n" +
       "Автопродление возможно только на 30 дней. Для бессрочного доступа укажите 0 дней и не включайте автопродление.",
-      { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
+      { reply_markup: new InlineKeyboard().text(en ? "Cancel" : "Отмена", "ui:cancel") }
     );
   });
 
