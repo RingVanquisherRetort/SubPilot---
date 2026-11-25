@@ -1549,11 +1549,12 @@ export function createControlBot(token: string): Bot {
   bot.callbackQuery(/^ui:payment-methods:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const user = await upsertTelegramUser(ctx);
+    const en = user.interfaceLocale === "en";
     const projectId = ctx.match[1];
     if (!projectId) return;
     const project = await canAccessProject(projectId, user.id, MANAGER_ROLES);
     if (!project) {
-      await ctx.reply("Настройки способов оплаты доступны владельцу, администратору или менеджеру проекта.");
+      await ctx.reply((en ? "Only project owners, administrators and managers can configure payment methods." : "Настройки способов оплаты доступны владельцу, администратору или менеджеру проекта."));
       return;
     }
 
@@ -1569,11 +1570,12 @@ export function createControlBot(token: string): Bot {
     const profileLabel = MERCHANT_TYPE_LABELS[project.merchantType];
 
     const keyboard = new InlineKeyboard()
-      .text("👤 Изменить статус автора", `ui:merchant-type:${projectId}`)
+      .text((en ? "👤 Change merchant profile" : "👤 Изменить статус автора"), `ui:merchant-type:${projectId}`)
       .row()
-      .text("⬅️ К проекту", `ui:project:${projectId}`);
+      .text((en ? "⬅️ Back to project" : "⬅️ К проекту"), `ui:project:${projectId}`);
 
     await ctx.editMessageText(
+      en ? `💳 Payment methods for ${project.name}\n\nMerchant profile: ${project.merchantType}\n\nAvailable for paid Telegram channel and group access:\n${enabledLines.join("\n") || "No payment methods available."}\n\nTelegram requires Stars for digital access sold through Telegram bots. External providers and manual transfers are not available in this flow. Merchant profiles help select future integrations and do not replace provider approval.` :
       `💳 Способы оплаты проекта «${project.name}»\n\n` +
       `Профиль автора: ${profileLabel}\n\n` +
       `Для платного доступа к Telegram-каналам и группам сейчас доступно:\n` +
@@ -1649,6 +1651,7 @@ export function createControlBot(token: string): Bot {
   bot.callbackQuery(/^ui:payments:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const user = await upsertTelegramUser(ctx);
+    const en = user.interfaceLocale === "en";
     const projectId = ctx.match[1];
     if (!projectId) return;
     const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
@@ -1660,10 +1663,10 @@ export function createControlBot(token: string): Bot {
       take: 10
     });
     const lines = payments.map((payment, i) =>
-      `${i + 1}. ${payment.subscription?.plan.title ?? "Платёж"} — ${payment.amount.toString()} ${payment.currency}\nСтатус: ${paymentStatusLabel(payment.status)} · ${payment.customer.username ? "@" + payment.customer.username : payment.customer.telegramUserId.toString()}\nID: ${payment.id}`
+      `${i + 1}. ${payment.subscription?.plan.title ?? (en ? "Payment" : "Платёж")} — ${payment.amount.toString()} ${payment.currency}\n${en ? "Status" : "Статус"}: ${en ? payment.status : paymentStatusLabel(payment.status)} · ${payment.customer.username ? "@" + payment.customer.username : payment.customer.telegramUserId.toString()}\nID: ${payment.id}`
     );
     await ctx.editMessageText(
-      lines.length ? `Последние платежи «${project.name}»:\n\n${lines.join("\n\n")}` : "Платежей пока нет.",
+      lines.length ? (en ? `Recent payments for ${project.name}:\n\n${lines.join("\n\n")}` : `Последние платежи «${project.name}»:\n\n${lines.join("\n\n")}`) : (en ? "No payments yet." : "Платежей пока нет."),
       { reply_markup: backHomeKeyboard() }
     );
   });
