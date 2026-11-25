@@ -469,7 +469,9 @@ export function createControlBot(token: string): Bot {
 
   bot.callbackQuery("ui:help", async (ctx) => {
     await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
     await ctx.editMessageText(
+      user.interfaceLocale === "en" ? "SubPilot helps you manage projects, bots, subscriptions and payments.\n\nUse the menu buttons. The bot will prompt you whenever text input is needed." :
       "SubPilot — кабинет для управления проектами, ботами, подписками и платежами.\n\n" +
       "Используйте кнопки меню. Когда потребуется текст (например, название проекта), бот сам попросит его ввести.",
       { reply_markup: backHomeKeyboard() }
@@ -479,6 +481,7 @@ export function createControlBot(token: string): Bot {
   bot.callbackQuery("ui:projects", async (ctx) => {
     await ctx.answerCallbackQuery();
     const user = await upsertTelegramUser(ctx);
+    const en = user.interfaceLocale === "en";
     const { workspace, role } = await getActiveWorkspace(user);
     const canManageWorkspace = MANAGER_ROLES.includes(role as typeof MANAGER_ROLES[number]);
     const projectScope = workspace.type === "AGENCY" && !ADMIN_ROLES.includes(role as typeof ADMIN_ROLES[number])
@@ -498,17 +501,17 @@ export function createControlBot(token: string): Bot {
       keyboard.text(project.name.slice(0, 30), `ui:project:${project.id}`).row();
     }
     if (canManageWorkspace) {
-      keyboard.text("➕ Создать проект", "ui:newproject").row();
+      keyboard.text(en ? "➕ Create project" : "➕ Создать проект", "ui:newproject").row();
       if (workspace.type === "AGENCY") {
-        keyboard.text("👥 Портфель авторов", "ui:agencyportfolio").row();
+        keyboard.text(en ? "👥 Creator portfolio" : "👥 Портфель авторов", "ui:agencyportfolio").row();
       }
     }
-    keyboard.text("⬅️ Назад", "ui:home");
+    keyboard.text(en ? "⬅️ Back" : "⬅️ Назад", "ui:home");
 
     await ctx.editMessageText(
       projects.length
-        ? `Проекты пространства «${workspace.name}»:\nВыберите проект:`
-        : `В пространстве «${workspace.name}» пока нет проектов. Создайте первый:`,
+        ? (en ? `Projects in ${workspace.name}:\nSelect a project:` : `Проекты пространства «${workspace.name}»:\nВыберите проект:`)
+        : (en ? `No projects in ${workspace.name} yet. Create your first project:` : `В пространстве «${workspace.name}» пока нет проектов. Создайте первый:`),
       { reply_markup: keyboard }
     );
   });
@@ -562,6 +565,7 @@ export function createControlBot(token: string): Bot {
   bot.callbackQuery("ui:workspaces", async (ctx) => {
     await ctx.answerCallbackQuery();
     const user = await upsertTelegramUser(ctx);
+    const en = user.interfaceLocale === "en";
     const memberships = await prisma.workspaceMember.findMany({
       where: { userId: user.id },
       include: { workspace: true },
@@ -575,9 +579,9 @@ export function createControlBot(token: string): Bot {
         `ui:switch:${membership.workspaceId}`
       ).row();
     }
-    keyboard.text("🏬 Создать агентство", "ui:newagency").row();
-    keyboard.text("⬅️ Назад", "ui:home");
-    await ctx.editMessageText("Ваши рабочие пространства. Нажмите, чтобы переключиться:", {
+    keyboard.text(en ? "🏬 Create agency" : "🏬 Создать агентство", "ui:newagency").row();
+    keyboard.text(en ? "⬅️ Back" : "⬅️ Назад", "ui:home");
+    await ctx.editMessageText(en ? "Your workspaces. Select one to switch:" : "Ваши рабочие пространства. Нажмите, чтобы переключиться:", {
       reply_markup: keyboard
     });
   });
@@ -632,11 +636,12 @@ export function createControlBot(token: string): Bot {
   bot.callbackQuery(/^ui:project:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const user = await upsertTelegramUser(ctx);
+    const en = user.interfaceLocale === "en";
     const projectId = ctx.match[1];
     if (!projectId) return;
     const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
     if (!project) {
-      await ctx.editMessageText("Проект не найден или у вас нет доступа.", { reply_markup: backHomeKeyboard() });
+      await ctx.editMessageText(en ? "Project not found or access denied." : "Проект не найден или у вас нет доступа.", { reply_markup: backHomeKeyboard() });
       return;
     }
     const [botCount, chatCount, planCount] = await Promise.all([
@@ -647,28 +652,29 @@ export function createControlBot(token: string): Bot {
     const canManageProject = MANAGER_ROLES.includes(project.accessRole as typeof MANAGER_ROLES[number]);
     const keyboard = new InlineKeyboard();
     if (canManageProject) {
-      keyboard.text("🤖 Подключить бота", `ui:connect:${projectId}`).row();
+      keyboard.text(en ? "🤖 Connect bot" : "🤖 Подключить бота", `ui:connect:${projectId}`).row();
     }
-    keyboard.text("💎 Тарифы", `ui:plans:${projectId}`);
+    keyboard.text(en ? "💎 Plans" : "💎 Тарифы", `ui:plans:${projectId}`);
     if (canManageProject) {
-      keyboard.text("➕ Создать тариф", `ui:createplan:${projectId}`);
+      keyboard.text(en ? "➕ Create plan" : "➕ Создать тариф", `ui:createplan:${projectId}`);
     }
     keyboard.row()
-      .text("📣 Каналы и группы", `ui:chats:${projectId}`)
+      .text(en ? "📣 Channels and groups" : "📣 Каналы и группы", `ui:chats:${projectId}`)
       .row();
     if (canManageProject) {
-      keyboard.text("💳 Способы оплаты", `ui:payment-methods:${projectId}`).row();
+      keyboard.text(en ? "💳 Payment methods" : "💳 Способы оплаты", `ui:payment-methods:${projectId}`).row();
     }
     if (ADMIN_ROLES.includes(project.accessRole as typeof ADMIN_ROLES[number])) {
-      keyboard.text("🔐 Подписки и доступ", `ui:subaccess:${projectId}`).row();
+      keyboard.text(en ? "🔐 Subscriptions and access" : "🔐 Подписки и доступ", `ui:subaccess:${projectId}`).row();
     }
     if (project.workspaceType === "AGENCY" && ADMIN_ROLES.includes(project.accessRole as typeof ADMIN_ROLES[number])) {
-      keyboard.text("👥 Доступ к проекту", `ui:projectmembers:${projectId}`).row();
+      keyboard.text(en ? "👥 Project access" : "👥 Доступ к проекту", `ui:projectmembers:${projectId}`).row();
     }
-    keyboard.text("📊 История платежей", `ui:payments:${projectId}`)
+    keyboard.text(en ? "📊 Payment history" : "📊 История платежей", `ui:payments:${projectId}`)
       .row()
-      .text("⬅️ К проектам", "ui:projects");
+      .text(en ? "⬅️ Back to projects" : "⬅️ К проектам", "ui:projects");
     await ctx.editMessageText(
+      en ? `📁 ${project.name}\nCreator: ${[project.creatorUser?.firstName, project.creatorUser?.lastName].filter(Boolean).join(" ") || (project.creatorUser?.username ? "@" + project.creatorUser.username : "unassigned")}\n\nBots: ${botCount}\nActive chats: ${chatCount}\nActive plans: ${planCount}\n\nChoose a section:` :
       `📁 ${project.name}\nАвтор: ${[project.creatorUser?.firstName, project.creatorUser?.lastName].filter(Boolean).join(" ") || (project.creatorUser?.username ? "@" + project.creatorUser.username : "не назначен")}\n\nБоты: ${botCount}\nАктивные площадки: ${chatCount}\nАктивные тарифы: ${planCount}\n\nВыберите раздел:`,
       { reply_markup: keyboard }
     );
