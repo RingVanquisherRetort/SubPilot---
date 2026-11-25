@@ -172,7 +172,7 @@ export async function getAgencyAnalytics(input: {
   const to = input.now ?? new Date();
   const from = new Date(to.getTime() - periodDays * 24 * 60 * 60 * 1000);
 
-  return prisma.$transaction(async (tx) => {
+  const readReport = () => prisma.$transaction(async (tx) => {
     await lockWorkspace(tx, input.workspaceId);
     const workspace = await tx.workspace.findUnique({
       where: { id: input.workspaceId },
@@ -475,4 +475,17 @@ export async function getAgencyAnalytics(input: {
       projects: projectsReport
     };
   }, { isolationLevel: "RepeatableRead" });
+
+  // A concurrent workspace mutation can invalidate a repeatable-read snapshot.
+  // Retry the entire read, including fresh authorization, never a partial report.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await readReport();
+    } catch (error) {
+      if (attempt >= 2 || typeof error !== "object" || error === null ||
+          !("code" in error) || error.code !== "P2034") {
+        throw error;
+      }
+    }
+  }
 }
