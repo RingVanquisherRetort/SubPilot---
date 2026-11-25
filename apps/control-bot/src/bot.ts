@@ -1182,6 +1182,7 @@ export function createControlBot(token: string): Bot {
   bot.callbackQuery(/^ui:archivedplans:(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const user = await upsertTelegramUser(ctx);
+    const en = user.interfaceLocale === "en";
     const projectId = ctx.match[1];
     if (!projectId) return;
     const project = await canAccessProject(projectId, user.id, ["OWNER", "ADMIN", "MANAGER", "VIEWER"]);
@@ -1195,10 +1196,10 @@ export function createControlBot(token: string): Bot {
     for (const plan of plans) {
       keyboard.text(`↩️ ${plan.title.slice(0, 30)}`, `p:v:${projectId}:${plan.id}`).row();
     }
-    keyboard.text("⬅️ Активные тарифы", `ui:plans:${projectId}`).row()
-      .text("К проекту", `ui:project:${projectId}`);
+    keyboard.text((en ? "⬅️ Active plans" : "⬅️ Активные тарифы"), `ui:plans:${projectId}`).row()
+      .text((en ? "Back to project" : "К проекту"), `ui:project:${projectId}`);
     await ctx.editMessageText(
-      plans.length ? `Архив тарифов «${project.name}»:\nВыберите тариф для восстановления:` : "Архив пуст.",
+      plans.length ? (en ? `Archived plans for ${project.name}:\nSelect a plan to restore:` : `Архив тарифов «${project.name}»:\nВыберите тариф для восстановления:`) : (en ? "Archive is empty." : "Архив пуст."),
       { reply_markup: keyboard }
     );
   });
@@ -1206,6 +1207,7 @@ export function createControlBot(token: string): Bot {
   bot.callbackQuery(/^p:v:([^:]+):([^:]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const user = await upsertTelegramUser(ctx);
+    const en = user.interfaceLocale === "en";
     const projectId = ctx.match[1];
     const planId = ctx.match[2];
     if (!projectId || !planId) return;
@@ -1220,39 +1222,39 @@ export function createControlBot(token: string): Bot {
       }
     });
     if (!plan) {
-      await ctx.editMessageText("Тариф не найден.", { reply_markup: new InlineKeyboard().text("К тарифам", `ui:plans:${projectId}`) });
+      await ctx.editMessageText((en ? "Plan not found." : "Тариф не найден."), { reply_markup: new InlineKeyboard().text((en ? "Back to plans" : "К тарифам"), `ui:plans:${projectId}`) });
       return;
     }
 
-    const duration = plan.durationDays ? `${plan.durationDays} дн.` : "без ограничения";
+    const duration = plan.durationDays ? (en ? `${plan.durationDays} days` : `${plan.durationDays} дн.`) : (en ? "Lifetime" : "без ограничения");
     const chatNames = plan.chats.map(({ connectedChat }) =>
       connectedChat.title ?? connectedChat.username ?? connectedChat.telegramChatId.toString()
     );
     const keyboard = new InlineKeyboard();
     if (canManageProject) {
       if (plan.status === "ACTIVE") {
-        keyboard.text("✏️ Изменить тариф", `p:e:${projectId}:${planId}`).row()
-          .text("🗄 В архив", `p:x:${projectId}:${planId}`);
+        keyboard.text((en ? "✏️ Edit plan" : "✏️ Изменить тариф"), `p:e:${projectId}:${planId}`).row()
+          .text((en ? "🗄 Archive" : "🗄 В архив"), `p:x:${projectId}:${planId}`);
       } else {
-        keyboard.text("↩️ Восстановить", `p:r:${projectId}:${planId}`);
+        keyboard.text((en ? "↩️ Restore" : "↩️ Восстановить"), `p:r:${projectId}:${planId}`);
       }
       keyboard.row()
-        .text("📣 Настроить площадки", `p:ch:${planId}`)
+        .text((en ? "📣 Configure chats" : "📣 Настроить площадки"), `p:ch:${planId}`)
         .row();
     }
-    keyboard.text(plan.status === "ACTIVE" ? "⬅️ К активным" : "⬅️ К архиву",
+    keyboard.text(plan.status === "ACTIVE" ? (en ? "⬅️ Active plans" : "⬅️ К активным") : (en ? "⬅️ Archive" : "⬅️ К архиву"),
       plan.status === "ACTIVE" ? `ui:plans:${projectId}` : `ui:archivedplans:${projectId}`)
-      .text("К проекту", `ui:project:${projectId}`);
+      .text((en ? "Back to project" : "К проекту"), `ui:project:${projectId}`);
 
     await ctx.editMessageText(
       `💎 ${plan.title}\n\n` +
-      `Цена: ${plan.price.toString()} ⭐\n` +
-      `Срок: ${duration}\n` +
-      `Автопродление: ${plan.isRecurring ? "каждые 30 дней" : "выключено"}\n` +
-      `Статус: ${plan.status === "ACTIVE" ? "Активен" : "В архиве"}\n` +
-      `Площадок: ${plan._count.chats}\n` +
-      `Подписок всего: ${plan._count.subscriptions}\n\n` +
-      `Каналы и группы:\n${chatNames.join("\n") || "Не привязаны"}\n\n` +
+      `${en ? "Price:" : "Цена:"} ${plan.price.toString()} ⭐\n` +
+      `${en ? "Duration:" : "Срок:"} ${duration}\n` +
+      `${en ? "Auto-renewal:" : "Автопродление:"} ${plan.isRecurring ? (en ? "Every 30 days" : "каждые 30 дней") : (en ? "Off" : "выключено")}\n` +
+      `${en ? "Status:" : "Статус:"} ${plan.status === "ACTIVE" ? (en ? "Active" : "Активен") : (en ? "Archived" : "В архиве")}\n` +
+      `${en ? "Chats:" : "Площадок:"} ${plan._count.chats}\n` +
+      `${en ? "Total subscriptions:" : "Подписок всего:"} ${plan._count.subscriptions}\n\n` +
+      `${en ? "Channels and groups:" : "Каналы и группы:"}\n${chatNames.join("\n") || (en ? "None linked" : "Не привязаны")}\n\n` +
       `ID: ${plan.id}`,
       { reply_markup: keyboard }
     );
@@ -1399,21 +1401,23 @@ export function createControlBot(token: string): Bot {
     const planId = ctx.match[2];
     if (!projectId || !planId) return;
     const user = await upsertTelegramUser(ctx);
+    const en = user.interfaceLocale === "en";
     const project = await canAccessProject(projectId, user.id, MANAGER_ROLES);
     const plan = project
       ? await prisma.creatorPlan.findFirst({ where: { id: planId, projectId } })
       : null;
     if (!plan) {
-      await ctx.reply("Нет прав изменять этот тариф или тариф не найден.");
+      await ctx.reply((en ? "Plan not found or permission denied." : "Нет прав изменять этот тариф или тариф не найден."));
       return;
     }
     setPendingTextAction(ctx.from.id, { kind: "edit_plan", projectId, planId });
     await ctx.reply(
+      en ? `Editing plan ${plan.title}. Send: Title | Price in Stars | Days | Auto-renewal (yes/no)\n\nCurrent: ${plan.title} | ${plan.price.toString()} | ${plan.durationDays ?? 0} | ${plan.isRecurring ? "yes" : "no"}\nThe last field is optional. Auto-renewal requires exactly 30 days. Existing invoices and subscriptions retain their terms.` :
       `Изменяем тариф «${plan.title}». Отправьте данные в формате:\nНазвание | Цена в Stars | Дней | Автопродление (да/нет)\n\n` +
       `Текущие данные: ${plan.title} | ${plan.price.toString()} | ${plan.durationDays ?? 0} | ${plan.isRecurring ? "да" : "нет"}\n` +
       "Последнее поле можно пропустить — сохранится текущее значение. Для автопродления нужен срок ровно 30 дней. " +
       "Уже созданные счета и действующие подписки сохраняют прежние условия.",
-      { reply_markup: new InlineKeyboard().text("Отмена", "ui:cancel") }
+      { reply_markup: new InlineKeyboard().text((en ? "Cancel" : "Отмена"), "ui:cancel") }
     );
   });
 
@@ -1423,9 +1427,10 @@ export function createControlBot(token: string): Bot {
     const planId = ctx.match[2];
     if (!projectId || !planId) return;
     const user = await upsertTelegramUser(ctx);
+    const en = user.interfaceLocale === "en";
     const project = await canAccessProject(projectId, user.id, MANAGER_ROLES);
     if (!project) {
-      await ctx.reply("Нет прав архивировать тариф.");
+      await ctx.reply((en ? "You do not have permission to archive this plan." : "Нет прав архивировать тариф."));
       return;
     }
     const result = await prisma.creatorPlan.updateMany({
@@ -1433,13 +1438,13 @@ export function createControlBot(token: string): Bot {
       data: { status: "ARCHIVED" }
     });
     if (result.count !== 1) {
-      await ctx.reply("Тариф не найден или уже находится в архиве.");
+      await ctx.reply((en ? "Plan not found or already archived." : "Тариф не найден или уже находится в архиве."));
       return;
     }
-    await ctx.editMessageText("Тариф перемещён в архив. Действующие подписки сохраняются до своего окончания.", {
+    await ctx.editMessageText((en ? "Plan archived. Existing subscriptions remain valid until expiry." : "Тариф перемещён в архив. Действующие подписки сохраняются до своего окончания."), {
       reply_markup: new InlineKeyboard()
-        .text("🗄 Архив тарифов", `ui:archivedplans:${projectId}`)
-        .row().text("К активным тарифам", `ui:plans:${projectId}`)
+        .text((en ? "🗄 Archived plans" : "🗄 Архив тарифов"), `ui:archivedplans:${projectId}`)
+        .row().text((en ? "Back to active plans" : "К активным тарифам"), `ui:plans:${projectId}`)
     });
   });
 
@@ -1449,9 +1454,10 @@ export function createControlBot(token: string): Bot {
     const planId = ctx.match[2];
     if (!projectId || !planId) return;
     const user = await upsertTelegramUser(ctx);
+    const en = user.interfaceLocale === "en";
     const project = await canAccessProject(projectId, user.id, MANAGER_ROLES);
     if (!project) {
-      await ctx.reply("Нет прав восстанавливать тариф.");
+      await ctx.reply((en ? "You do not have permission to restore this plan." : "Нет прав восстанавливать тариф."));
       return;
     }
     let result;
@@ -1470,12 +1476,12 @@ export function createControlBot(token: string): Bot {
       return;
     }
     if (result.count !== 1) {
-      await ctx.reply("Тариф не найден или уже активен.");
+      await ctx.reply((en ? "Plan not found or already active." : "Тариф не найден или уже активен."));
       return;
     }
-    await ctx.editMessageText("Тариф восстановлен и снова доступен в меню покупателя.", {
-      reply_markup: new InlineKeyboard().text("Открыть тариф", `p:v:${projectId}:${planId}`)
-        .row().text("К активным тарифам", `ui:plans:${projectId}`)
+    await ctx.editMessageText((en ? "Plan restored and available in the buyer menu." : "Тариф восстановлен и снова доступен в меню покупателя."), {
+      reply_markup: new InlineKeyboard().text((en ? "Open plan" : "Открыть тариф"), `p:v:${projectId}:${planId}`)
+        .row().text((en ? "Back to active plans" : "К активным тарифам"), `ui:plans:${projectId}`)
     });
   });
 
@@ -1493,7 +1499,7 @@ export function createControlBot(token: string): Bot {
     }
     setPendingTextAction(ctx.from.id, { kind: "create_plan", projectId });
     await ctx.reply(
-      en ? "Enter plan details in one message:\nTitle | Price in Stars | Days | Auto-renewal (optional; да/нет)\n\nOne-time payment: VIP | 499 | 30\nAuto-renewal: VIP monthly | 499 | 30 | да\nAuto-renewal requires a 30-day period. For lifetime access, enter 0 days without auto-renewal." :
+      en ? "Enter plan details in one message:\nTitle | Price in Stars | Days | Auto-renewal (optional; yes/no)\n\nOne-time payment: VIP | 499 | 30\nAuto-renewal: VIP monthly | 499 | 30 | yes\nAuto-renewal requires a 30-day period. For lifetime access, enter 0 days without auto-renewal." :
       "Введите данные тарифа в одном сообщении в формате:\nНазвание | Цена в Stars | Дней | Автопродление (да/нет, необязательно)\n\n" +
       "Пример разового платежа: VIP | 499 | 30\nПример автопродления: VIP на месяц | 499 | 30 | да\n" +
       "Автопродление возможно только на 30 дней. Для бессрочного доступа укажите 0 дней и не включайте автопродление.",
