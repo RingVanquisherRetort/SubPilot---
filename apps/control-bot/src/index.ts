@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { createControlBot } from "./bot.js";
+import { localizedCommands } from "./locale.js";
 import { prisma } from "@subpilot/database";
 
 const token = process.env.CONTROL_BOT_TOKEN;
@@ -19,18 +20,8 @@ if (!token) {
     void prisma.$disconnect();
   });
 
-  await bot.api.setMyCommands([
-    { command: "start", description: "Открыть главное меню SubPilot" },
-    { command: "help", description: "Помощь по интерфейсу" },
-    { command: "testnotifications", description: "Отправить тестовые уведомления себе" },
-    { command: "projects", description: "Список доступных проектов" },
-    { command: "agencyportfolio", description: "Портфель проектов агентства" },
-    { command: "projectmembers", description: "Доступ к участникам проекта" },
-    { command: "setprojectmember", description: "Назначить роль в проекте" },
-    { command: "removeprojectmember", description: "Снять доступ к проекту" },
-    { command: "assigncreator", description: "Назначить автора проекта" },
-    { command: "unassigncreator", description: "Снять автора проекта" }
-  ]);
+  await bot.api.setMyCommands(localizedCommands("ru"));
+  await bot.api.setMyCommands(localizedCommands("en"), { language_code: "en" });
 
   console.info("SubPilot control bot is starting...");
   await bot.start({
