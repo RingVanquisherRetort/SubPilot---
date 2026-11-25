@@ -153,6 +153,7 @@ model User {
   firstName         String?
   lastName          String?
   languageCode      String?
+  interfaceLocale   String?
   activeWorkspaceId String?
   memberships        WorkspaceMember[]
   createdInvites     WorkspaceInvite[] @relation("WorkspaceInviteCreator")

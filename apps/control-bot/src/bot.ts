@@ -157,18 +157,20 @@ type PendingTextActionInput =
 
 type PendingTextAction = PendingTextActionInput & { expiresAt: number };
 
-function homeKeyboard(): InlineKeyboard {
+function homeKeyboard(locale: string | null = null): InlineKeyboard {
+  const en = locale === "en";
   return new InlineKeyboard()
-    .text("📁 Мои проекты", "ui:projects")
-    .text("🏢 Пространства", "ui:workspaces")
+    .text(en ? "📁 My projects" : "📁 Мои проекты", "ui:projects")
+    .text(en ? "🏢 Workspaces" : "🏢 Пространства", "ui:workspaces")
     .row()
-    .text("➕ Новый проект", "ui:newproject")
-    .text("🏬 Создать агентство", "ui:newagency")
+    .text(en ? "➕ New project" : "➕ Новый проект", "ui:newproject")
+    .text(en ? "🏬 Create agency" : "🏬 Создать агентство", "ui:newagency")
     .row()
-    .text("👥 Команда", "ui:team")
-    .text("❔ Помощь", "ui:help")
+    .text(en ? "👥 Team" : "👥 Команда", "ui:team")
+    .text(en ? "❔ Help" : "❔ Помощь", "ui:help")
     .row()
-    .text("💳 Тариф пространства", "ui:billing");
+    .text(en ? "💳 Workspace plan" : "💳 Тариф пространства", "ui:billing")
+    .row().text("🌐 Language / Язык", "ui:language");
 }
 
 function backHomeKeyboard(): InlineKeyboard {
@@ -336,13 +338,35 @@ export function createControlBot(token: string): Bot {
     await next();
   });
 
+  const languageKeyboard = (payload = "") => new InlineKeyboard()
+    .text("🇷🇺 Русский", "locale:ru" + payload).row()
+    .text("🇬🇧 English", "locale:en" + payload);
+  const languagePrompt = "Добро пожаловать! Welcome to SubPilot!\n\nВыберите язык интерфейса. / Please select your language.";
+
+  bot.callbackQuery("ui:language", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.reply(languagePrompt, { reply_markup: languageKeyboard() });
+  });
+
+  bot.callbackQuery(/^locale:(ru|en)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await upsertTelegramUser(ctx);
+    const locale = ctx.match[1] === "en" ? "en" : "ru";
+    const saved = await prisma.user.update({ where: { id: user.id }, data: { interfaceLocale: locale } });
+    const { workspace } = await getActiveWorkspace(saved);
+    await ctx.editMessageText(locale === "en"
+      ? `🚀 Welcome to SubPilot!\n\nActive workspace: ${workspace.name}\n\nChoose an action below.`
+      : `🚀 Добро пожаловать в SubPilot!\n\nАктивное пространство: ${workspace.name}\n\nВыберите действие:`,
+      { reply_markup: homeKeyboard(locale) });
+  });
+
   bot.callbackQuery("ui:home", async (ctx) => {
     await ctx.answerCallbackQuery();
     const user = await upsertTelegramUser(ctx);
     const { workspace, role } = await getActiveWorkspace(user);
     await ctx.editMessageText(
-      `🚀 SubPilot\n\nПространство: ${workspace.name}\nРоль: ${String(role).toLowerCase()}\n\nВыберите действие:`,
-      { reply_markup: homeKeyboard() }
+      user.interfaceLocale === "en" ? `🚀 SubPilot\n\nWorkspace: ${workspace.name}\nRole: ${String(role).toLowerCase()}\n\nChoose an action:` : `🚀 SubPilot\n\nПространство: ${workspace.name}\nРоль: ${String(role).toLowerCase()}\n\nВыберите действие:`,
+      { reply_markup: homeKeyboard(user.interfaceLocale) }
     );
   });
 
@@ -1624,6 +1648,11 @@ export function createControlBot(token: string): Bot {
       const user = await upsertTelegramUser(ctx);
       const startPayload = String(ctx.match ?? "").trim();
 
+      if (!user.interfaceLocale && !startPayload.startsWith("join_")) {
+        await ctx.reply(languagePrompt, { reply_markup: languageKeyboard() });
+        return;
+      }
+
       if (startPayload.startsWith("join_")) {
         const inviteToken = startPayload.slice(5);
         const tokenHash = createHash("sha256").update(inviteToken).digest("hex");
@@ -1702,8 +1731,8 @@ export function createControlBot(token: string): Bot {
       const { workspace } = await getActiveWorkspace(user);
 
       await ctx.reply(
-        `🚀 Добро пожаловать в SubPilot!\n\nАктивное пространство: ${workspace.name}\n\nВыберите нужный раздел кнопками ниже.`,
-        { reply_markup: homeKeyboard() }
+        user.interfaceLocale === "en" ? `🚀 Welcome to SubPilot!\n\nActive workspace: ${workspace.name}\n\nChoose an action below.` : `🚀 Добро пожаловать в SubPilot!\n\nАктивное пространство: ${workspace.name}\n\nВыберите нужный раздел кнопками ниже.`,
+        { reply_markup: homeKeyboard(user.interfaceLocale) }
       );
     } catch (error) {
       console.error("Control bot /start failed:", error);
