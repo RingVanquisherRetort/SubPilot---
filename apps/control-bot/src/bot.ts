@@ -348,11 +348,15 @@ export function createControlBot(token: string): Bot {
     await ctx.reply(languagePrompt, { reply_markup: languageKeyboard() });
   });
 
-  bot.callbackQuery(/^locale:(ru|en)$/, async (ctx) => {
+  bot.callbackQuery(/^locale:(ru|en)(?::([A-Za-z0-9_-]{1,50}))?$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const user = await upsertTelegramUser(ctx);
     const locale = ctx.match[1] === "en" ? "en" : "ru";
     const saved = await prisma.user.update({ where: { id: user.id }, data: { interfaceLocale: locale } });
+    if (ctx.match[2]) {
+      await openStart(ctx, "join_" + ctx.match[2]);
+      return;
+    }
     const { workspace } = await getActiveWorkspace(saved);
     await ctx.editMessageText(locale === "en"
       ? `🚀 Welcome to SubPilot!\n\nActive workspace: ${workspace.name}\n\nChoose an action below.`
@@ -1643,13 +1647,12 @@ export function createControlBot(token: string): Bot {
     );
   });
 
-  bot.command("start", async (ctx) => {
+  const openStart = async (ctx: Context, startPayload: string) => {
     try {
       const user = await upsertTelegramUser(ctx);
-      const startPayload = String(ctx.match ?? "").trim();
 
-      if (!user.interfaceLocale && !startPayload.startsWith("join_")) {
-        await ctx.reply(languagePrompt, { reply_markup: languageKeyboard() });
+      if (!user.interfaceLocale) {
+        await ctx.reply(languagePrompt, { reply_markup: languageKeyboard(startPayload.startsWith("join_") ? ":" + startPayload.slice(5) : "") });
         return;
       }
 
@@ -1742,7 +1745,9 @@ export function createControlBot(token: string): Bot {
           : "Не удалось открыть рабочее пространство. Попробуйте ещё раз позже."
       );
     }
-  });
+  };
+
+  bot.command("start", (ctx) => openStart(ctx, String(ctx.match ?? "").trim()));
 
   bot.command("newproject", async (ctx) => {
     const name = String(ctx.match ?? "").trim();
