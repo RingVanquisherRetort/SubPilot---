@@ -2071,12 +2071,13 @@ export async function handleProjectBotUpdate(
 
   const showPlans = async (ctx: Context, edit = false): Promise<void> => {
     if (!(await requirePrivateBuyerChat(ctx))) return;
+    const en = (await buyerLocale(ctx)) === "en";
     const project = await prisma.project.findUnique({
       where: { id: projectId },
       select: { status: true }
     });
     if (!project || project.status !== "ACTIVE") {
-      const unavailableText = "Этот проект временно недоступен для новых покупок.";
+      const unavailableText = (en ? "This project is temporarily unavailable for new purchases." : "Этот проект временно недоступен для новых покупок.");
       if (edit && ctx.callbackQuery?.message) {
         await ctx.editMessageText(unavailableText);
       } else {
@@ -2103,26 +2104,26 @@ export async function handleProjectBotUpdate(
 
     if (plans.length === 0) {
       if (edit && ctx.callbackQuery?.message) {
-        await ctx.editMessageText("Пока нет доступных тарифов.", {
-          reply_markup: new InlineKeyboard().text("↻ Обновить", "buyer:plans")
+        await ctx.editMessageText((en ? "No plans available yet." : "Пока нет доступных тарифов."), {
+          reply_markup: new InlineKeyboard().text((en ? "↻ Refresh" : "↻ Обновить"), "buyer:plans")
         });
       } else {
-        await ctx.reply("Пока нет доступных тарифов.");
+        await ctx.reply((en ? "No plans available yet." : "Пока нет доступных тарифов."));
       }
       return;
     }
 
     const keyboard = new InlineKeyboard();
     for (const plan of plans) {
-      const duration = plan.durationDays ? `${plan.durationDays} дн.` : "без срока";
+      const duration = plan.durationDays ? (en ? `${plan.durationDays} days` : `${plan.durationDays} дн.`) : (en ? "Lifetime" : "без срока");
       keyboard.text(
         `${plan.title.slice(0, 24)} · ${plan.price.toString()} ⭐ · ${duration}`,
         `buyer:buy:${plan.id}`
       ).row();
     }
-    keyboard.text("ℹ️ Помощь", "buyer:help");
+    keyboard.text((en ? "ℹ️ Help" : "ℹ️ Помощь"), "buyer:help");
 
-    const text = "Выберите подписку. После выбора Telegram откроет защищённый счёт в Stars.";
+    const text = (en ? "Choose a subscription. Telegram will open a secure Stars invoice." : "Выберите подписку. После выбора Telegram откроет защищённый счёт в Stars.");
     if (edit && ctx.callbackQuery?.message) {
       await ctx.editMessageText(text, { reply_markup: keyboard });
     } else {
@@ -2139,12 +2140,13 @@ export async function handleProjectBotUpdate(
 
   const showPurchaseTerms = async (ctx: Context, planId: string): Promise<void> => {
     if (!(await requirePrivateBuyerChat(ctx))) return;
+    const en = (await buyerLocale(ctx)) === "en";
     const project = await prisma.project.findUnique({
       where: { id: projectId },
       select: { status: true }
     });
     if (!project || project.status !== "ACTIVE") {
-      await ctx.reply("Этот проект временно недоступен для новых покупок.");
+      await ctx.reply((en ? "This project is temporarily unavailable for new purchases." : "Этот проект временно недоступен для новых покупок."));
       return;
     }
     const plan = await prisma.creatorPlan.findFirst({
@@ -2153,35 +2155,35 @@ export async function handleProjectBotUpdate(
     });
 
     if (!plan) {
-      await ctx.reply("Тариф не найден или сейчас недоступен.");
+      await ctx.reply((en ? "Plan not found or currently unavailable." : "Тариф не найден или сейчас недоступен."));
       return;
     }
 
-    const duration = plan.durationDays ? plan.durationDays + " дней" : "без ограничения срока";
+    const duration = plan.durationDays ? plan.durationDays + (en ? " days" : " дней") : (en ? "Lifetime" : "без ограничения срока");
     const chats = plan.chats
       .filter((item) => item.connectedChat.isActive)
       .map((item) => item.connectedChat.title ?? item.connectedChat.username ?? item.connectedChat.telegramChatId.toString());
 
     await ctx.reply(
-      "Перед оплатой ознакомьтесь с условиями.\n\n" +
-      "Тариф: «" + plan.title + "»\n" +
-      "Стоимость: " + plan.price.toString() + " ⭐\n" +
-      "Срок доступа: " + duration + "\n" +
-      "Площадки: " + (chats.length ? chats.join(", ") : "не настроены") + "\n\n" +
-      purchaseTermsText +
-      "\n\nНажатие кнопки ниже подтверждает ваше согласие с этими условиями.",
+      (en ? "Review the terms before paying.\n\n" : "Перед оплатой ознакомьтесь с условиями.\n\n") +
+      (en ? "Plan: «" : "Тариф: «") + plan.title + "»\n" +
+      (en ? "Price: " : "Стоимость: ") + plan.price.toString() + " ⭐\n" +
+      (en ? "Access duration: " : "Срок доступа: ") + duration + "\n" +
+      (en ? "Channels and groups: " : "Площадки: ") + (chats.length ? chats.join(", ") : (en ? "not configured" : "не настроены")) + "\n\n" +
+      (en ? "Digital access purchase terms. The project administrator is the seller and is responsible for project content. Buyers pay for the selected plan in Telegram Stars. Access is granted after Telegram confirms successful payment and lasts for the period specified in the plan. At the end of the paid period, access to linked channels and supergroups is removed unless the subscription is renewed. Review the plan description and project terms before paying. For payment questions, mistaken payments or refunds, use /paysupport." : purchaseTermsText) +
+      (en ? "\n\nBy pressing the button below, you agree to these terms." : "\n\nНажатие кнопки ниже подтверждает ваше согласие с этими условиями."),
       {
         reply_markup: new InlineKeyboard()
-          .text("✅ Принимаю условия и перейти к оплате", "buyer:accept:" + plan.id)
+          .text((en ? "✅ Accept terms and pay" : "✅ Принимаю условия и перейти к оплате"), "buyer:accept:" + plan.id)
           .row()
-          .text("Отмена", "buyer:plans")
+          .text((en ? "Cancel" : "Отмена"), "buyer:plans")
       }
     );
   };
 
   projectBot.command("terms", async (ctx) => {
     if (!(await requirePrivateBuyerChat(ctx))) return;
-    await ctx.reply(purchaseTermsText);
+    await ctx.reply((await buyerLocale(ctx)) === "en" ? "Digital access purchase terms. The project administrator is the seller and is responsible for project content. Buyers pay for the selected plan in Telegram Stars. Access is granted after Telegram confirms successful payment and lasts for the period specified in the plan. At the end of the paid period, access to linked channels and supergroups is removed unless the subscription is renewed. Review the plan description and project terms before paying. For payment questions, mistaken payments or refunds, use /paysupport." : purchaseTermsText);
   });
 
   projectBot.command("paysupport", async (ctx) => {
@@ -2284,6 +2286,7 @@ export async function handleProjectBotUpdate(
 
   const showBuyerSubscriptionSettings = async (ctx: Context): Promise<void> => {
     if (!(await requirePrivateBuyerChat(ctx)) || !ctx.from) return;
+    const en = (await buyerLocale(ctx)) === "en";
 
     const customer = await prisma.projectCustomer.findUnique({
       where: {
@@ -2295,7 +2298,7 @@ export async function handleProjectBotUpdate(
       select: { id: true }
     });
     if (!customer) {
-      await ctx.reply("У вас пока нет подписок в этом проекте.");
+      await ctx.reply((en ? "You have no subscriptions in this project yet." : "У вас пока нет подписок в этом проекте."));
       return;
     }
 
@@ -2311,7 +2314,7 @@ export async function handleProjectBotUpdate(
     });
 
     if (subscriptions.length === 0) {
-      await ctx.reply("Активных подписок не найдено. Посмотреть тарифы можно командой /plans.");
+      await ctx.reply((en ? "No active subscriptions found. View plans with /plans." : "Активных подписок не найдено. Посмотреть тарифы можно командой /plans."));
       return;
     }
 
@@ -2319,41 +2322,41 @@ export async function handleProjectBotUpdate(
     let hasActions = false;
     const messages = subscriptions.map((subscription) => {
       const endLabel = subscription.endsAt
-        ? subscription.endsAt.toLocaleString("ru-RU")
-        : "без ограничения";
+        ? subscription.endsAt.toLocaleString(en ? "en-GB" : "ru-RU")
+        : (en ? "Lifetime" : "без ограничения");
       if (!subscription.telegramStarInitialChargeId) {
-        return "«" + subscription.plan.title + "»\nДоступ до: " + endLabel +
-          "\nАвтопродление: не подключено";
+        return "«" + subscription.plan.title + (en ? "»\nAccess until: " : "»\nДоступ до: ") + endLabel +
+          (en ? "\nAuto-renewal: not enabled" : "\nАвтопродление: не подключено");
       }
 
       const renewalLabel = subscription.telegramStarSubscriptionState === "ACTIVE"
-        ? "включено"
+        ? (en ? "Enabled" : "включено")
         : subscription.telegramStarSubscriptionState === "CANCELED"
-          ? "отключено"
+          ? (en ? "Disabled" : "отключено")
           : subscription.telegramStarSubscriptionState === "FAILED"
-            ? "ошибка последнего обновления"
-            : "статус уточняется";
+            ? (en ? "Last update failed" : "ошибка последнего обновления")
+            : (en ? "Pending confirmation" : "статус уточняется");
       if (subscription.telegramStarSubscriptionState === "ACTIVE") {
-        keyboard.text("⏹ Отключить автопродление", "star-sub:cancel:" + subscription.id).row();
+        keyboard.text((en ? "⏹ Disable auto-renewal" : "⏹ Отключить автопродление"), "star-sub:cancel:" + subscription.id).row();
         hasActions = true;
       } else if (
         subscription.telegramStarSubscriptionState === "CANCELED" &&
         (!subscription.endsAt || subscription.endsAt > new Date())
       ) {
-        keyboard.text("▶️ Включить автопродление", "star-sub:resume:" + subscription.id).row();
+        keyboard.text((en ? "▶️ Enable auto-renewal" : "▶️ Включить автопродление"), "star-sub:resume:" + subscription.id).row();
         hasActions = true;
       }
 
-      return "«" + subscription.plan.title + "»\nДоступ до: " + endLabel +
-        "\nАвтопродление: " + renewalLabel +
+      return "«" + subscription.plan.title + (en ? "»\nAccess until: " : "»\nДоступ до: ") + endLabel +
+        (en ? "\nAuto-renewal: " : "\nАвтопродление: ") + renewalLabel +
         (subscription.telegramStarSubscriptionState === "CANCELED"
-          ? "\nДоступ сохранится до конца уже оплаченного периода."
+          ? (en ? "\nAccess remains valid until the end of the paid period." : "\nДоступ сохранится до конца уже оплаченного периода.")
           : subscription.telegramStarSubscriptionState === "FAILED"
-            ? "\nПоследнее продление не прошло. Проверьте баланс Stars и статус подписки в Telegram."
+            ? (en ? "\nLast renewal failed. Check your Stars balance and subscription status in Telegram." : "\nПоследнее продление не прошло. Проверьте баланс Stars и статус подписки в Telegram.")
             : "");
     });
 
-    const message = "Ваши подписки:\n\n" + messages.join("\n\n");
+    const message = (en ? "Your subscriptions:\n\n" : "Ваши подписки:\n\n") + messages.join("\n\n");
     if (hasActions) {
       await ctx.reply(message, { reply_markup: keyboard });
     } else {
