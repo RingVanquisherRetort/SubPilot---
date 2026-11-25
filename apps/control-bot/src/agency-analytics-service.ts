@@ -490,7 +490,16 @@ export async function retryAgencyReport<T>(readReport: () => Promise<T>): Promis
         (error.code === "P2034" ||
           (error.code === "P2010" && "meta" in error &&
             typeof error.meta === "object" && error.meta !== null &&
-            "code" in error.meta && error.meta.code === "40001"));
+            (("code" in error.meta && error.meta.code === "40001") ||
+              ("driverAdapterError" in error.meta &&
+                typeof error.meta.driverAdapterError === "object" &&
+                error.meta.driverAdapterError !== null &&
+                "cause" in error.meta.driverAdapterError &&
+                typeof error.meta.driverAdapterError.cause === "object" &&
+                error.meta.driverAdapterError.cause !== null &&
+                "originalCode" in error.meta.driverAdapterError.cause &&
+                error.meta.driverAdapterError.cause.originalCode === "40001") ||
+              (error instanceof Error && /Raw query failed\. Code: `40001`\./.test(error.message)))));
       if (attempt >= 2 || !retryable) {
         throw error;
       }
