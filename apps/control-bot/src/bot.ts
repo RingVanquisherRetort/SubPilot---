@@ -687,9 +687,10 @@ export function createControlBot(token: string): Bot {
     if (!projectId) return;
     try {
       const user = await upsertTelegramUser(ctx);
+      const en = user.interfaceLocale === "en";
       const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
       if (!project) {
-        await ctx.reply("Управление подписками доступно только владельцу или администратору проекта.");
+        await ctx.reply((en ? "Only project owners and administrators can manage subscriptions." : "Управление подписками доступно только владельцу или администратору проекта."));
         return;
       }
       const now = new Date();
@@ -701,16 +702,16 @@ export function createControlBot(token: string): Bot {
         }
       });
       const keyboard = new InlineKeyboard()
-        .text("👥 Активные подписки (" + activeCount + ")", "ui:subaccess-list:" + projectId).row()
-        .text("➕ Выдать доступ", "ui:subaccess-grant:manual:" + projectId)
-        .text("🎁 Пробный доступ", "ui:subaccess-grant:trial:" + projectId).row()
-        .text("⚠️ Проблемные выдачи", "ui:subaccess-failed:" + projectId).row()
-        .text("🔎 Ручная проверка", "review:0:" + projectId).row()
-        .text("⬅️ К проекту", "ui:project:" + projectId);
+        .text((en ? "👥 Active subscriptions (" : "👥 Активные подписки (") + activeCount + ")", "ui:subaccess-list:" + projectId).row()
+        .text((en ? "➕ Grant access" : "➕ Выдать доступ"), "ui:subaccess-grant:manual:" + projectId)
+        .text((en ? "🎁 Trial access" : "🎁 Пробный доступ"), "ui:subaccess-grant:trial:" + projectId).row()
+        .text((en ? "⚠️ Failed deliveries" : "⚠️ Проблемные выдачи"), "ui:subaccess-failed:" + projectId).row()
+        .text((en ? "🔎 Manual review" : "🔎 Ручная проверка"), "review:0:" + projectId).row()
+        .text((en ? "⬅️ Back to project" : "⬅️ К проекту"), "ui:project:" + projectId);
       await ctx.editMessageText(
-        "🔐 Подписки и доступ — «" + project.name + "»\n\n" +
-        "Активных подписок: " + activeCount + "\n\n" +
-        "Здесь можно вручную выдать доступ, оформить пробный период, посмотреть действующие подписки, отозвать доступ и восстановить неудачную выдачу приглашения.",
+        (en ? "🔐 Subscriptions and access — «" : "🔐 Подписки и доступ — «") + project.name + "»\n\n" +
+        (en ? "Active subscriptions: " : "Активных подписок: ") + activeCount + "\n\n" +
+        (en ? "Grant access manually, create trials, view active subscriptions, revoke access and recover failed invitation deliveries." : "Здесь можно вручную выдать доступ, оформить пробный период, посмотреть действующие подписки, отозвать доступ и восстановить неудачную выдачу приглашения."),
         { reply_markup: keyboard }
       );
     } catch (error) {
@@ -790,9 +791,10 @@ export function createControlBot(token: string): Bot {
     if (!projectId) return;
     try {
       const user = await upsertTelegramUser(ctx);
+      const en = user.interfaceLocale === "en";
       const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
       if (!project) {
-        await ctx.reply("Просматривать и изменять подписки могут только владелец или администратор проекта.");
+        await ctx.reply((en ? "Only project owners and administrators can view and modify subscriptions." : "Просматривать и изменять подписки могут только владелец или администратор проекта."));
         return;
       }
       const items = await listActiveProjectSubscriptions({
@@ -801,28 +803,28 @@ export function createControlBot(token: string): Bot {
         limit: 10
       });
       if (items.length === 0) {
-        await ctx.editMessageText("В проекте пока нет активных подписок.", {
+        await ctx.editMessageText((en ? "No active subscriptions in this project." : "В проекте пока нет активных подписок."), {
           reply_markup: new InlineKeyboard()
-            .text("⬅️ К управлению подписками", "ui:subaccess:" + projectId)
+            .text((en ? "⬅️ Back to subscriptions" : "⬅️ К управлению подписками"), "ui:subaccess:" + projectId)
         });
         return;
       }
       const rows = items.map((item, index) =>
         (index + 1) + ". " + item.plan.title + " · " +
-        (item.customer.firstName ?? "Покупатель") + "\n" +
+        (item.customer.firstName ?? (en ? "Buyer" : "Покупатель")) + "\n" +
         "Telegram ID: " + item.customer.telegramUserId.toString() + "\n" +
-        "Тип: " + item.grantType.toLowerCase() + " · окончание: " +
-        (item.endsAt ? item.endsAt.toLocaleString("ru-RU") : "бессрочно")
+        (en ? "Type: " : "Тип: ") + item.grantType.toLowerCase() + (en ? " · expires: " : " · окончание: ") +
+        (item.endsAt ? item.endsAt.toLocaleString(en ? "en-GB" : "ru-RU") : (en ? "Lifetime" : "бессрочно"))
       );
       const keyboard = new InlineKeyboard();
       items.forEach((item, index) => {
-        keyboard.text("🚫 Отозвать доступ №" + (index + 1), "sar:" + item.id).row();
+        keyboard.text((en ? "🚫 Revoke access #" : "🚫 Отозвать доступ №") + (index + 1), "sar:" + item.id).row();
       });
-      keyboard.text("⬅️ К управлению подписками", "ui:subaccess:" + projectId);
+      keyboard.text((en ? "⬅️ Back to subscriptions" : "⬅️ К управлению подписками"), "ui:subaccess:" + projectId);
       await ctx.editMessageText(
-        "Активные подписки «" + project.name + "» (до 10):\n\n" +
+        (en ? "Active subscriptions «" : "Активные подписки «") + project.name + (en ? "» (up to 10):\n\n" : "» (до 10):\n\n") +
         rows.join("\n\n") +
-        "\n\nОтзыв сначала требует подтверждения. Если у клиента есть другая действующая подписка на ту же площадку, доступ по ней сохранится.",
+        (en ? "\n\nRevocation requires confirmation. Access through another active subscription to the same chat is preserved." : "\n\nОтзыв сначала требует подтверждения. Если у клиента есть другая действующая подписка на ту же площадку, доступ по ней сохранится."),
         { reply_markup: keyboard }
       );
     } catch (error) {
@@ -1019,30 +1021,31 @@ export function createControlBot(token: string): Bot {
     if (!projectId) return;
     try {
       const user = await upsertTelegramUser(ctx);
+      const en = user.interfaceLocale === "en";
       const project = await canAccessProject(projectId, user.id, ADMIN_ROLES);
       if (!project) {
-        await ctx.reply("Просматривать и восстанавливать выдачи могут только владелец или администратор проекта.");
+        await ctx.reply((en ? "Only project owners and administrators can view and recover deliveries." : "Просматривать и восстанавливать выдачи могут только владелец или администратор проекта."));
         return;
       }
       const failed = await listWorkspaceFailedAccessDeliveries(project.workspaceId, new Date(), 10, projectId);
       if (failed.length === 0) {
-        await ctx.editMessageText("В этом проекте нет выдач доступа, исчерпавших лимит автоматических попыток.", {
-          reply_markup: new InlineKeyboard().text("⬅️ К управлению подписками", "ui:subaccess:" + projectId)
+        await ctx.editMessageText((en ? "No access deliveries have exhausted automatic retries in this project." : "В этом проекте нет выдач доступа, исчерпавших лимит автоматических попыток."), {
+          reply_markup: new InlineKeyboard().text((en ? "⬅️ Back to subscriptions" : "⬅️ К управлению подписками"), "ui:subaccess:" + projectId)
         });
         return;
       }
       const keyboard = new InlineKeyboard();
       const rows = failed.map((grant, index) => {
         const chat = grant.connectedChat.title ?? grant.connectedChat.username ?? grant.connectedChat.telegramChatId.toString();
-        keyboard.text("↻ Повторить выдачу №" + (index + 1), "sad:" + grant.id).row();
+        keyboard.text((en ? "↻ Retry delivery #" : "↻ Повторить выдачу №") + (index + 1), "sad:" + grant.id).row();
         return (index + 1) + ". " + grant.subscription.plan.title + " → " + chat + "\n" +
           "Telegram ID: " + grant.subscription.customer.telegramUserId.toString() + "\n" +
-          "Попыток: " + grant.deliveryAttempts + " · ошибка: " + (grant.deliveryLastError ?? "не указана").slice(0, 80);
+          (en ? "Attempts: " : "Попыток: ") + grant.deliveryAttempts + (en ? " · error: " : " · ошибка: ") + (grant.deliveryLastError ?? (en ? "not specified" : "не указана")).slice(0, 80);
       });
-      keyboard.text("⬅️ К управлению подписками", "ui:subaccess:" + projectId);
+      keyboard.text((en ? "⬅️ Back to subscriptions" : "⬅️ К управлению подписками"), "ui:subaccess:" + projectId);
       await ctx.editMessageText(
-        "Неудачные выдачи доступа «" + project.name + "»:\n\n" + rows.join("\n\n") +
-        "\n\nПоказаны до 10 записей. Повторная попытка будет поставлена в очередь и записана в журнал аудита.",
+        (en ? "Failed access deliveries «" : "Неудачные выдачи доступа «") + project.name + "»:\n\n" + rows.join("\n\n") +
+        (en ? "\n\nShowing up to 10 records. Retries are queued and recorded in the audit log." : "\n\nПоказаны до 10 записей. Повторная попытка будет поставлена в очередь и записана в журнал аудита."),
         { reply_markup: keyboard }
       );
     } catch (error) {
