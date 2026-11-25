@@ -71,6 +71,9 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
     const providerPaymentId = "yoo_payment_" + suffix;
     let paymentId = "";
     let createCalls = 0;
+    let loseFirstCheckoutResponse = true;
+    let firstCheckoutKey: string | null = null;
+    let firstCheckoutPaymentId: string | null = null;
     const fakeFetch: typeof fetch = async (input, init) => {
       const url = String(input);
       if (url.endsWith("/payments") && init?.method === "POST") {
@@ -78,6 +81,16 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
         const body = JSON.parse(String(init.body));
         assert.deepEqual(body.amount, { value: "99.00", currency: "RUB" });
         assert.equal(typeof body.metadata.subpilot_payment_id, "string");
+        const key = new Headers(init.headers).get("Idempotence-Key");
+        assert.ok(key);
+        if (loseFirstCheckoutResponse) {
+          loseFirstCheckoutResponse = false;
+          firstCheckoutKey = key;
+          firstCheckoutPaymentId = body.metadata.subpilot_payment_id;
+          throw new Error("simulated lost provider response");
+        }
+        assert.equal(key, firstCheckoutKey);
+        assert.equal(body.metadata.subpilot_payment_id, firstCheckoutPaymentId);
         return new Response(JSON.stringify({
           id: providerPaymentId,
           status: "pending",
@@ -151,17 +164,28 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
     }
     assert.equal(createCalls, 0, "invalid catalogue prices must be rejected before contacting YooKassa");
 
+    await assert.rejects(createPlatformPaymentCheckout(checkoutInput, { fetch: fakeFetch }));
+    const interrupted = await prisma.platformPayment.findUniqueOrThrow({
+      where: { id: firstCheckoutPaymentId! }
+    });
+    assert.equal(interrupted.status, "CREATED");
+    const unchangedBilling = await prisma.workspaceBilling.findUniqueOrThrow({
+      where: { workspaceId: workspace.id }
+    });
+    assert.equal(unchangedBilling.currentPeriodEnd?.getTime(), previousPeriodEnd.getTime());
+
     const checkout = await createPlatformPaymentCheckout(checkoutInput, { fetch: fakeFetch });
+    assert.equal(checkout.paymentId, interrupted.id);
     paymentId = checkout.paymentId;
     assert.equal(checkout.status, "PENDING");
     assert.equal(typeof checkout.checkoutUrl, "string");
     assert.match(checkout.checkoutUrl ?? "", /^https:\/\/yookassa\.ru\//);
-    assert.equal(createCalls, 1);
+    assert.equal(createCalls, 2);
 
     const retry = await createPlatformPaymentCheckout(checkoutInput, { fetch: fakeFetch });
     assert.equal(retry.paymentId, checkout.paymentId);
     assert.equal(retry.checkoutUrl, checkout.checkoutUrl);
-    assert.equal(createCalls, 1);
+    assert.equal(createCalls, 2);
 
     const retryWithNewBrowserKey = await createPlatformPaymentCheckout({
       ...checkoutInput,
@@ -169,7 +193,7 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
     }, { fetch: fakeFetch });
     assert.equal(retryWithNewBrowserKey.paymentId, checkout.paymentId);
     assert.equal(retryWithNewBrowserKey.checkoutUrl, checkout.checkoutUrl);
-    assert.equal(createCalls, 1);
+    assert.equal(createCalls, 2);
 
     const notification = {
       type: "notification",
@@ -258,7 +282,7 @@ test("YooKassa checkout and webhook lifecycle is idempotent and activates billin
       (error: unknown) => error instanceof PlatformPaymentLifecycleError &&
         error.code === "CHECKOUT_ALREADY_IN_PROGRESS"
     );
-    assert.equal(createCalls, 1);
+    assert.equal(createCalls, 2);
 
     const refundNotification = {
       type: "notification",
