@@ -39,7 +39,9 @@ function displayActor(user: {
 function csvCell(value: string): string {
   // Prevent spreadsheet formula execution while retaining RFC 4180 quoting.
   const first = value.trimStart().charAt(0);
-  const safe = ["=", "+", "-", "@"].includes(first) ? "'" + value : value;
+  const dangerous = ["=", "+", "-", "@", "＝", "＋", "－", "＠"].includes(first) ||
+    /^[\t\r\n]/.test(value);
+  const safe = dangerous ? "'" + value : value;
   return '"' + safe.replace(/"/g, '""') + '"';
 }
 
