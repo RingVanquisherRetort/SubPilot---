@@ -520,32 +520,33 @@ export function createControlBot(token: string): Bot {
     await ctx.answerCallbackQuery();
     try {
       const user = await upsertTelegramUser(ctx);
+      const en = user.interfaceLocale === "en";
       const { workspace } = await getActiveWorkspace(user);
       const portfolio = await getAgencyPortfolio({
         workspaceId: workspace.id,
         actorUserId: user.id
       });
       const sections = portfolio.creators.map((creator) =>
-        "👤 " + creator.name + " · " + creator.projects.length + " проект(ов)\n" +
+        "👤 " + creator.name + " · " + creator.projects.length + (en ? " projects\n" : " проект(ов)\n") +
         creator.projects.map((project) =>
           "  • " + project.name + " — " + project.status.toLowerCase() + "\n    ID: " + project.id
         ).join("\n")
       );
       if (portfolio.unassignedProjects.length) {
         sections.push(
-          "⚪ Без ответственного автора · " + portfolio.unassignedProjects.length + " проект(ов)\n" +
+          (en ? "⚪ Unassigned creator · " : "⚪ Без ответственного автора · ") + portfolio.unassignedProjects.length + (en ? " projects\n" : " проект(ов)\n") +
           portfolio.unassignedProjects.map((project) =>
             "  • " + project.name + " — " + project.status.toLowerCase() + "\n    ID: " + project.id
           ).join("\n")
         );
       }
       await ctx.editMessageText(
-        "Портфель агентства «" + portfolio.workspaceName + "»\n\n" +
-        "Проектов: " + portfolio.totalProjects + "\n" +
-        "Назначено авторам: " + portfolio.assignedProjects + "\n" +
-        "Без автора: " + portfolio.unassignedProjects.length + "\n\n" +
-        (sections.join("\n\n") || "Пока нет проектов."),
-        { reply_markup: new InlineKeyboard().text("📁 К проектам", "ui:projects").row().text("⬅️ В главное меню", "ui:home") }
+        (en ? "Agency portfolio «" : "Портфель агентства «") + portfolio.workspaceName + "»\n\n" +
+        (en ? "Projects: " : "Проектов: ") + portfolio.totalProjects + "\n" +
+        (en ? "Assigned to creators: " : "Назначено авторам: ") + portfolio.assignedProjects + "\n" +
+        (en ? "Unassigned: " : "Без автора: ") + portfolio.unassignedProjects.length + "\n\n" +
+        (sections.join("\n\n") || (en ? "No projects yet." : "Пока нет проектов.")),
+        { reply_markup: new InlineKeyboard().text((en ? "📁 Back to projects" : "📁 К проектам"), "ui:projects").row().text((en ? "⬅️ Main menu" : "⬅️ В главное меню"), "ui:home") }
       );
     } catch (error) {
       if (error instanceof AgencyPortfolioError) {
@@ -2650,6 +2651,7 @@ export function createControlBot(token: string): Bot {
     }
     try {
       const actor = await upsertTelegramUser(ctx);
+      const en = actor.interfaceLocale === "en";
       const { workspace } = await getActiveWorkspace(actor);
       const report = await getAgencyAnalytics({
         workspaceId: workspace.id,
@@ -2658,47 +2660,47 @@ export function createControlBot(token: string): Bot {
       });
       const currencyLines = report.revenueByCurrency.length
         ? report.revenueByCurrency.map((item) =>
-            "• " + item.currency + ": поступления " + item.grossAmount +
-            ", возвраты " + item.refundedAmount + ", итог " + item.netAmount +
-            " (" + item.payments + " оплат / " + item.refundedPayments + " возвратов)"
+            "• " + item.currency + (en ? ": gross " : ": поступления ") + item.grossAmount +
+            (en ? ", refunds " : ", возвраты ") + item.refundedAmount + (en ? ", net " : ", итог ") + item.netAmount +
+            " (" + item.payments + (en ? " payments / " : " оплат / ") + item.refundedPayments + (en ? " refunds)" : " возвратов)")
           )
-        : ["• За выбранный период оплат и возвратов нет."];
+        : [(en ? "• No payments or refunds in this period." : "• За выбранный период оплат и возвратов нет.")];
       const churnRate = report.activeAtPeriodStart > 0
         ? report.churnRatePercent.toFixed(2) + "%"
-        : "н/д (нет активных на начало периода)";
+        : (en ? "N/A (no active subscriptions at period start)" : "н/д (нет активных на начало периода)");
       const summary =
-        "Статистика агентства «" + report.workspaceName + "» за " + report.periodDays + " дней\n" +
-        report.from.toLocaleDateString("ru-RU") + " — " + report.to.toLocaleDateString("ru-RU") + "\n\n" +
-        "Активные подписки сейчас: " + report.activeSubscriptions + "\n" +
-        "Уникальные активные подписчики: " + report.uniqueActiveSubscribers + "\n" +
-        "Новые подписки: " + report.newSubscriptions + "\n" +
-        "Новые уникальные подписчики: " + report.newSubscribers + "\n" +
-        "Новые trial: " + report.newTrials + "\nРучные выдачи: " + report.manualGrants + "\n\n" +
-        "Истекли: " + report.expiredSubscriptions + "\nДосрочно отменены: " + report.cancelledSubscriptions + "\n" +
-        "Отток из стартовой базы: " + report.openingBaseChurnEvents + " из " + report.activeAtPeriodStart +
-        " подписок (" + churnRate + ")\n\n" +
-        "Платежи: " + report.successfulPayments + "\nПовторные оплаты/продления: " +
-        report.renewalPayments + " по " + report.renewingSubscriptions + " подпискам\n" +
-        "Возвраты: " + report.refundedPayments + "\n\n" +
-        "Финансы (валюты не смешиваются):\n" + currencyLines.join("\n") + "\n\n" +
-        "Проекты и авторы:";
+        (en ? "Agency statistics «" : "Статистика агентства «") + report.workspaceName + (en ? "» for " : "» за ") + report.periodDays + (en ? " days\n" : " дней\n") +
+        report.from.toLocaleDateString(en ? "en-GB" : "ru-RU") + " — " + report.to.toLocaleDateString(en ? "en-GB" : "ru-RU") + "\n\n" +
+        (en ? "Currently active subscriptions: " : "Активные подписки сейчас: ") + report.activeSubscriptions + "\n" +
+        (en ? "Unique active subscribers: " : "Уникальные активные подписчики: ") + report.uniqueActiveSubscribers + "\n" +
+        (en ? "New subscriptions: " : "Новые подписки: ") + report.newSubscriptions + "\n" +
+        (en ? "New unique subscribers: " : "Новые уникальные подписчики: ") + report.newSubscribers + "\n" +
+        (en ? "New trials: " : "Новые trial: ") + report.newTrials + (en ? "\nManual grants: " : "\nРучные выдачи: ") + report.manualGrants + "\n\n" +
+        (en ? "Expired: " : "Истекли: ") + report.expiredSubscriptions + (en ? "\nCancelled early: " : "\nДосрочно отменены: ") + report.cancelledSubscriptions + "\n" +
+        (en ? "Opening cohort churn: " : "Отток из стартовой базы: ") + report.openingBaseChurnEvents + (en ? " of " : " из ") + report.activeAtPeriodStart +
+        (en ? " subscriptions (" : " подписок (") + churnRate + ")\n\n" +
+        (en ? "Payments: " : "Платежи: ") + report.successfulPayments + (en ? "\nRenewal payments: " : "\nПовторные оплаты/продления: ") +
+        report.renewalPayments + (en ? " across " : " по ") + report.renewingSubscriptions + (en ? " subscriptions\n" : " подпискам\n") +
+        (en ? "Refunds: " : "Возвраты: ") + report.refundedPayments + "\n\n" +
+        (en ? "Finances (currencies kept separate):\n" : "Финансы (валюты не смешиваются):\n") + currencyLines.join("\n") + "\n\n" +
+        (en ? "Projects and creators:" : "Проекты и авторы:");
       let chunk = summary;
       for (const [index, project] of report.projects.slice(0, 10).entries()) {
         const projectRevenue = project.revenueByCurrency.length
           ? project.revenueByCurrency.map((item) =>
-              item.currency + " " + item.grossAmount + " / возвраты " + item.refundedAmount +
-              " / итог " + item.netAmount
+              item.currency + " " + item.grossAmount + (en ? " / refunds " : " / возвраты ") + item.refundedAmount +
+              (en ? " / net " : " / итог ") + item.netAmount
             ).join("; ")
-          : "нет оплат";
+          : (en ? "no payments" : "нет оплат");
         const row = "\n\n" + (index + 1) + ". " + project.projectName +
-          "\nАвтор: " + project.creatorName +
-          "\nАктивные: " + project.activeSubscriptions +
-          "; новые: " + project.newSubscriptions +
-          "; истекли: " + project.expiredSubscriptions +
-          "; отменены: " + project.cancelledSubscriptions +
-          "\nПродления: " + project.renewalPayments +
-          "; возвраты: " + project.refundedPayments +
-          "\nВыручка: " + projectRevenue;
+          (en ? "\nCreator: " : "\nАвтор: ") + project.creatorName +
+          (en ? "\nActive: " : "\nАктивные: ") + project.activeSubscriptions +
+          (en ? "; new: " : "; новые: ") + project.newSubscriptions +
+          (en ? "; expired: " : "; истекли: ") + project.expiredSubscriptions +
+          (en ? "; cancelled: " : "; отменены: ") + project.cancelledSubscriptions +
+          (en ? "\nRenewals: " : "\nПродления: ") + project.renewalPayments +
+          (en ? "; refunds: " : "; возвраты: ") + project.refundedPayments +
+          (en ? "\nRevenue: " : "\nВыручка: ") + projectRevenue;
         if (chunk.length + row.length > 3500) {
           await ctx.reply(chunk);
           chunk = row.trim();
@@ -2707,10 +2709,10 @@ export function createControlBot(token: string): Bot {
         }
       }
       if (report.projects.length > 10) {
-        chunk += "\n\nПоказаны первые 10 из " + report.projects.length +
-          " доступных проектов. Детализация отсортирована по числу активных подписок.";
+        chunk += (en ? "\n\nShowing the first 10 of " : "\n\nПоказаны первые 10 из ") + report.projects.length +
+          (en ? " accessible projects, sorted by active subscriptions." : " доступных проектов. Детализация отсортирована по числу активных подписок.");
       }
-      await ctx.reply(chunk + "\n\nЭто агрегированная статистика; персональные карточки подписчиков не показываются.");
+      await ctx.reply(chunk + (en ? "\n\nAggregate statistics only; individual subscriber profiles are not shown." : "\n\nЭто агрегированная статистика; персональные карточки подписчиков не показываются."));
     } catch (error) {
       const message = error instanceof AgencyAnalyticsError
         ? error.code === "NOT_AN_AGENCY"
