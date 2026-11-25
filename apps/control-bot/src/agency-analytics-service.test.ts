@@ -15,6 +15,7 @@ test("agency analytics aggregate subscribers, churn, renewals and revenue by cur
   const from = new Date(now.getTime() - 30 * 24 * 60 * 60_000);
   const userIds: string[] = [];
   let workspaceId: string | undefined;
+  let foreignWorkspaceId: string | undefined;
 
   try {
     const makeUser = async (offset: number, firstName: string) => {
@@ -46,6 +47,31 @@ test("agency analytics aggregate subscribers, churn, renewals and revenue by cur
       }
     });
     workspaceId = workspace.id;
+
+    const foreignOwner = await makeUser(5, "Foreign Agency Owner");
+    const foreignWorkspace = await prisma.workspace.create({
+      data: {
+        name: "Foreign agency", slug: "foreign-agency-" + suffix,
+        type: "AGENCY", createdById: foreignOwner.id,
+        members: { create: { userId: foreignOwner.id, role: "OWNER" } }
+      }
+    });
+    foreignWorkspaceId = foreignWorkspace.id;
+    const foreignProject = await prisma.project.create({
+      data: { workspaceId: foreignWorkspace.id, name: "Foreign project", slug: "foreign-project-" + suffix }
+    });
+    const foreignCustomer = await prisma.projectCustomer.create({
+      data: { projectId: foreignProject.id, telegramUserId: telegramBase + 999n }
+    });
+    await prisma.payment.create({
+      data: { projectId: foreignProject.id, customerId: foreignCustomer.id,
+        provider: "TELEGRAM_STARS", amount: "9999.00", currency: "XTR",
+        status: "SUCCEEDED", paidAt: new Date(now.getTime() - 1000) }
+    });
+    await assert.rejects(
+      getAgencyAnalytics({ workspaceId: foreignWorkspace.id, actorUserId: owner.id, now }),
+      (error: unknown) => error instanceof AgencyAnalyticsError && error.code === "ACTOR_NOT_MEMBER"
+    );
 
     const projectA = await prisma.project.create({
       data: {
@@ -248,6 +274,8 @@ test("agency analytics aggregate subscribers, churn, renewals and revenue by cur
       periodDays: 30,
       now
     });
+    assert.equal(report.projects.length, 2);
+    assert.equal(report.projects.some((project) => project.projectId === foreignProject.id), false);
     assert.equal(report.activeSubscriptions, 4);
     assert.equal(report.uniqueActiveSubscribers, 3);
     assert.equal(report.newSubscriptions, 5);
@@ -329,6 +357,7 @@ test("agency analytics aggregate subscribers, churn, renewals and revenue by cur
       (error: unknown) => error instanceof AgencyAnalyticsError && error.code === "INVALID_RANGE"
     );
   } finally {
+    if (foreignWorkspaceId) await prisma.workspace.deleteMany({ where: { id: foreignWorkspaceId } });
     if (workspaceId) await prisma.workspace.deleteMany({ where: { id: workspaceId } });
     if (userIds.length) await prisma.user.deleteMany({ where: { id: { in: userIds } } });
   }
