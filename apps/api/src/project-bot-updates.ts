@@ -2365,19 +2365,53 @@ export async function handleProjectBotUpdate(
     await showBuyerSubscriptionSettings(ctx);
   });
 
+  const buyerLocale = async (ctx: Context) => {
+    if (!ctx.from) return null;
+    const customer = await prisma.projectCustomer.findUnique({
+      where: { projectId_telegramUserId: { projectId, telegramUserId: BigInt(ctx.from.id) } },
+      select: { interfaceLocale: true }
+    });
+    return customer?.interfaceLocale === "en" ? "en" : customer?.interfaceLocale === "ru" ? "ru" : null;
+  };
+  const buyerLanguageKeyboard = () => new InlineKeyboard()
+    .text("🇷🇺 Русский", "buyer:locale:ru").row()
+    .text("🇬🇧 English", "buyer:locale:en");
+  const showBuyerHome = async (ctx: Context, locale: "ru" | "en") => {
+    const en = locale === "en";
+    await ctx.reply(en ? "Welcome! Choose a subscription and pay securely with Telegram Stars." :
+      "Добро пожаловать! Здесь можно выбрать подписку и безопасно оплатить её через Telegram Stars.", {
+      reply_markup: new InlineKeyboard()
+        .text(en ? "💎 View plans" : "💎 Посмотреть подписки", "buyer:plans").row()
+        .text(en ? "👤 My subscriptions" : "👤 Мои подписки", "buyer:subscription").row()
+        .text(en ? "ℹ️ How it works" : "ℹ️ Как это работает", "buyer:help").row()
+        .text("🌐 Language / Язык", "buyer:language")
+    });
+  };
   projectBot.command("start", async (ctx) => {
     if (!(await requirePrivateBuyerChat(ctx))) return;
-    await ctx.reply(
-      "Добро пожаловать! Здесь можно выбрать подписку и безопасно оплатить её через Telegram Stars.",
-      {
-        reply_markup: new InlineKeyboard()
-          .text("💎 Посмотреть подписки", "buyer:plans")
-          .row()
-          .text("👤 Мои подписки", "buyer:subscription")
-          .row()
-          .text("ℹ️ Как это работает", "buyer:help")
-      }
-    );
+    const locale = await buyerLocale(ctx);
+    if (!locale) {
+      await ctx.reply("Выберите язык / Select your language", { reply_markup: buyerLanguageKeyboard() });
+      return;
+    }
+    await showBuyerHome(ctx, locale);
+  });
+  projectBot.callbackQuery("buyer:language", async (ctx) => {
+    if (!(await requirePrivateBuyerChat(ctx))) return;
+    await ctx.answerCallbackQuery();
+    await ctx.reply("Выберите язык / Select your language", { reply_markup: buyerLanguageKeyboard() });
+  });
+  projectBot.callbackQuery(/^buyer:locale:(ru|en)$/, async (ctx) => {
+    if (!(await requirePrivateBuyerChat(ctx)) || !ctx.from) return;
+    await ctx.answerCallbackQuery();
+    const locale = ctx.match[1] === "en" ? "en" : "ru";
+    await prisma.projectCustomer.upsert({
+      where: { projectId_telegramUserId: { projectId, telegramUserId: BigInt(ctx.from.id) } },
+      create: { projectId, telegramUserId: BigInt(ctx.from.id), interfaceLocale: locale,
+        firstName: ctx.from.first_name, lastName: ctx.from.last_name, username: ctx.from.username },
+      update: { interfaceLocale: locale }
+    });
+    await showBuyerHome(ctx, locale);
   });
 
   projectBot.command("plans", async (ctx) => showPlans(ctx));

@@ -364,6 +364,7 @@ model CreatorPlanChat {
 }
 
 model ProjectCustomer {
+  interfaceLocale String?
   id             String         @id @default(cuid())
   projectId      String
   telegramUserId BigInt
