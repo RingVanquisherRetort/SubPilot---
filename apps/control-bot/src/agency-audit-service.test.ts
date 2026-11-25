@@ -244,6 +244,27 @@ test("agency audit history and exports obey project roles and omit raw metadata"
       }),
       (error: unknown) => error instanceof AgencyAuditError && error.code === "INVALID_RANGE"
     );
+    // A previously authorized actor must not retain cached export permissions.
+    await prisma.projectMember.update({
+      where: { projectId_userId: { projectId: managedProject.id, userId: manager.id } },
+      data: { role: "VIEWER" }
+    });
+    await assert.rejects(
+      exportAgencyAuditHistory({ workspaceId: workspace.id, actorUserId: manager.id }),
+      (error: unknown) => error instanceof AgencyAuditError && error.code === "PERMISSION_DENIED"
+    );
+    await prisma.workspaceMember.delete({
+      where: { workspaceId_userId: { workspaceId: workspace.id, userId: viewer.id } }
+    });
+    // Even stale project grants or creator assignments must not bypass membership.
+    await assert.rejects(
+      listAgencyAuditHistory({ workspaceId: workspace.id, actorUserId: viewer.id }),
+      (error: unknown) => error instanceof AgencyAuditError && error.code === "ACTOR_NOT_MEMBER"
+    );
+    await assert.rejects(
+      exportAgencyAuditHistory({ workspaceId: workspace.id, actorUserId: viewer.id }),
+      (error: unknown) => error instanceof AgencyAuditError && error.code === "ACTOR_NOT_MEMBER"
+    );
   } finally {
     if (workspaceId) await prisma.workspace.deleteMany({ where: { id: workspaceId } });
     if (personalWorkspaceId) await prisma.workspace.deleteMany({ where: { id: personalWorkspaceId } });
