@@ -102,3 +102,19 @@ Commercial plan prices, currency, billing period, any optional trial/grace polic
 7. Run end-to-end one-time payment, refund and access-expiry tests, security review and production acceptance before any deployment or enabling customer-facing checkout.
 
 No merge to main or deployment is implied by this decision.
+
+
+## BILLING-01 / BILLING-02 acceptance checkpoint (2026-11-25)
+
+Automated evidence:
+- BILLING-01: expired assigned workspace periods block new resource expansion while existing active chats are preserved; renewal restores expansion. CI: https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45513976170.
+- BILLING-02: webhook reconciliation locks the workspace and payment before re-reading payment status; concurrent duplicate success events fulfill once, and success replays during and after refund do not restore refunded entitlement. CI: https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45514463896.
+- Lost checkout response simulation verifies retry with the same local payment reference and provider idempotence key, without changing billing before confirmed success. CI: https://github.com/RingVanquisherRetort/SubPilot---/actions/runs/45514864103.
+
+Remaining acceptance gates (not executed):
+1. In an isolated test environment, terminate the API process after provider checkout creation but before local redirect persistence. Restart using the same database, retry the same checkout, and verify the same provider payment and local reference.
+2. Terminate the API process after successful webhook transaction commit but before HTTP acknowledgement. Restart and redeliver the event; verify one fulfillment, one success audit record and unchanged paid-through timestamp.
+3. Test interruption before webhook transaction commit and subsequent redelivery; verify rollback followed by exactly one fulfillment.
+4. Verify provider idempotency retention and define manual reconciliation for ambiguous requests outside that window. Do not automatically create a new charge to resolve uncertainty.
+
+Record redacted provider identifiers, database state, timestamps and test results. In-process network failure simulation is not evidence of actual process restart. BILLING-02 remains open pending these gates; merchant sandbox, compliance, commercial terms and AUD-018 remain independent open gates. No production launch or main merge is authorized.
