@@ -1729,28 +1729,29 @@ export async function processSuccessfulStarsPayment(
   }
 
   const access = await deliverSubscriptionAccess(bot, subscription.id, snapshotChatIds);
+  const en = payment.customer.interfaceLocale === "en";
   const messageParts = [
-    "Оплата в Telegram Stars подтверждена. Подписка активна."
+    en ? "Telegram Stars payment confirmed. Your subscription is active." : "Оплата в Telegram Stars подтверждена. Подписка активна."
   ];
 
   if (endsAt) {
-    messageParts.push(`Доступ действует до: ${endsAt.toLocaleString("ru-RU")}.`);
+    messageParts.push(en ? `Access valid until: ${endsAt.toLocaleString("en-GB")}.` : `Доступ действует до: ${endsAt.toLocaleString("ru-RU")}.`);
   } else {
-    messageParts.push("Срок действия: без ограничения.");
+    messageParts.push(en ? "Access duration: unlimited." : "Срок действия: без ограничения.");
   }
 
   if (access.links.length > 0) {
-    messageParts.push("Ваши ссылки для вступления (каждая действует 24 часа и рассчитана на одного участника):");
+    messageParts.push(en ? "Your invite links (each valid for 24 hours and intended for one member):" : "Ваши ссылки для вступления (каждая действует 24 часа и рассчитана на одного участника):");
     messageParts.push(...access.links);
   }
 
   if (access.alreadyJoined.length > 0) {
-    messageParts.push(`Вы уже состоите в: ${access.alreadyJoined.join(", ")}.`);
+    messageParts.push(en ? `You are already a member of: ${access.alreadyJoined.join(", ")}.` : `Вы уже состоите в: ${access.alreadyJoined.join(", ")}.`);
   }
 
   if (access.failed.length > 0) {
     messageParts.push(
-      `Не удалось сразу создать ссылки для: ${access.failed.join(", ")}. Платёж подтверждён; SubPilot повторит выдачу автоматически. Также можно запросить ссылки командой /access.`
+      en ? `Could not create links immediately for: ${access.failed.join(", ")}. Payment is confirmed; SubPilot will retry automatically. You can also request links using /access.` : `Не удалось сразу создать ссылки для: ${access.failed.join(", ")}. Платёж подтверждён; SubPilot повторит выдачу автоматически. Также можно запросить ссылки командой /access.`
     );
     await enqueueProjectOwnerNotification({
       projectId,
@@ -1765,7 +1766,7 @@ export async function processSuccessfulStarsPayment(
 
   if (access.blocked.length > 0) {
     messageParts.push(
-      "Для следующих площадок отдельное право доступа отключено, поэтому новые приглашения не выдавались: " +
+      en ? "Access has been disabled for the following destinations, so no new invitations were issued: " + access.blocked.join(", ") + ". Contact the project owner to request access again." : "Для следующих площадок отдельное право доступа отключено, поэтому новые приглашения не выдавались: " +
       access.blocked.join(", ") + ". Обратитесь к владельцу проекта для повторного предоставления доступа."
     );
     await enqueueProjectOwnerNotification({
