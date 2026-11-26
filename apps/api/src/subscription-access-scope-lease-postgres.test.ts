@@ -8,7 +8,6 @@ test("PostgreSQL scope lease coalesces revisions, rejects stale owners, and retr
   const { prisma } = await import("@subpilot/database");
   const {
     requestSubscriptionAccessReconciliation,
-    claimNextSubscriptionAccessScope,
     claimSubscriptionAccessScope,
     renewSubscriptionAccessScopeLease,
     completeSubscriptionAccessScope,
@@ -82,7 +81,7 @@ test("PostgreSQL scope lease coalesces revisions, rejects stale owners, and retr
     assert.equal(first.attempts, 1);
 
     // A second worker cannot take an unexpired lease.
-    assert.equal(await claimNextSubscriptionAccessScope(prisma, { now }), null);
+    assert.equal(await claimSubscriptionAccessScope(prisma, customer.id, chat.id, { now }), null);
     assert.equal(await renewSubscriptionAccessScopeLease(prisma, first, {
       now: new Date(now.getTime() + 1_000),
       leaseTtlMs: 30_000
@@ -115,7 +114,7 @@ test("PostgreSQL scope lease coalesces revisions, rejects stale owners, and retr
     assert.ok(pending.nextAttemptAt);
     assert.equal(pending.nextAttemptAt.getTime(), now.getTime() + 3_000);
 
-    const second = await claimNextSubscriptionAccessScope(prisma, {
+    const second = await claimSubscriptionAccessScope(prisma, customer.id, chat.id, {
       now: new Date(now.getTime() + 4_000),
       leaseTtlMs: 30_000
     });
@@ -127,7 +126,7 @@ test("PostgreSQL scope lease coalesces revisions, rejects stale owners, and retr
       where: { id: scope.id },
       data: { leaseExpiresAt: new Date(now.getTime() + 4_000) }
     });
-    const successor = await claimNextSubscriptionAccessScope(prisma, {
+    const successor = await claimSubscriptionAccessScope(prisma, customer.id, chat.id, {
       now: new Date(now.getTime() + 5_000),
       leaseTtlMs: 30_000
     });
@@ -150,12 +149,12 @@ test("PostgreSQL scope lease coalesces revisions, rejects stale owners, and retr
       where: { id: scope.id }
     });
     assert.equal(failed.lastErrorCode, "UNKNOWN");
-    assert.equal(await claimNextSubscriptionAccessScope(prisma, {
+    assert.equal(await claimSubscriptionAccessScope(prisma, customer.id, chat.id, {
       now: new Date(now.getTime() + 7_000)
     }), null);
 
-    // Other PostgreSQL test files can leave unrelated dirty scopes due.
-    // Reclaim the fixture's own scope rather than an arbitrary global row.
+    // All claims in this test target the fixture scope: unrelated dirty rows
+    // from parallel PostgreSQL tests must not affect lease assertions.
     const retried = await claimSubscriptionAccessScope(prisma, customer.id, chat.id, {
       now: new Date(retryAt.getTime() + 1)
     });
