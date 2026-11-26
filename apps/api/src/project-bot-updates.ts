@@ -78,12 +78,18 @@ async function createPurchaseInvoice(
     return;
   }
 
+  const localeCustomer = await prisma.projectCustomer.findUnique({
+    where: { projectId_telegramUserId: { projectId, telegramUserId: BigInt(ctx.from.id) } },
+    select: { interfaceLocale: true }
+  });
+  const en = localeCustomer?.interfaceLocale === "en";
+
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     select: { status: true }
   });
   if (!project || project.status !== "ACTIVE") {
-    await ctx.reply("Этот проект временно недоступен для новых покупок.");
+    await ctx.reply((en ? "This project is temporarily unavailable for new purchases." : "Этот проект временно недоступен для новых покупок."));
     return;
   }
 
@@ -97,7 +103,7 @@ async function createPurchaseInvoice(
   });
 
   if (!plan) {
-    await ctx.reply("Тариф не найден или сейчас недоступен.");
+    await ctx.reply((en ? "Plan not found or currently unavailable." : "Тариф не найден или сейчас недоступен."));
     return;
   }
 
@@ -113,19 +119,19 @@ async function createPurchaseInvoice(
   }
 
   if (plan.currency !== "XTR") {
-    await ctx.reply("Этот тариф пока не настроен для оплаты в Telegram Stars. Обратитесь к владельцу проекта.");
+    await ctx.reply((en ? "This plan is not configured for Telegram Stars payments. Contact the project owner." : "Этот тариф пока не настроен для оплаты в Telegram Stars. Обратитесь к владельцу проекта."));
     return;
   }
 
   const amountStars = getStarAmount(plan.price);
   if (amountStars === null) {
-    await ctx.reply("У тарифа некорректная цена в Stars. Попросите владельца проверить настройки тарифа.");
+    await ctx.reply((en ? "This plan has an invalid Stars price. Ask the project owner to check its settings." : "У тарифа некорректная цена в Stars. Попросите владельца проверить настройки тарифа."));
     return;
   }
 
   const activeChats = plan.chats.filter((item) => item.connectedChat.isActive);
   if (activeChats.length === 0) {
-    await ctx.reply("У тарифа пока нет активных каналов или групп для выдачи доступа.");
+    await ctx.reply((en ? "This plan has no active channels or groups for access delivery." : "У тарифа пока нет активных каналов или групп для выдачи доступа."));
     return;
   }
 
@@ -266,10 +272,10 @@ async function createPurchaseInvoice(
 
   if (!pending.payment) {
     const checkoutError = pending.invoiceDispatchState === "INVALID_RECURRING_PERIOD"
-      ? "Автопродление Stars доступно только для тарифа на 30 дней. Исправьте длительность тарифа и повторите покупку."
+      ? (en ? "Stars auto-renewal requires a 30-day plan. Correct the plan duration before trying again." : "Автопродление Stars доступно только для тарифа на 30 дней. Исправьте длительность тарифа и повторите покупку.")
       : pending.invoiceDispatchState === "INVALID_PLAN_PRICE"
-        ? "Цена тарифа должна быть целым положительным количеством Stars и не превышать 10 000. Исправьте цену и повторите покупку."
-        : "Для этого тарифа у вас уже есть активная Stars-подписка. Управлять автопродлением можно командой /subscription. Повторный счёт не создан.";
+        ? (en ? "The price must be a positive whole number of Stars, no greater than 10,000. Correct the price before trying again." : "Цена тарифа должна быть целым положительным количеством Stars и не превышать 10 000. Исправьте цену и повторите покупку.")
+        : (en ? "You already have an active Stars subscription for this plan. Manage auto-renewal using /subscription. No duplicate invoice was created." : "Для этого тарифа у вас уже есть активная Stars-подписка. Управлять автопродлением можно командой /subscription. Повторный счёт не создан.");
     await ctx.reply(checkoutError);
     return;
   }
@@ -294,7 +300,7 @@ async function createPurchaseInvoice(
     : plan.title;
   const invoiceDescription = typeof invoiceMetadata.planDescription === "string"
     ? invoiceMetadata.planDescription
-    : `Доступ к подписке «${invoiceTitle}»`;
+    : (en ? `Access to subscription «${invoiceTitle}»` : `Доступ к подписке «${invoiceTitle}»`);
   // Checkout mode and restrictions come from the immutable payment snapshot,
   // not the current plan. A plan may be edited while an invoice is pending.
   const invoiceIsRecurring = invoiceMetadata.isRecurring === true;
@@ -303,13 +309,13 @@ async function createPurchaseInvoice(
     : null;
   if (invoiceIsRecurring && invoiceDurationDays !== 30) {
     await ctx.reply(
-      "У сохранённого счёта некорректный период автопродления. Не оплачивайте его; обратитесь в /paysupport."
+      (en ? "The saved invoice has an invalid renewal period. Do not pay it; contact /paysupport." : "У сохранённого счёта некорректный период автопродления. Не оплачивайте его; обратитесь в /paysupport.")
     );
     return;
   }
   const invoiceAmountStars = getStarAmount(pending.payment.amount);
   if (invoiceAmountStars === null) {
-    await ctx.reply("Не удалось проверить сумму ранее созданного счёта. Обратитесь к владельцу проекта.");
+    await ctx.reply((en ? "Could not verify the amount of the existing invoice. Contact the project owner." : "Не удалось проверить сумму ранее созданного счёта. Обратитесь к владельцу проекта."));
     return;
   }
 
@@ -337,11 +343,11 @@ async function createPurchaseInvoice(
   });
   if (!dispatchClaim.claimed) {
     if (dispatchClaim.reason === "SENT") {
-      await ctx.reply("У вас уже есть неоплаченный счёт по этому тарифу. Найдите предыдущее сообщение от бота. Повторный счёт не создан, чтобы избежать двойной оплаты. Если сообщение не найдено, обратитесь в /paysupport.");
+      await ctx.reply((en ? "You already have an unpaid invoice for this plan. Find the previous bot message. No duplicate invoice was created to avoid double payment. If you cannot find it, contact /paysupport." : "У вас уже есть неоплаченный счёт по этому тарифу. Найдите предыдущее сообщение от бота. Повторный счёт не создан, чтобы избежать двойной оплаты. Если сообщение не найдено, обратитесь в /paysupport."));
     } else if (dispatchClaim.reason === "AMBIGUOUS") {
-      await ctx.reply("Запрос на выставление счёта уже выполнялся, но подтверждение не сохранено. Счёт мог быть отправлен. Проверьте сообщения от бота или обратитесь в /paysupport; второй счёт не создан.");
+      await ctx.reply((en ? "An invoice request was already made, but confirmation was not saved. The invoice may have been sent. Check previous bot messages or contact /paysupport; no second invoice was created." : "Запрос на выставление счёта уже выполнялся, но подтверждение не сохранено. Счёт мог быть отправлен. Проверьте сообщения от бота или обратитесь в /paysupport; второй счёт не создан."));
     } else {
-      await ctx.reply("Статус счёта уже изменился. Не создавайте новую покупку; проверьте поддержку по оплате через /paysupport.");
+      await ctx.reply((en ? "The invoice status has changed. Do not start a new purchase; contact /paysupport." : "Статус счёта уже изменился. Не создавайте новую покупку; проверьте поддержку по оплате через /paysupport."));
     }
     return;
   }
@@ -362,7 +368,7 @@ async function createPurchaseInvoice(
         ctx.chat.id,
         "Ежемесячная подписка «" + invoiceTitle + "». Telegram будет автоматически списывать " +
           invoiceAmountStars + " ⭐ каждые 30 дней, пока автопродление не будет отменено.",
-        { reply_markup: new InlineKeyboard().url("Оплатить и включить автопродление", invoiceLink) }
+        { reply_markup: new InlineKeyboard().url((en ? "Pay and enable auto-renewal" : "Оплатить и включить автопродление"), invoiceLink) }
       );
       invoiceMessageId = sent.message_id;
     } else {
