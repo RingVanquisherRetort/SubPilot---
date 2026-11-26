@@ -1681,8 +1681,8 @@ export async function processSuccessfulStarsPayment(
       await queueAdminRevokedChargeReview(processedPaymentId, renewalCancellationConfirmed);
       await ctx.reply(
         renewalCancellationConfirmed === false
-          ? "Платёж получен после запроса административного отзыва. Telegram пока не подтвердил отключение автопродления; доступ не продлён. Срочно обратитесь к владельцу проекта или в /paysupport."
-          : "Платёж получен после запроса административного отзыва. Оплата учтена, но срок доступа не продлён. Обратитесь к владельцу проекта или в /paysupport по вопросу платежа."
+          ? (payment.customer.interfaceLocale === "en" ? "Payment was received after an administrative access revocation request. Telegram has not confirmed cancellation of auto-renewal; access was not extended. Contact the project owner or /paysupport urgently." : "Платёж получен после запроса административного отзыва. Telegram пока не подтвердил отключение автопродления; доступ не продлён. Срочно обратитесь к владельцу проекта или в /paysupport.")
+          : (payment.customer.interfaceLocale === "en" ? "Payment was received after an administrative access revocation request. The payment was recorded, but access was not extended. Contact the project owner or /paysupport about the payment." : "Платёж получен после запроса административного отзыва. Оплата учтена, но срок доступа не продлён. Обратитесь к владельцу проекта или в /paysupport по вопросу платежа.")
       );
       return;
     }
@@ -1693,7 +1693,7 @@ export async function processSuccessfulStarsPayment(
       await queueRenewalNotification(endsAt);
     }
 
-    await ctx.reply("Этот платёж уже был обработан. Для получения актуальных ссылок используйте /access.");
+    await ctx.reply((payment.customer.interfaceLocale === "en" ? "This payment has already been processed. Use /access to retrieve current invite links." : "Этот платёж уже был обработан. Для получения актуальных ссылок используйте /access."));
     return;
   }
 
@@ -1703,7 +1703,7 @@ export async function processSuccessfulStarsPayment(
   });
 
   if (latestPayment?.status !== "SUCCEEDED") {
-    await ctx.reply("Оплата пока не подтверждена в системе. Квитанцию Telegram сохраните и обратитесь к владельцу проекта.");
+    await ctx.reply((payment.customer.interfaceLocale === "en" ? "Payment has not yet been confirmed in the system. Keep your Telegram receipt and contact the project owner." : "Оплата пока не подтверждена в системе. Квитанцию Telegram сохраните и обратитесь к владельцу проекта."));
     return;
   }
 
@@ -1716,8 +1716,8 @@ export async function processSuccessfulStarsPayment(
     await queueAdminRevokedChargeReview(paymentRecordId, renewalCancellationConfirmed);
     await ctx.reply(
       renewalCancellationConfirmed === false
-        ? "Платёж получен после запроса административного отзыва. Telegram пока не подтвердил отключение автопродления; доступ не продлён. Срочно обратитесь к владельцу проекта или в /paysupport."
-        : "Telegram подтвердил списание после запроса административного отзыва. Оплата учтена, но срок доступа не продлён. Обратитесь к владельцу проекта или в /paysupport для проверки платежа."
+        ? (payment.customer.interfaceLocale === "en" ? "Payment was received after an administrative access revocation request. Telegram has not confirmed cancellation of auto-renewal; access was not extended. Contact the project owner or /paysupport urgently." : "Платёж получен после запроса административного отзыва. Telegram пока не подтвердил отключение автопродления; доступ не продлён. Срочно обратитесь к владельцу проекта или в /paysupport.")
+        : (payment.customer.interfaceLocale === "en" ? "Telegram confirmed a charge after an administrative access revocation request. The payment was recorded, but access was not extended. Contact the project owner or /paysupport to review the payment." : "Telegram подтвердил списание после запроса административного отзыва. Оплата учтена, но срок доступа не продлён. Обратитесь к владельцу проекта или в /paysupport для проверки платежа.")
     );
     return;
   }
