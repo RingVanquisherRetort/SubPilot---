@@ -1241,7 +1241,7 @@ export async function processSuccessfulStarsPayment(
     (!expirationFromTelegram || !Number.isFinite(expirationFromTelegram.getTime()))
   ) {
     await ctx.reply(
-      "Telegram прислал некорректную дату окончания подписки. Доступ автоматически не изменён. " +
+      payment.customer.interfaceLocale === "en" ? "Telegram returned an invalid subscription expiry date. Access was not changed automatically. Keep your receipt and contact /paysupport." : "Telegram прислал некорректную дату окончания подписки. Доступ автоматически не изменён. " +
       "Сохраните квитанцию и обратитесь в /paysupport."
     );
     return;
@@ -1586,7 +1586,7 @@ export async function processSuccessfulStarsPayment(
 
   if (paymentRejected) {
     await ctx.reply(
-      "Telegram прислал квитанцию с несовпадающими признаками рекуррентного платежа. " +
+      payment.customer.interfaceLocale === "en" ? "Telegram returned a receipt with inconsistent recurring payment details. Access was not changed automatically. Keep your receipt and contact /paysupport." : "Telegram прислал квитанцию с несовпадающими признаками рекуррентного платежа. " +
       "Доступ автоматически не менялся. Сохраните квитанцию и обратитесь в /paysupport."
     );
     return;
