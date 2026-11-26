@@ -2271,19 +2271,19 @@ export async function handleProjectBotUpdate(
         messages.push("«" + subscription.plan.title + "»\n" + access.links.join("\n"));
       }
       if (access.alreadyJoined.length > 0) {
-        messages.push("«" + subscription.plan.title + "»: вы уже состоите в " + access.alreadyJoined.join(", "));
+        messages.push("«" + subscription.plan.title + (en ? "»: you are already a member of " : "»: вы уже состоите в ") + access.alreadyJoined.join(", "));
       }
       if (access.failed.length > 0) {
-        messages.push("«" + subscription.plan.title + "»: не удалось создать ссылки для " + access.failed.join(", ") + ". Повторите запрос позже.");
+        messages.push("«" + subscription.plan.title + (en ? "»: could not create links for " : "»: не удалось создать ссылки для ") + access.failed.join(", ") + (en ? ". Try again later." : ". Повторите запрос позже."));
       }
       if (access.blocked.length > 0) {
-        messages.push("«" + subscription.plan.title + "»: право доступа отключено для " + access.blocked.join(", ") + ". Обратитесь к владельцу проекта для повторного предоставления доступа.");
+        messages.push("«" + subscription.plan.title + (en ? "»: access has been disabled for " : "»: право доступа отключено для ") + access.blocked.join(", ") + (en ? ". Contact the project owner to request access again." : ". Обратитесь к владельцу проекта для повторного предоставления доступа."));
       }
     }
 
     await ctx.reply(messages.length > 0
-      ? "Актуальное состояние ваших доступов:\n\n" + messages.join("\n\n")
-      : "Для активных подписок не удалось получить ссылки. Попробуйте позже или обратитесь в поддержку через /paysupport.");
+      ? (en ? "Your current access status:\n\n" : "Актуальное состояние ваших доступов:\n\n") + messages.join("\n\n")
+      : (en ? "Could not retrieve links for active subscriptions. Try again later or contact support using /paysupport." : "Для активных подписок не удалось получить ссылки. Попробуйте позже или обратитесь в поддержку через /paysupport."));
   });
 
   const showBuyerSubscriptionSettings = async (ctx: Context): Promise<void> => {
