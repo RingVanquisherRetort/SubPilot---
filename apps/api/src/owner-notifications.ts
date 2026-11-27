@@ -13,6 +13,7 @@ type OwnerNotificationEvent = {
   dedupeKey: string;
   eventType: string;
   messageText: string;
+  messageTextEn?: string;
 };
 
 let controlBot: Bot | null = null;
@@ -39,8 +40,8 @@ export async function enqueueProjectOwnerNotificationUsing(
     select: {
       id: true,
       workspaceId: true,
-      creatorUser: { select: { id: true } },
-      workspace: { select: { createdBy: { select: { id: true } } } }
+      creatorUser: { select: { id: true, interfaceLocale: true } },
+      workspace: { select: { createdBy: { select: { id: true, interfaceLocale: true } } } }
     }
   });
   if (!project) return;
@@ -69,7 +70,11 @@ export async function enqueueProjectOwnerNotificationUsing(
       recipientUserId,
       eventType: event.eventType,
       dedupeKey: `${event.dedupeKey}:recipient:${recipientUserId}`,
-      messageText: event.messageText
+      messageText: (recipientUserId === workspaceOwnerId
+        ? project.workspace.createdBy.interfaceLocale
+        : project.creatorUser?.interfaceLocale) === "en"
+        ? event.messageTextEn ?? event.messageText
+        : event.messageText
     })),
     skipDuplicates: true
   });
