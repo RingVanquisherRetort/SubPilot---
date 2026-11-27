@@ -537,6 +537,8 @@ async function recordSubscriptionAccessDeliveryFailureUsing(
           projectId: subscription.projectId,
           dedupeKey: `subscription:${subscriptionId}:access-delivery-dead-letter:${connectedChatId}:${state.failedAt.getTime()}`,
           eventType: "access_delivery_dead_letter",
+          messageTextEn: `🚨 SubPilot stopped automatic access delivery after 10 failed attempts.\nProject: «${subscription.project.name}»\nPlan: «${subscription.plan.title}»\nDestination: ${chatName}\nError code: ${state.lastError}\n` +
+            "Fix the original bot permissions or destination connection, then use /faileddeliveries and /retrydelivery ID in the central bot.",
           messageText:
             "🚨 SubPilot остановил автоматическую выдачу доступа после 10 неудачных попыток.\n" +
             `Проект: «${subscription.project.name}»\nТариф: «${subscription.plan.title}»\n` +
@@ -663,6 +665,8 @@ export async function recordSubscriptionAccessRevocationFailure(
           projectId: details.subscription.projectId,
           dedupeKey: "access-moderation-review:" + grantId,
           eventType: "ACCESS_MODERATION_REVIEW",
+          messageTextEn: `Manual access review is required after subscription expiry.\nChat: ${details.connectedChat.title || details.connectedChat.telegramChatId.toString()}\nTelegram chat ID: ${details.connectedChat.telegramChatId.toString()}\nTelegram user ID: ${details.subscription.customer.telegramUserId.toString()}\nReason: ${errorCode}\n` +
+            "Open the project → Subscriptions and access → Manual review. Check membership status and restrictions in Telegram.",
           messageText:
             "Требуется ручная проверка доступа после завершения подписки.\n" +
             "Чат: " + (details.connectedChat.title || details.connectedChat.telegramChatId.toString()) + "\n" +
@@ -2907,6 +2911,7 @@ export async function handleProjectBotUpdate(
           projectId,
           dedupeKey: "security:invite-mismatch:" + grant.id + ":" + newMember.user.id,
           eventType: "access_security_issue",
+          messageTextEn: `⚠️ An attempt was made to join using another user's invite link. Destination: ${"title" in ctx.chat ? ctx.chat.title : String(ctx.chat.id)}. Telegram user ID: ${newMember.user.id}. Invite revocation or user removal could not be completed; review is required.`,
           messageText:
             "⚠️ Попытка вступления по чужой ссылке в проекте. Площадка: " +
             ("title" in ctx.chat ? ctx.chat.title : String(ctx.chat.id)) +
@@ -3163,6 +3168,7 @@ export async function handleProjectBotUpdate(
           projectId,
           dedupeKey: "security:stale-invite-entry:" + grant.id + ":" + newMember.user.id,
           eventType: "access_security_issue",
+          messageTextEn: `⚠️ A user attempted to join using an invitation without active access permission. Destination: ${"title" in ctx.chat ? ctx.chat.title : String(ctx.chat.id)}. Telegram user ID: ${newMember.user.id}. User removal could not be confirmed; manual review is required.`,
           messageText:
             "⚠️ Пользователь попытался войти по приглашению без действующего права доступа. Площадка: " +
             ("title" in ctx.chat ? ctx.chat.title : String(ctx.chat.id)) +
