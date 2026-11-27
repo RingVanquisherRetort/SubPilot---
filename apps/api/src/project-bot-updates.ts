@@ -1768,6 +1768,7 @@ export async function processSuccessfulStarsPayment(
       projectId,
       dedupeKey: "subscription:" + subscription.id + ":access-delivery-pending",
       eventType: "access_delivery_pending",
+      messageTextEn: `⚠️ Automatic access delivery failed for plan «${snapshotPlanTitle}». SubPilot will retry. Check bot permissions and connected destinations: ${access.failed.join(", ")}`,
       messageText:
         "⚠️ Не удалось автоматически выдать доступ по тарифу «" + snapshotPlanTitle +
         "». SubPilot повторит попытку. Проверьте права бота и состояние подключённых площадок: " +
@@ -1784,6 +1785,7 @@ export async function processSuccessfulStarsPayment(
       projectId,
       dedupeKey: "subscription:" + subscription.id + ":access-permission-blocked",
       eventType: "access_permission_blocked",
+      messageTextEn: `⚠️ An invitation was requested for a revoked or missing access permission for plan «${snapshotPlanTitle}». Destinations: ${access.blocked.join(", ")}. SubPilot did not restore permission automatically.`,
       messageText:
         "⚠️ Попытка выдать приглашение для отозванного или отсутствующего права доступа по тарифу «" +
         snapshotPlanTitle + "». Площадки: " + access.blocked.join(", ") +
@@ -2776,6 +2778,9 @@ export async function handleProjectBotUpdate(
           dedupeKey: "access:admin-exclusion:" + telegramChatId.toString() + ":" +
             telegramUserId.toString() + ":" + updateId,
           eventType: "subscription_access_admin_excluded",
+          messageTextEn: `🚫 Telegram reported that a subscriber was removed by an administrator from «${"title" in ctx.chat ? ctx.chat.title : ctx.chat.id.toString()}».\nTelegram ID: ${telegramUserId.toString()}\nPlans: ${Array.from(new Set(adminExcludedPlanTitles)).join(", ")}\nSubPilot blocked the corresponding access permissions and will not issue new invitations. ` +
+            (inviteRevocationFailed ? "Revocation of the old link could not be confirmed. SubPilot scheduled retries; check the original bot permissions. " : "") +
+            "To restore access, unblock the user in Telegram and explicitly grant access again.",
           messageText:
             "🚫 Telegram сообщил об административном исключении подписчика из площадки «" +
             ("title" in ctx.chat ? ctx.chat.title : ctx.chat.id.toString()) + "».\n" +
@@ -2969,7 +2974,7 @@ export async function handleProjectBotUpdate(
           if (freshAccess.links.length > 0) {
             await projectBot.api.sendMessage(
               Number(grant.subscription.customer.telegramUserId),
-              "Похоже, ваша персональная ссылка была использована другим аккаунтом. Создана новая ссылка для вступления:\n" +
+              (grant.subscription.customer.interfaceLocale === "en" ? "It appears that your personal invite link was used by another account. A new invite link has been created:\n" : "Похоже, ваша персональная ссылка была использована другим аккаунтом. Создана новая ссылка для вступления:\n") +
               freshAccess.links.join("\n")
             ).catch(() => undefined);
           }
