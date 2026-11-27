@@ -1610,6 +1610,7 @@ export async function processSuccessfulStarsPayment(
       projectId,
       dedupeKey: "payment:" + payment.id + ":new-subscriber",
       eventType: "new_subscriber",
+      messageTextEn: `🎉 New subscriber\nProject: «${payment.project.name}»\nSubscriber: ${buyerName === "Покупатель Telegram" ? "Telegram buyer" : buyerName}\nPlan: «${snapshotPlanTitle}»\nPayment: ${amountLabel}\n${accessEndsAt ? "Access until: " + accessEndsAt.toLocaleString("en-GB") : "Access: unlimited"}`,
       messageText:
         "🎉 Новый подписчик\nПроект: «" + payment.project.name + "»\n" +
         "Подписчик: " + buyerName + "\nТариф: «" + snapshotPlanTitle + "»\n" +
@@ -1626,6 +1627,7 @@ export async function processSuccessfulStarsPayment(
       projectId,
       dedupeKey: "payment:renewal:" + receipt.telegram_payment_charge_id,
       eventType: "subscription_renewal",
+      messageTextEn: `🔁 Subscription auto-renewal confirmed\nProject: «${payment.project.name}»\nSubscriber: ${buyerName === "Покупатель Telegram" ? "Telegram buyer" : buyerName}\nPlan: «${snapshotPlanTitle}»\nPayment: ${payment.amount.toString()} ⭐\n${accessEndsAt ? "Access until: " + accessEndsAt.toLocaleString("en-GB") : "Access: unlimited"}`,
       messageText:
         "🔁 Автопродление подписки подтверждено\nПроект: «" + payment.project.name + "»\n" +
         "Подписчик: " + buyerName + "\nТариф: «" + snapshotPlanTitle + "»\n" +
@@ -1642,6 +1644,9 @@ export async function processSuccessfulStarsPayment(
       projectId,
       dedupeKey: "payment:admin-revoked-renewal-review:" + receipt.telegram_payment_charge_id,
       eventType: "renewal_after_admin_revocation_review",
+      messageTextEn: `⚠️ Telegram confirmed a payment for a revoked subscription.\nProject: «${payment.project.name}»\nPlan: «${snapshotPlanTitle}»\nAmount: ${payment.amount.toString()} ⭐\nPayment ID: ${reviewPaymentId}\n` +
+        (initialRenewalCancellationConfirmed === true ? "Auto-renewal was cancelled after the first receipt.\n" : initialRenewalCancellationConfirmed === false ? "🚨 Telegram did not confirm cancellation of auto-renewal. Check the recurring subscription through the original bot urgently.\n" : "") +
+        "The payment was recorded but did not extend access. Verify administrative cancellation and issue a refund via /refundpayment if necessary.",
       messageText:
         "⚠️ Telegram подтвердил платёж по уже отозванной подписке.\n" +
         "Проект: «" + payment.project.name + "»\nТариф: «" + snapshotPlanTitle + "»\n" +
