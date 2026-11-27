@@ -1690,7 +1690,7 @@ export function createControlBot(token: string): Bot {
         });
 
         if (!invite || invite.usedAt || invite.expiresAt.getTime() <= Date.now()) {
-          await ctx.reply("Приглашение не найдено, уже использовано или срок его действия истёк.");
+          await ctx.reply(user.interfaceLocale === "en" ? "The invitation was not found, has already been used, or has expired." : "Приглашение не найдено, уже использовано или срок его действия истёк.");
           return;
         }
 
@@ -1744,15 +1744,17 @@ export function createControlBot(token: string): Bot {
         });
 
         if (!accepted) {
-          await ctx.reply("Это приглашение уже было использовано. Попросите владельца создать новое.");
+          await ctx.reply(user.interfaceLocale === "en" ? "This invitation has already been used. Ask the owner to create a new one." : "Это приглашение уже было использовано. Попросите владельца создать новое.");
           return;
         }
 
-        await ctx.reply(buildWorkspaceInviteAcceptanceMessage(
-          invite.workspace.name,
-          accepted.role,
-          accepted.wasAlreadyMember
-        ));
+        await ctx.reply(user.interfaceLocale === "en"
+          ? `${accepted.wasAlreadyMember ? "You are already a member of" : "You have joined"} the workspace «${invite.workspace.name}».\nRole: ${String(accepted.role).toLowerCase()}.\nUse /start to open the menu.`
+          : buildWorkspaceInviteAcceptanceMessage(
+            invite.workspace.name,
+            accepted.role,
+            accepted.wasAlreadyMember
+          ));
         return;
       }
 
