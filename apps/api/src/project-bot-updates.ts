@@ -282,10 +282,10 @@ async function createPurchaseInvoice(
 
   if (pending.invoiceDispatchState !== "NOT_STARTED") {
     const message = pending.invoiceDispatchState === "SENT"
-      ? "У вас уже есть неоплаченный счёт по этому тарифу. Найдите предыдущее сообщение от бота с кнопкой оплаты. " +
-        "Повторный счёт не создан, чтобы не допустить двойного списания. Используйте исходное сообщение или обратитесь в /paysupport."
-      : "Запрос на выставление счёта уже выполнялся, но SubPilot не получил подтверждение о сохранении сообщения. Счёт мог быть отправлен. " +
-        "Повторный счёт не создан во избежание двойного списания. Проверьте сообщения от бота или обратитесь в /paysupport.";
+      ? (en ? "You already have an unpaid invoice for this plan. Find the previous payment message or contact /paysupport. No duplicate invoice was created to avoid double payment." : "У вас уже есть неоплаченный счёт по этому тарифу. Найдите предыдущее сообщение от бота с кнопкой оплаты. " +
+        "Повторный счёт не создан, чтобы не допустить двойного списания. Используйте исходное сообщение или обратитесь в /paysupport.")
+       : (en ? "An invoice request was already made, but SubPilot could not confirm that the message was saved. The invoice may have been sent. No duplicate invoice was created. Check previous messages or contact /paysupport." : "Запрос на выставление счёта уже выполнялся, но SubPilot не получил подтверждение о сохранении сообщения. Счёт мог быть отправлен. " +
+        "Повторный счёт не создан во избежание двойного списания. Проверьте сообщения от бота или обратитесь в /paysupport.");
     await ctx.reply(message);
     return;
   }
@@ -366,7 +366,7 @@ async function createPurchaseInvoice(
       );
       const sent = await ctx.api.sendMessage(
         ctx.chat.id,
-        "Ежемесячная подписка «" + invoiceTitle + "». Telegram будет автоматически списывать " +
+        en ? `Monthly subscription «${invoiceTitle}». Telegram will automatically charge ${invoiceAmountStars} ⭐ every 30 days until auto-renewal is cancelled.` : "Ежемесячная подписка «" + invoiceTitle + "». Telegram будет автоматически списывать " +
           invoiceAmountStars + " ⭐ каждые 30 дней, пока автопродление не будет отменено.",
         { reply_markup: new InlineKeyboard().url((en ? "Pay and enable auto-renewal" : "Оплатить и включить автопродление"), invoiceLink) }
       );
@@ -390,7 +390,7 @@ async function createPurchaseInvoice(
       error instanceof Error ? error.name : "UnknownError"
     );
     await ctx.reply(
-      "Telegram не дал однозначного ответа по выставлению счёта. Он мог быть отправлен, поэтому повторный счёт не создан. " +
+      en ? "Telegram did not confirm whether the invoice was sent. No duplicate invoice was created. Check previous bot messages or contact /paysupport. Do not start another purchase until this is resolved." : "Telegram не дал однозначного ответа по выставлению счёта. Он мог быть отправлен, поэтому повторный счёт не создан. " +
       "Проверьте предыдущие сообщения от бота. Если счёта нет, обратитесь в поддержку через /paysupport; " +
       "не начинайте новую покупку до проверки."
     );
@@ -411,7 +411,7 @@ async function createPurchaseInvoice(
     });
     if (recorded.count !== 1) {
       await ctx.reply(
-        "Счёт отправлен, но его статус изменился до сохранения. Не запрашивайте новый счёт; " +
+        en ? "The invoice was sent, but its status changed before it could be saved. Do not request another invoice. Check the payment message or contact /paysupport." : "Счёт отправлен, но его статус изменился до сохранения. Не запрашивайте новый счёт; " +
         "проверьте сообщение с оплатой или обратитесь в /paysupport."
       );
     }
@@ -421,7 +421,7 @@ async function createPurchaseInvoice(
       error instanceof Error ? error.name : "UnknownError"
     );
     await ctx.reply(
-      "Счёт отправлен, но SubPilot не смог сохранить его ссылку в журнале. Не запрашивайте новый счёт. " +
+      en ? "The invoice was sent, but SubPilot could not save its message reference. Do not request another invoice. Use the existing payment message or contact /paysupport." : "Счёт отправлен, но SubPilot не смог сохранить его ссылку в журнале. Не запрашивайте новый счёт. " +
       "Используйте уже отправленное сообщение для оплаты или обратитесь в /paysupport."
     );
   }
